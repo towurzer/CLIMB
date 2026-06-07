@@ -2,8 +2,10 @@ import sys
 
 import utils, dataset_compression
 from config import CLIConfig
+from custom_logger import setup_logging
 
 if __name__ == '__main__':
+    setup_logging()
     cli_config = CLIConfig()
     argv = sys.argv
 
