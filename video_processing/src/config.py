@@ -2,8 +2,9 @@ from ast import List
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+VIDEO_PROCESSING_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = VIDEO_PROCESSING_ROOT.parent
 
 @dataclass
 class Config:
@@ -28,7 +29,7 @@ class Config:
     DATA_DIR: str = str(PROJECT_ROOT / "dataset")
     DATASET_FOLDER: str = "V3C1_200"
     WEB_READY_DATASET_FOLDER: str = "web_ready"
-    LOG_FOLDER: str = str(PROJECT_ROOT / "logs")
+    LOG_FOLDER: str = str(VIDEO_PROCESSING_ROOT / "logs")
 
     # --- Logging ---
     LOG_FILE: str = "CLIMB.log"

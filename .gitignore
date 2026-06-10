@@ -215,7 +215,7 @@ __marimo__/
 
 # custom
 /.idea/
+/dataset/
 video_processing/.idea/
-video_processing/dataset/
 video_processing/output/
 video_processing/logs/
