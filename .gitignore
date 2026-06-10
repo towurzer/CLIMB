@@ -214,8 +214,8 @@ marimo/_lsp/
 __marimo__/
 
 # custom
-.DS_Store
-.idea/
-/dataset/
-/output/
-/logs/
+/.idea/
+video_processing/.idea/
+video_processing/dataset/
+video_processing/output/
+video_processing/logs/

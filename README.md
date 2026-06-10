@@ -13,44 +13,38 @@ segments.
 ## Project Structure
 
 ```text
-src/
-    config.py               # Settings
-    main.py                 # Manages the whole pipeline 
-    model.py                # model
-    model_trainer.py        # trains the model
-    utils.py                # utility functions
----
-dataset/                    # Image source files (local only)
-logs/                       # Log File/s
-model/                      # trained model
-output/                     # Saved plots, inferred data and evaluation results (local only)
+video_processing/
+	src/
+	    config.py               # Settings
+	    main.py                 # Manages the whole pipeline 
+	    model.py                # model
+	    model_trainer.py        # trains the model
+	    utils.py                # utility functions
+	---
+	dataset/                    # Image source files (local only)
+	logs/                       # Log File/s
+	model/                      # trained model
+	output/                     # Saved plots, inferred data and evaluation results (local only)
+
 results/                    # Results to display in README
 ```
 
 ## Getting Started - User
+// TODO
 
-### 1. Installation
-
-Run
-
-```bash
-pip install -r requirements.txt
-```
-
-to install neccessary requirements.
-
-### 2. Run the pipeline
-
-To reproduce the results, run the pipeline:
-
-```bash
-cd src/
-python main.py [options]
-```
 
 ## Getting Started - Developer
 
-### 1. Installation
+### 1. Video Processing 
+
+In order to get started you will first need to process the videos. Extract the keyframes, encode them and compress them down to decrease loading time in the frontend.
+To do that go into the video processing part of CLIMB by running 
+
+```bash
+cd video_processing
+```
+
+#### 1.1 Installation
 
 Run
 
@@ -88,7 +82,7 @@ If you want tho get an overview about all possible configurations you can also r
 python main.py --help
 ```
 
-### 2. Data Preprocessing
+### 1.2 Data Preprocessing
 
 Download and extract your Dataset (i.e. from: "https://www2.itec.aau.at/owncloud/index.php/s/AcA1pvZIpDrOom5").
 Save it to ```/dataset/V3C1_200``` also extract the scenes and put them under ```/dataset/V3C1_200/scenes_v3c1_200```.
