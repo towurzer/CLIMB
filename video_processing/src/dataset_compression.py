@@ -65,7 +65,7 @@ def compress() -> None:
         output_path_i = Path(output_path) / output_filename
 
         if f"{input_path}/{video_path.name}" in completed:
-            logger.debug(f"{input_path}/{video_path.name} already transcoded, skipping")
+            logger.info(f"{input_path}/{video_path.name} already transcoded, skipping")
             successful += 1
             continue
 
@@ -76,7 +76,7 @@ def compress() -> None:
 
         if success:
             mark_completed(f"{input_path}/{video_path.name}")
-            logger.debug(f"Successfully transcoded {input_path}/{video_path.name} -> {output_path}/{output_filename}")
+            logger.info(f"Successfully transcoded {input_path}/{video_path.name} -> {output_path}/{output_filename}")
             # print(" DONE")
             successful += 1
         else:
