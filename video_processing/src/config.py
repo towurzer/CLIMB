@@ -1,5 +1,5 @@
 import os
-from ast import List
+from typing import List
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,8 +23,7 @@ class Config:
     WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
     VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"} # valid video extensions
     WEB_VIDEO_EXTENSION = ".mp4"
-
-
+    COMPRESSION_PARALLEL =  True # whether to use multiprocessing for video compression
     # --- Paths ---
     DATA_DIR: str = str(PROJECT_ROOT / "dataset")
     DATASET_FOLDER: str = "V3C1_200"

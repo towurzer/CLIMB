@@ -219,3 +219,6 @@ __marimo__/
 video_processing/.idea/
 video_processing/output/
 video_processing/logs/
+
+# dataset ZIP
+V3C1_200.zip
