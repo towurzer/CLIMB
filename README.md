@@ -15,6 +15,18 @@ segments.
 ```text
 dataset/                    # Image source files (local only)
 results/                    # Results to display in README
+video_processing/
+	src/
+	    config.py               # Settings
+	    main.py                 # Manages the whole pipeline 
+	    model.py                # model
+	    model_trainer.py        # trains the model
+	    utils.py                # utility functions
+	---
+	logs/                       # Log File/s
+	model/                      # trained model
+	output/                     # Saved plots, inferred data and evaluation results (local only)
+---
 frontend/
     src/
         App.jsx                 # Main application component
@@ -29,20 +41,10 @@ frontend/
             VqaAnswer.jsx       # VQA text answer input
             TaskTimer.jsx       # 5-minute countdown
             SubmissionLog.jsx   # Submission history log
+---
 backend/
-    app.py                      # FastAPI server (API endpoints)
-    requirements.txt            # Python dependencies
-video_processing/
-	src/
-	    config.py               # Settings
-	    main.py                 # Manages the whole pipeline
-	    model.py                # model
-	    model_trainer.py        # trains the model
-	    utils.py                # utility functions
-	---
-	logs/                       # Log File/s
-	model/                      # trained model
-	output/                     # Saved plots, inferred data and evaluation results (local only)
+    server.js                   # TODO Server
+
 ```
 
 ## Getting Started - User
@@ -71,7 +73,7 @@ pip install -r requirements.txt
 
 to install neccessary requirements.
 
-All steps can be done by running `main.py` with the respective options. In order to have the correct relative paths
+All steps can be done by running ```main.py``` with the respective options. In order to have the correct relative paths
 please run
 
 ```bash:
@@ -89,10 +91,10 @@ python main.py [OPTIONS]
 ```
 
 | Flag | Long option               | Description                                                                     |
-| ---- | ------------------------- | ------------------------------------------------------------------------------- |
+|------|---------------------------|---------------------------------------------------------------------------------|
 | -c   | --compress                | Compress the dataset videos using FFmpeg to allow for efficient video retrieval |
 | -spc | --showshowPostgresCommand | Create and show the command to create and start the postgres database           |
-| -h   | --help                    | Shows how to use the CLIMB-CLI and exits                                        |
+| -h   | --help                    | Shows how to use the CLIMB-CLI and exits                                        |  
 
 If you want tho get an overview about all possible configurations you can also run
 
@@ -103,9 +105,9 @@ python main.py --help
 ### 1.2 Data Preprocessing
 
 Download and extract your Dataset (i.e. from: "https://www2.itec.aau.at/owncloud/index.php/s/AcA1pvZIpDrOom5").
-Save it to `/dataset/V3C1_200` also extract the scenes and put them under `/dataset/V3C1_200/scenes_v3c1_200`.
+Save it to ```/dataset/V3C1_200``` also extract the scenes and put them under ```/dataset/V3C1_200/scenes_v3c1_200```.
 If you would like to choose a different Dataset / Folder structure edit the respective parameters in
-`/video_processing/src/config.py`
+```/video_processing/src/config.py```
 
 In order to allow for efficient browser based retrieval the vide sizes must be small. To compress the videos run
 
@@ -114,7 +116,7 @@ python main.py --compress
 ```
 
 This will initiate a FFmpeg based compression of all the videos which will by default be stored under
-`/dataset/web_ready`.
+```/dataset/web_ready```.
 Please be sure that you have FFmpeg installed under your system as CLIMB will spawn a child-process executing FFmpeg.
 To download FFmpeg visit: https://ffmpeg.org/download.html
 
@@ -125,12 +127,11 @@ video to later be able to build the Milisecond payload for the dres server. For 
 postgres-database.
 Because every sane people hates it when postgres runs locally on your machine we will spin up a podman container for
 that. The parameters
-for the database can be found and edited in `/video_processing/src/config.py`. Sensitive information should be
-stored in a `.env`
-file placed in the root directory of the project `(CLIMB/)`.
+for the database can be found and edited in ```/video_processing/src/config.py```. Sensitive information should be  
+stored in a ```.env``` file placed in the root directory of the project ```(CLIMB/)```.
 To automatically generate the podman command run
 
-```bash
+```bash 
 python main.py --showPostgresCommand
 ```
 
@@ -139,20 +140,20 @@ just run the command in you shell. This will automatically fetch the postgres im
 the background.
 To stop the container just run
 
-```bash
+```bash 
 podman stop climb
 ```
 
 To restart the container run
 
-```bash
+```bash 
 podman start climb
 ```
 
 Always start the container before running any video_processing / frontend or backend otherwise CLIMB won't function
 properly.
 
-(Note: Other usefull commands include `podman ps` to see all running containers and `podman logs climb` to see
+(Note: Other usefull commands include ```podman ps``` to see all running containers and ```podman logs climb``` to see
 the logs if you stumble upon undesired behaviour. For more details however I will recommend their excellent
 documentation found under https://docs.podman.io/en/latest/)
 
@@ -160,17 +161,9 @@ documentation found under https://docs.podman.io/en/latest/)
 
 ```bash
 cd backend
-pip3 install -r requirements.txt
-python3 -m uvicorn app:app --reload --port 8000
 ```
 
-for windows
 
-```bash
-cd backend
-pip3 install -r requirements.txt
-python -m uvicorn app:app --reload --port 8000
-```
 
 ### 3. Frontend
 
@@ -181,7 +174,3 @@ npm run dev
 ```
 
 Open `http://localhost:3000` in your browser.
-
-## Results:
-
-//TODO
