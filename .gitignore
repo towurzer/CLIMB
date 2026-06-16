@@ -223,3 +223,8 @@ video_processing/logs/
 # dataset ZIP
 V3C1_200.zip
 node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+dist/
