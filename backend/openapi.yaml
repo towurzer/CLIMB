@@ -1,0 +1,676 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Video Retrieval API",
+    "description": "API specification for the Video Browser Showdown (VBS) Retrieval System. Includes search, video metadata, VQA generation, and DRES integration.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Local development server"
+    },
+    {
+      "url": "http://redacted",
+      "description": "Online Server"
+    }
+  ],
+  "paths": {
+    "/climb/search": {
+      "get": {
+        "summary": "Search for video segments matching the text query",
+        "operationId": "searchVideos",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Text query for search",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/videos": {
+      "get": {
+        "summary": "List all videos in the dataset",
+        "operationId": "listVideos",
+        "responses": {
+          "200": {
+            "description": "List of videos",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "videos": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/VideoSummary"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/videos/{video_id}": {
+      "get": {
+        "summary": "Get metadata for a specific video (NOT FOUND IN FRONTEND)",
+        "operationId": "getVideoInfo",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Detailed video metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/videos/{video_id}/shots": {
+      "get": {
+        "summary": "Get all shots for a specific video (for browsing)",
+        "operationId": "getVideoShots",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of shots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "video_id": {
+                      "type": "string"
+                    },
+                    "shots": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ShotInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/videos/{video_id}/ask": {
+      "post": {
+        "summary": "Ask the AI model a question about a specific video (NEW)",
+        "operationId": "askVideoVQA",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VqaAskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The AI's answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/videos/{video_id}/{shot_id}/ask": {
+      "post": {
+        "summary": "Ask the AI model a question about a specific shot (NEW)",
+        "operationId": "askShotVQA",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VqaAskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The AI's answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/videos/{video_id}/{shot_id}/similar": {
+      "get": {
+        "summary": "Find shots visually similar to the given shot",
+        "operationId": "findSimilar",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Similar search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "source_video": {
+                      "type": "string"
+                    },
+                    "source_shot": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SearchResult"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/dres/connect": {
+      "post": {
+        "summary": "Authenticate with DRES and fetch the active evaluation ID (NEW)",
+        "operationId": "connectDres",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DresLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Connection successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "evaluation_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/dres/status": {
+      "get": {
+        "summary": "Check current DRES connection status and active task (NEW)",
+        "operationId": "dresStatus",
+        "responses": {
+          "200": {
+            "description": "Status payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "connected": {
+                      "type": "boolean"
+                    },
+                    "evaluation_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "active_task": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/dres/submit/kis": {
+      "post": {
+        "summary": "Submit a video segment to the DRES server (KiS)",
+        "operationId": "submitToDres",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DresSubmission"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Submission result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/dres/submit/vqa": {
+      "post": {
+        "summary": "Submit a VQA text answer to the DRES server",
+        "operationId": "submitVqaToDres",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VqaSubmission"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Submission result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SearchResult": {
+        "type": "object",
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "shot_id": {
+            "type": "integer"
+          },
+          "score": {
+            "type": "number",
+            "format": "float"
+          },
+          "start_frame": {
+            "type": "integer"
+          },
+          "end_frame": {
+            "type": "integer"
+          },
+          "fps": {
+            "type": "number",
+            "format": "float"
+          },
+          "start_time_ms": {
+            "type": "integer"
+          },
+          "end_time_ms": {
+            "type": "integer"
+          },
+          "thumbnail_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "shot_id",
+          "score",
+          "start_frame",
+          "end_frame",
+          "fps",
+          "start_time_ms",
+          "end_time_ms",
+          "thumbnail_url"
+        ]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          }
+        },
+        "required": [
+          "query",
+          "count",
+          "results"
+        ]
+      },
+      "VideoSummary": {
+        "type": "object",
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "fps": {
+            "type": "number",
+            "format": "float"
+          },
+          "duration_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "num_shots": {
+            "type": "integer"
+          },
+          "thumbnail_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "fps",
+          "duration_sec",
+          "num_shots",
+          "thumbnail_url"
+        ]
+      },
+      "VideoDetails": {
+        "type": "object",
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "fps": {
+            "type": "number",
+            "format": "float"
+          },
+          "duration_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "video_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "fps",
+          "duration_sec",
+          "width",
+          "height",
+          "video_url"
+        ]
+      },
+      "ShotInfo": {
+        "type": "object",
+        "properties": {
+          "shot_id": {
+            "type": "integer"
+          },
+          "start_frame": {
+            "type": "integer"
+          },
+          "end_frame": {
+            "type": "integer"
+          },
+          "fps": {
+            "type": "number",
+            "format": "float"
+          },
+          "thumbnail_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shot_id",
+          "start_frame",
+          "end_frame",
+          "fps",
+          "thumbnail_url"
+        ]
+      },
+      "DresSubmission": {
+        "type": "object",
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "start_time_ms": {
+            "type": "integer"
+          },
+          "end_time_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "video_id",
+          "start_time_ms",
+          "end_time_ms"
+        ]
+      },
+      "VqaSubmission": {
+        "type": "object",
+        "properties": {
+          "text_answer": {
+            "type": "string"
+          },
+          "video_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "start_time_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "end_time_ms": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "text_answer"
+        ]
+      },
+      "VqaAskRequest": {
+        "type": "object",
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "shot_id": {
+            "type": "integer"
+          },
+          "question": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "shot_id",
+          "question"
+        ]
+      },
+      "DresLoginRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "dres_url": {
+            "type": "string",
+            "default": "https://vbs.videobrowsing.org"
+          }
+        },
+        "required": [
+          "username",
+          "password",
+          "dres_url"
+        ]
+      }
+    }
+  }
+}

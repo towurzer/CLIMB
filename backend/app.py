@@ -76,7 +76,7 @@ def list_videos():
     return {"count": len(videos), "videos": videos}
 
 
-@app.get("/api/video/{video_id}")
+@app.get("/api/videos/{video_id}")
 def get_video_info(video_id: str):
     """Get metadata for a specific video."""
     return {
@@ -90,7 +90,7 @@ def get_video_info(video_id: str):
     }
 
 
-@app.get("/api/video/{video_id}/shots")
+@app.get("/api/videos/{video_id}/shots")
 def get_video_shots(video_id: str):
     """Get all shots for a specific video (for browsing)."""
     shots = []
@@ -109,7 +109,7 @@ def get_video_shots(video_id: str):
     return {"video_id": video_id, "shots": shots}
 
 
-@app.get("/api/similar/{video_id}/{shot_id}")
+@app.get("/api/videos/{video_id}/{shot_id}/similar")
 def find_similar(video_id: str, shot_id: int):
     """Find shots visually similar to the given shot."""
     # TODO: Replace with real similarity search using embeddings
@@ -130,7 +130,7 @@ class VqaSubmission(BaseModel):
     end_time_ms: int | None = None
 
 
-@app.post("/api/dres/submit")
+@app.post("/api/dres/submit/kis")
 def submit_to_dres(submission: DresSubmission):
     """
     Submit a result to the DRES server.
@@ -146,7 +146,7 @@ def submit_to_dres(submission: DresSubmission):
     }
 
 
-@app.post("/api/dres/submit-vqa")
+@app.post("/api/dres/submit/vqa")
 def submit_vqa_to_dres(submission: VqaSubmission):
     """
     Submit a VQA text answer to the DRES server.

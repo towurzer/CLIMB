@@ -11,7 +11,7 @@ function VqaAnswer({ apiUrl, selectedResult, onSubmitted }) {
         setConfirmVqa(false);
 
         try {
-            const res = await fetch(`${apiUrl}/api/dres/submit-vqa`, {
+            const res = await fetch(`${apiUrl}/climb/dres/submit/vqa`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
