@@ -98,7 +98,7 @@ function App() {
     });
     // try for preventing errors - sending request to the backend and waiting for a response
     try {
-      const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(searchQuery)}`);
+      const res = await fetch(`${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}`);
       // answer again in javascript object
       const data = await res.json();
       // displaying results
@@ -120,7 +120,7 @@ function App() {
     setConfirmSubmit(false);
     try {
       // getting it from the backend 
-      const res = await fetch(`${API_URL}/api/similar/${result.video_id}/${result.shot_id}`);
+      const res = await fetch(`${API_URL}/climb/videos/${result.video_id}/${result.shot_id}/similar`);
       const data = await res.json();
       setResults(data.results);
     } catch (err) {
@@ -167,7 +167,7 @@ function App() {
 
     // send data to backend
     try {
-      const res = await fetch(`${API_URL}/api/dres/submit`, {
+      const res = await fetch(`${API_URL}/climb/dres/submit/kis`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

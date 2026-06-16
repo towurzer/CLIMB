@@ -10,7 +10,7 @@ function ShotBrowser({ videoId, currentShotId, onSelectShot, apiUrl }) {
     if (!videoId) return;
     setLoading(true);
 
-    fetch(`${apiUrl}/api/video/${videoId}/shots`)
+    fetch(`${apiUrl}/climb/videos/${videoId}/shots`)
       .then((res) => res.json())
       .then((data) => {
         setShots(data.shots);

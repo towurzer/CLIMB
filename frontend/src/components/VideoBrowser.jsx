@@ -10,7 +10,7 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
 
     // Fetch video list on mount
     useEffect(() => {
-        fetch(`${apiUrl}/api/videos`)
+        fetch(`${apiUrl}/climb/videos`)
             .then((res) => res.json())
             .then((data) => {
                 setVideos(data.videos);
@@ -27,7 +27,7 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
         setSelectedVideo(video);
         setShotsLoading(true);
 
-        fetch(`${apiUrl}/api/video/${video.video_id}/shots`)
+        fetch(`${apiUrl}/climb/videos/${video.video_id}/shots`)
             .then((res) => res.json())
             .then((data) => {
                 setShots(data.shots);
