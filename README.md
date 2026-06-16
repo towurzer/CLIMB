@@ -1,31 +1,144 @@
-## How to start
+# CLIMB
 
-### 1. Backend (terminal n 1)
+Content Localization and Intelligent Multimedia Retrieval
 
-for windows
+---
+
+A content-based video retrieval system designed for searching short video segments, focusing on sKnown-Item Search (KIS)
+and Visual Question Answering (VQA) tasks inspired by the Video Browser Showdown (VBS).
+The system provides an intuitive graphical user interface for interactive video exploration and integrates with the
+Distributed Retrieval Evaluation Server (DRES) through its REST API, enabling seamless submission of retrieved video
+segments.
+
+## Project Structure
+
+```text
+dataset/                    # Image source files (local only)
+results/                    # Results to display in README
+video_processing/
+	src/
+	    config.py               # Settings
+	    main.py                 # Manages the whole pipeline 
+	    model.py                # model
+	    model_trainer.py        # trains the model
+	    utils.py                # utility functions
+	---
+	logs/                       # Log File/s
+	model/                      # trained model
+	output/                     # Saved plots, inferred data and evaluation results (local only)
+```
+
+## Getting Started - User
+
+// TODO
+
+## Getting Started - Developer
+
+### 1. Video Processing
+
+In order to get started you will first need to process the videos. Extract the keyframes, encode them and compress them
+down to decrease loading time in the frontend.
+To do that go into the video processing part of CLIMB by running
 
 ```bash
-cd backend
+cd video_processing
+```
+
+#### 1.1 Installation
+
+Run
+
+```bash
 pip install -r requirements.txt
-python -m uvicorn app:app --reload --port 8000
 ```
 
-for macos
+to install neccessary requirements.
+
+All steps can be done by running ```main.py``` with the respective options. In order to have the correct relative paths
+please run
+
+```bash:
+cd src
+```
+
+to step into the src folder.
+
+#### Available arguments
+
+You can control different stages of CLIMB using the following flags:
 
 ```bash
-cd backend
-pip install -r requirements.txt
-python3 -m uvicorn app:app --reload --port 8000
+python main.py [OPTIONS]
 ```
 
-Backend will run on **http://localhost:8000**
+| Flag | Long option               | Description                                                                     |
+|------|---------------------------|---------------------------------------------------------------------------------|
+| -c   | --compress                | Compress the dataset videos using FFmpeg to allow for efficient video retrieval |
+| -spc | --showshowPostgresCommand | Create and show the command to create and start the postgres database           |
+| -h   | --help                    | Shows how to use the CLIMB-CLI and exits                                        |  
 
-### 2. Frontend (terminal n 2)
+If you want tho get an overview about all possible configurations you can also run
 
-```bash
-cd frontend
-npm install
-npm run dev
+```bash:
+python main.py --help
 ```
 
-there will be a link to **http://localhost:3000** - there is the website
+### 1.2 Data Preprocessing
+
+Download and extract your Dataset (i.e. from: "https://www2.itec.aau.at/owncloud/index.php/s/AcA1pvZIpDrOom5").
+Save it to ```/dataset/V3C1_200``` also extract the scenes and put them under ```/dataset/V3C1_200/scenes_v3c1_200```.
+If you would like to choose a different Dataset / Folder structure edit the respective parameters in
+```/video_processing/src/config.py```
+
+In order to allow for efficient browser based retrieval the vide sizes must be small. To compress the videos run
+
+```bash:
+python main.py --compress
+```
+
+This will initiate a FFmpeg based compression of all the videos which will by default be stored under
+```/dataset/web_ready```.
+Please be sure that you have FFmpeg installed under your system as CLIMB will spawn a child-process executing FFmpeg.
+To download FFmpeg visit: https://ffmpeg.org/download.html
+
+### 1.3 Keyframe extraction
+
+Next you will need to extract the keyframes from the dataset. Additionally you will need to save the frame rate of every
+video to later be able to build the Milisecond payload for the dres server. For that we will need to create simple
+postgres-database.
+Because every sane people hates it when postgres runs locally on your machine we will spin up a podman container for
+that. The parameters
+for the database can be found and edited in ```/video_processing/src/config.py```. Sensitive information should be
+stored in a ```.env```
+file placed in the root directory of the project ```(CLIMB/)```.
+To automatically generate the podman command run
+
+```bash 
+python main.py --showPostgresCommand
+```
+
+In order to create a Podman Container running Postgres
+just run the command in you shell. This will automatically fetch the postgres image, build the container and start it in
+the background.
+To stop the container just run
+
+```bash 
+podman stop climb
+```
+
+To restart the container run
+
+```bash 
+podman start climb
+```
+
+Always start the container before running any video_processing / frontend or backend otherwise CLIMB won't function
+properly.
+
+(Note: Other usefull commands include ```podman ps``` to see all running containers and ```podman logs climb``` to see
+the logs if you stumble upon undesired behaviour. For more details however I will recommend their excellent
+documentation found under https://docs.podman.io/en/latest/)
+
+## Results:
+
+//TODO
