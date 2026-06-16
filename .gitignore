@@ -222,3 +222,4 @@ video_processing/logs/
 
 # dataset ZIP
 V3C1_200.zip
+node_modules/
