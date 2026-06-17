@@ -8,16 +8,9 @@ PROJECT_ROOT = VIDEO_PROCESSING_ROOT.parent
 
 @dataclass
 class Config:
-    # --- Training settings ---
-    #BATCH_SIZE: int
-    #TRAIN_EPOCHS: int
-    #TRAIN_DEVICE: str
-
-    # --- Model settings ---
-    #MODEL_NAME: str
-    #IMAGE_SIZE: int
-    #MODEL_FILE: str
-    #CONF_THRESHOLD: float
+    # Model parameters
+    MODEL_NAME: str = "google/siglip2-large-patch16-384"
+    EMBEDDING_BATCH_SIZE: int = 16
 
     # --- Video Compression ---
     WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
@@ -67,6 +60,7 @@ class CLIConfig:
     compression_flags: List[str] = field(default_factory=lambda: ["-c", "--compress"])
     database_container_creation_flag: List[str] = field(default_factory=lambda: ["-spc", "--showPostgresCommand"])
     extract_keyframes: List[str] = field(default_factory=lambda: ["-ek", "--extractKeyframes"])
+    extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
     help_flags: List[str] = field(default_factory=lambda: ["-h", "--help"])
 
     help_string = """
@@ -79,6 +73,8 @@ Description:
 Options:
 -c, --compress					// TODO: COMMENT
 -spc, --showPostgresCommand     // TODO: COMMENT
+-ek, --extractKeyframes        // TODO: COMMENT
+-ee, --extractEmbeddings       // TODO: COMMENT
 -h, --help						Show this help message and exit
 
 Examples:

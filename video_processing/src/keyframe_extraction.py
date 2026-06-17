@@ -62,6 +62,5 @@ def process_video_and_shots(conn, video_id, video_path, scene_file_path):
             db_logger.debug(f"Inserting Metadata from video ({video_path}) into database")
             cur.execute(DBQueries.insert_shot_metadata, (video_id, start_frame, end_frame, middle_frame, img_path))
 
-
     conn.commit()
     cap.release()
