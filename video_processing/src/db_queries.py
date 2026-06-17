@@ -32,7 +32,7 @@ class DBQueries:
         start_frame INT NOT NULL,
         end_frame INT NOT NULL,
         middle_frame INT NOT NULL,
-        image_path TEXT NOT NULL,
+        image_path TEXT UNIQUE NOT NULL ,
         embedding vector(1024)
         );"""
 
@@ -43,7 +43,7 @@ class DBQueries:
 
     insert_shot_metadata = """
                            INSERT INTO shots (video_id, start_frame, end_frame, middle_frame, image_path)
-                           VALUES (%s, %s, %s, %s, %s); \
+                           VALUES (%s, %s, %s, %s, %s) ON CONFLICT (image_path) DO NOTHING; \
                            """
 
     get_pending_embeddings = """
