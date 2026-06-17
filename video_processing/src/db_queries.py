@@ -32,7 +32,8 @@ class DBQueries:
         start_frame INT NOT NULL,
         end_frame INT NOT NULL,
         middle_frame INT NOT NULL,
-        image_path TEXT NOT NULL
+        image_path TEXT NOT NULL,
+        embedding vector(1024)
         );"""
 
     insert_FPS = """
@@ -44,3 +45,15 @@ class DBQueries:
                            INSERT INTO shots (video_id, start_frame, end_frame, middle_frame, image_path)
                            VALUES (%s, %s, %s, %s, %s); \
                            """
+
+    get_pending_embeddings = """
+                             SELECT shot_id, image_path 
+                             FROM shots 
+                             WHERE embedding IS NULL;
+                             """
+
+    update_shot_embedding = """
+                            UPDATE shots 
+                            SET embedding = %s 
+                            WHERE shot_id = %s;
+                            """

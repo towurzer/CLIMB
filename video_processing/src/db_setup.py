@@ -18,7 +18,7 @@ def get_container_command():
             -e POSTGRES_DB={conf.db_name} \\
             -v postgres_data:{conf.DB_CONTAINER_MOUNT_PATH} \\
             -p {conf.DB_PORT}:5432 \\
-            -d docker.io/library/postgres"""
+            -d docker.io/ankane/pgvector:latest"""
 
         logger.debug("Created Database Command")
     except ValueError as e:
@@ -29,6 +29,11 @@ def get_container_command():
         command
     )
 
+    # Dynamically generate the activation hint using the actual .env variables
+    try:
+        print(f'\n\nActivate vector extension by running:\n\npodman exec -it {conf.DB_CONTAINER_NAME} psql -U postgres -d {conf.db_name} -c "CREATE EXTENSION IF NOT EXISTS vector;"')
+    except ValueError:
+        pass
 
 def setup_database(conn):
     """Creates the necessary tables in PostgreSQL."""
@@ -95,3 +100,5 @@ def populate_db_with_keyframes():
 
     conn.close()
     logger.info("All done! Keyframes extracted and PostgreSQL populated.")
+
+
