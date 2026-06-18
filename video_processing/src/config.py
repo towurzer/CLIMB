@@ -64,6 +64,7 @@ class CLIConfig:
     database_container_creation_flag: List[str] = field(default_factory=lambda: ["-spc", "--showPostgresCommand"])
     extract_keyframes: List[str] = field(default_factory=lambda: ["-ek", "--extractKeyframes"])
     extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
+    start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startEmbeddingWorker"])
     help_flags: List[str] = field(default_factory=lambda: ["-h", "--help"])
 
     help_string = """
