@@ -27,7 +27,7 @@ class VQAEngine:
 
 
 
-app = FastAPI(title="Python AI Worker")
+app = FastAPI(title="Python Embedding Worker")
 
 search_engine = None
 vqa_engine = None
@@ -79,6 +79,8 @@ def do_vqa(request: VQARequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def start():
+    uvicorn.run(app, host="0.0.0.0", port=5000)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    start()
