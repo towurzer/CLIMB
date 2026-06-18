@@ -61,7 +61,7 @@ module.exports = {
             fps: row.fps,
             duration_sec: 0,
             num_shots: row.num_shots,
-            thumbnail_url: `${BACKEND_URL}/keyframes/${row.video_id}_shot_0000.jpg`
+            thumbnail_url: `${BACKEND_URL}/keyframes/${row.video_id}_shot_00000.jpg`
         }));
     },
 
