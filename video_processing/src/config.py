@@ -23,7 +23,7 @@ class Config:
     # --- Paths ---
     DATA_DIR: str = str(PROJECT_ROOT / "dataset")
     DATASET_FOLDER: str = "V3C1_200"
-    SCENES_DIR: str = "scenes_v3c1_200/scenes_v3c1_200"
+    SCENES_DIR: str = "scenes_v3c1_204/scenes_v3c1_204"
     WEB_READY_DATASET_FOLDER: str = "web_ready"
     LOG_FOLDER: str = str(VIDEO_PROCESSING_ROOT / "logs")
     KEYFRAME_FOLDER :str = "keyframes"
