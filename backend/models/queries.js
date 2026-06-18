@@ -10,56 +10,37 @@ const pool = new Pool({
     port: 5432,                   // config.DB_PORT
     database: 'CLIMB_DB'            // config.db_name
 });
+const BACKEND_URL = "http://localhost:8000";
 
 pool.on('connect', async (client) => {
     await pgvector.registerType(client);
 });
 
-async function getTextEmbedding(text) {
-    try {
-        // TODO change random vector to real vector
-        return Array.from({ length: 1024 }, () => Math.random() - 0.5);
-    } catch (error) {
-        console.error("Failed to fetch embedding from AI worker:", error.message);
-        throw error;
-    }
-}
-
 module.exports = {
     searchByText: async (queryText) => {
-        const queryVector = await getTextEmbedding(queryText);
-        const vectorString = pgvector.toSql(queryVector);
+        try {
+            const res = await axios.post('http://localhost:5000/api/search', {
+                prompt: queryText
+            });
 
-        // Perform Cosine Similarity Search
-        const sql = `
-            SELECT 
-                s.shot_id, 
-                s.video_id, 
-                s.start_frame, 
-                s.end_frame, 
-                s.image_path,
-                v.fps,
-                1 - (s.embedding <=> $1::vector) AS score
-            FROM shots s
-            JOIN videos v ON s.video_id = v.video_id
-            ORDER BY s.embedding <=> $1::vector
-            LIMIT 50;
-        `;
+            return res.data.results.map(shot => ({
+                video_id: shot.video_id,
+                shot_id: shot.shot_id,
+                score: shot.similarity_score,
+                start_frame: shot.start_frame,
+                end_frame: shot.end_frame,
+                fps: shot.fps,
+                start_time_ms: shot.start_frame_time_ms,
+                end_time_ms: shot.end_frame_time_ms,
+                // Make sure this points to your Express static folder path!
+                thumbnail_url: `${BACKEND_URL}/keyframes/${shot.image_path.split('/').pop()}`
+            }));
 
-        const { rows } = await pool.query(sql, [vectorString]);
 
-        return rows.map(row => ({
-            video_id: row.video_id,
-            shot_id: row.shot_id,
-            score: parseFloat(row.score.toFixed(4)),
-            start_frame: row.start_frame,
-            end_frame: row.end_frame,
-            fps: row.fps,
-            start_time_ms: Math.floor((row.start_frame / row.fps) * 1000),
-            end_time_ms: Math.floor((row.end_frame / row.fps) * 1000),
-            // Assuming image_path is saved like '/data/keyframes/xyz.jpg'
-            thumbnail_url: `/keyframes/${row.image_path.split('/').pop()}`
-        }));
+        } catch (error) {
+            console.error("Failed to connect to Python Worker");
+            throw error;
+        }
     },
 
     getAllVideos: async () => {
@@ -80,7 +61,7 @@ module.exports = {
             fps: row.fps,
             duration_sec: 0,
             num_shots: row.num_shots,
-            thumbnail_url: `/keyframes/${row.video_id}_shot_0000.jpg`
+            thumbnail_url: `${BACKEND_URL}/keyframes/${row.video_id}_shot_0000.jpg`
         }));
     },
 
@@ -96,7 +77,8 @@ module.exports = {
             duration_sec: 0,
             width: 1280,
             height: 720,
-            video_url: `/videos/${rows[0].video_id}.mp4`
+            video_url: `${BACKEND_URL}/videos/${rows[0].video_id}.mp4`
+
         };
     },
 
@@ -121,7 +103,7 @@ module.exports = {
             start_frame: row.start_frame,
             end_frame: row.end_frame,
             fps: fps,
-            thumbnail_url: `/keyframes/${row.image_path.split('/').pop()}`
+            thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
         }));
     },
 
@@ -131,15 +113,19 @@ module.exports = {
 
         if (embedRes.rows.length === 0) throw new Error("Shot not found");
 
-        const targetVectorString = embedRes.rows[0].embedding; // Already a pgvector format
+        const targetVectorString = embedRes.rows[0].embedding;
 
+        if (!targetVectorString) {
+            return [];
+        }
         const searchSql = `
             SELECT
                 s.shot_id, s.video_id, s.start_frame, s.end_frame, s.image_path, v.fps,
                 1 - (s.embedding <=> $1::vector) AS score
             FROM shots s
                      JOIN videos v ON s.video_id = v.video_id
-            WHERE s.shot_id != $2 -- Don't return the exact image they clicked on
+            WHERE s.shot_id != $2
+              AND s.embedding IS NOT NULL
             ORDER BY s.embedding <=> $1::vector
                 LIMIT 50;
         `;
@@ -149,25 +135,23 @@ module.exports = {
         return rows.map(row => ({
             video_id: row.video_id,
             shot_id: row.shot_id,
-            score: parseFloat(row.score.toFixed(4)),
+            score: row.score ? parseFloat(row.score.toFixed(4)) : 0,
             start_frame: row.start_frame,
             end_frame: row.end_frame,
             fps: row.fps,
             start_time_ms: Math.floor((row.start_frame / row.fps) * 1000),
             end_time_ms: Math.floor((row.end_frame / row.fps) * 1000),
-            thumbnail_url: `/keyframes/${row.image_path.split('/').pop()}`
+            thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
         }));
     },
 
     askVQA: async (videoId, shotId, question) => {
-        const sql = `SELECT image_path FROM shots WHERE video_id = $1 AND shot_id = $2`;
-        const { rows } = await pool.query(sql, [videoId, shotId]);
+        // TODO: Add SQL query here to get the image_path for this videoId/shotId to send to Python
+        const res = await axios.post('http://localhost:5000/api/vqa', {
+            image_path: `/path/to/v3c_keyframes/${videoId}_shot_${shotId}.jpg`, // TODO: Update with real path
+            question: question
+        });
 
-        if (rows.length === 0) return "Error: Shot not found.";
-        const imagePath = rows[0].image_path;
-
-        // TODO: add ai model to ask
-
-        return `You Idiot didnt add an AI model to answer that question for you?`;
+        return res.data.answer;
     }
 };

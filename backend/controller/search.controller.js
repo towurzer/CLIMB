@@ -7,6 +7,7 @@ exports.searchVideos = async (req, res) => {
             return res.status(400).json({ error: "Query parameter 'q' is required" });
         }
 
+        console.log(`Searching for ${q}`)
         const results = await queries.searchByText(q);
 
         res.status(200).json({

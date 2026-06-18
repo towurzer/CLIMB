@@ -18,8 +18,8 @@ app.use('/climb/search', searchRoutes);
 app.use('/climb/videos', videoRoutes);
 app.use('/climb/dres', dresRoutes);
 
-app.use('/keyframes', express.static('dataset/keyframes'));
-app.use('/videos', express.static('dataset/web_ready'));
+app.use('/keyframes', express.static('../dataset/keyframes'));
+app.use('/videos', express.static('../dataset/web_ready'));
 
 app.listen(PORT, () => {
     console.log(`Video Retrieval API running on http://localhost:${PORT}`);
