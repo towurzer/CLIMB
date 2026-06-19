@@ -13,7 +13,7 @@ class Config:
     EMBEDDING_BATCH_SIZE: int = 16
 
     # --- Search parameters ---
-    SEARCH_TOP_K: int = 30
+    SEARCH_TOP_K: int = 48
 
     # --- Video Compression ---
     WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
