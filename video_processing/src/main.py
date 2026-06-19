@@ -19,7 +19,7 @@ if __name__ == '__main__':
     extract_embeddings = utils.has_flag(argv, cli_config.extract_embeddings)
     start_embedding_worker = utils.has_flag(argv, cli_config.start_embedding_worker)
 
-    anyFlag = compress or show_database_creation_message or extract_keyframes or extract_embeddings
+    anyFlag = compress or show_database_creation_message or extract_keyframes or extract_embeddings or start_embedding_worker
 
     if show_info_message or not anyFlag:
         print(cli_config.help_string)
