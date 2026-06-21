@@ -159,11 +159,44 @@ documentation found under https://docs.podman.io/en/latest/)
 
 ### 2. Backend
 
-```bash
-cd backend
+To get the backend working you need to do 3 things.
+
+- Spin up the DB-Container
+- Start the AI-Embedding Endpoint
+- Start the backend server itself
+
+First of all I hope you followed step 1 and properly setup everything.
+If so please return to the root directory in order to align the relative paths.
+
+#### 2.1 Spin up the DB-Container
+
+As previously stated, to start the container run
+
+```bash 
+podman start climb
 ```
 
+#### 2.2 Start the AI-Embedding Endpoint
 
+To start the AI-Embedding Endpoint you need to go into the video_processing folder and run the main script with
+appropriate flags.
+
+```bash
+cd video_processing/src
+python main.py -start
+```
+
+##### 2.3 Start the backend server itself
+
+Well your console will not be yours anymore I guess, so start up a new one and find your way to the root directory.
+
+Now please step into the backend folder, install all dependencies and start it.
+
+```bash
+cd backend
+npm install
+npm start
+```
 
 ### 3. Frontend
 

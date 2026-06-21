@@ -10,7 +10,7 @@ class DBQueries:
                              VARCHAR
                          (
                              100
-                         ) PRIMARY KEY,
+                         ) UNIQUE PRIMARY KEY,
                              fps FLOAT NOT NULL
                              ); \
                          """

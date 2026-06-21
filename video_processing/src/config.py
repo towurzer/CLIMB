@@ -13,7 +13,7 @@ class Config:
     EMBEDDING_BATCH_SIZE: int = 16
 
     # --- Search parameters ---
-    SEARCH_TOP_K: int = 30
+    SEARCH_TOP_K: int = 48
 
     # --- Video Compression ---
     WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
@@ -23,7 +23,7 @@ class Config:
     # --- Paths ---
     DATA_DIR: str = str(PROJECT_ROOT / "dataset")
     DATASET_FOLDER: str = "V3C1_200"
-    SCENES_DIR: str = "scenes_v3c1_200/scenes_v3c1_200"
+    SCENES_DIR: str = "scenes_v3c1_204/scenes_v3c1_204"
     WEB_READY_DATASET_FOLDER: str = "web_ready"
     LOG_FOLDER: str = str(VIDEO_PROCESSING_ROOT / "logs")
     KEYFRAME_FOLDER :str = "keyframes"
@@ -64,6 +64,7 @@ class CLIConfig:
     database_container_creation_flag: List[str] = field(default_factory=lambda: ["-spc", "--showPostgresCommand"])
     extract_keyframes: List[str] = field(default_factory=lambda: ["-ek", "--extractKeyframes"])
     extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
+    start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startEmbeddingWorker"])
     help_flags: List[str] = field(default_factory=lambda: ["-h", "--help"])
 
     help_string = """
