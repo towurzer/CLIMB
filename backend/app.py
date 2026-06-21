@@ -48,14 +48,14 @@ def generate_mock_results(query: str, count: int = 20):
 
 
 
-@app.get("/api/search")
+@app.get("/climb/search")
 def search(q: str = Query(..., description="Text query for search")):
     """Search for video segments matching the text query."""
     results = generate_mock_results(q)
     return {"query": q, "count": len(results), "results": results}
 
 
-@app.get("/api/videos")
+@app.get("/climb/videos")
 def list_videos():
     """List all videos in the dataset."""
     # TODO: Replace with real video list from metadata.json
@@ -76,7 +76,7 @@ def list_videos():
     return {"count": len(videos), "videos": videos}
 
 
-@app.get("/api/videos/{video_id}")
+@app.get("/climb/videos/{video_id}")
 def get_video_info(video_id: str):
     """Get metadata for a specific video."""
     return {
@@ -90,7 +90,7 @@ def get_video_info(video_id: str):
     }
 
 
-@app.get("/api/videos/{video_id}/shots")
+@app.get("/climb/videos/{video_id}/shots")
 def get_video_shots(video_id: str):
     """Get all shots for a specific video (for browsing)."""
     shots = []
@@ -109,7 +109,7 @@ def get_video_shots(video_id: str):
     return {"video_id": video_id, "shots": shots}
 
 
-@app.get("/api/videos/{video_id}/{shot_id}/similar")
+@app.get("/climb/videos/{video_id}/{shot_id}/similar")
 def find_similar(video_id: str, shot_id: int):
     """Find shots visually similar to the given shot."""
     # TODO: Replace with real similarity search using embeddings
@@ -130,14 +130,14 @@ class VqaSubmission(BaseModel):
     end_time_ms: int | None = None
 
 
-@app.post("/api/dres/submit/kis")
+@app.post("/climb/dres/submit/kis")
 def submit_to_dres(submission: DresSubmission):
     """
     Submit a result to the DRES server.
-    In production, this will forward the submission to the real DRES API.
+    In production, this will forward the submission to the real DRES climb.
     For now, it just returns a mock response.
     """
-    # TODO: Replace with actual DRES API call
+    # TODO: Replace with actual DRES climb call
     print(f"[MOCK DRES] Submitting: {submission}")
     return {
         "status": "mock_success",
@@ -146,7 +146,7 @@ def submit_to_dres(submission: DresSubmission):
     }
 
 
-@app.post("/api/dres/submit/vqa")
+@app.post("/climb/dres/submit/vqa")
 def submit_vqa_to_dres(submission: VqaSubmission):
     """
     Submit a VQA text answer to the DRES server.
