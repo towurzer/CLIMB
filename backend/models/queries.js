@@ -1,19 +1,38 @@
 const { Pool } = require('pg');
 const pgvector = require('pgvector/pg');
 const axios = require('axios');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 
 const pool = new Pool({
-    user: 'postgres',
-    password: 'superSecretPassword23', // config.db_password
-    host: 'localhost',            // config.DB_HOST
-    port: 5432,                   // config.DB_PORT
-    database: 'CLIMB_DB'            // config.db_name
+    user: process.env.POSTGRES_USER || 'postgres',
+    password: process.env.POSTGRES_PASSWORD,
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 5432,
+    database: process.env.POSTGRES_DB_NAME || 'climb_db'
 });
 const BACKEND_URL = "http://localhost:8000";
 
+async function initDatabase() {
+    try {
+        const client = await pool.connect();
+        await pgvector.registerType(client);
+        console.log("Successfully registered pgvector type.");
+        client.release();
+    }
+    catch (err) {
+        console.error("Failed to connect to PostgreSQL:", err);
+    }
+}
+initDatabase();
+
 pool.on('connect', async (client) => {
-    await pgvector.registerType(client);
+    try {
+        await pgvector.registerType(client);
+    } catch (err) {
+        console.error("Failed to register pgvector type:", err);
+    }
 });
 
 module.exports = {
