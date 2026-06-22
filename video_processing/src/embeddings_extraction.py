@@ -22,16 +22,16 @@ def extract_and_store_embeddings():
     
     # Check for GPU availability
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Initializing {config.MODEL_NAME} on device: {device}")
+    logger.info(f"Initializing {config.KIS_MODEL_NAME} on device: {device}")
     
     # Attempt to load the model and processor
     try:
-        processor = AutoProcessor.from_pretrained(config.MODEL_NAME)
-        model = AutoModel.from_pretrained(config.MODEL_NAME).to(device)
+        processor = AutoProcessor.from_pretrained(config.KIS_MODEL_NAME)
+        model = AutoModel.from_pretrained(config.KIS_MODEL_NAME).to(device)
         model.eval()  # Switch model to evaluation mode (disables dropout/batchnorm training behavior)
 
     except Exception as e:
-        logger.error(f"Failed to load model {config.MODEL_NAME}: {e}")
+        logger.error(f"Failed to load model {config.KIS_MODEL_NAME}: {e}")
         return
 
     conn = connect_to_database()

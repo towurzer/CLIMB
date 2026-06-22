@@ -23,16 +23,16 @@ class SearchEngine:
         self.fps_cache = {}  # Cache for video FPS values to avoid repeated DB queries
 
     
-        self.logger.info(f"Initializing {config.MODEL_NAME} on device: {self.device}")
+        self.logger.info(f"Initializing {config.KIS_MODEL_NAME} on device: {self.device}")
     
         # Attempt to load the model and processor
         try:
-            self.processor = AutoProcessor.from_pretrained(config.MODEL_NAME)
-            self.model = AutoModel.from_pretrained(config.MODEL_NAME).to(self.   device)
+            self.processor = AutoProcessor.from_pretrained(config.KIS_MODEL_NAME)
+            self.model = AutoModel.from_pretrained(config.KIS_MODEL_NAME).to(self.   device)
             self.model.eval()  # Switch model to evaluation mode (disables dropout/batchnorm training behavior)
 
         except Exception as e:
-            self.logger.error(f"Failed to load model {config.MODEL_NAME}: {e}")
+            self.logger.error(f"Failed to load model {config.KIS_MODEL_NAME}: {e}")
 
         self._load_video_metadata()
 
