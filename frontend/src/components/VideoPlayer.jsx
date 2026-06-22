@@ -44,13 +44,6 @@ function VideoPlayer({ result, apiUrl }) {
           <source src={videoUrl} type="video/mp4" />
         </video>
 
-        {/* Fallback: show thumbnail when video is not available */}
-        <div className="video-fallback">
-          <img src={result.thumbnail_url} alt="Preview" />
-          <div className="fallback-label">
-            Video preview (real videos will be loaded later)
-          </div>
-        </div>
       </div>
 
       <div className="player-controls">

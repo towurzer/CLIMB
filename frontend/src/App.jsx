@@ -102,7 +102,7 @@ function App() {
       // answer again in javascript object
       const data = await res.json();
       // displaying results
-      setResults(data.results);
+      setResults(data.results || []);
     } catch (err) {
       console.error("Search failed:", err);
     } finally {
@@ -122,7 +122,7 @@ function App() {
       // getting it from the backend 
       const res = await fetch(`${API_URL}/climb/videos/${result.video_id}/${result.shot_id}/similar`);
       const data = await res.json();
-      setResults(data.results);
+      setResults(data.results || []);
     } catch (err) {
       console.error("Similar search failed:", err);
     } finally {
