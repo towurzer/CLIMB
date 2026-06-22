@@ -11,21 +11,7 @@ from transformers import BlipProcessor, BlipForQuestionAnswering
 import torch
 from PIL import Image
 
-
-class VQAEngine:
-    def __init__(self):
-        print("Loading BLIP VQA Model...")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
-        self.model = BlipForQuestionAnswering.from_pretrained("Salesforce/blip-vqa-base").to(self.device)
-
-    def answer(self, image_path: str, question: str) -> str:
-        raw_image = Image.open(image_path).convert('RGB')
-        inputs = self.processor(raw_image, question, return_tensors="pt").to(self.device)
-        out = self.model.generate(**inputs)
-        return self.processor.decode(out[0], skip_special_tokens=True)
-
-
+from vqa_engine import VQAEngine
 
 app = FastAPI(title="Python Embedding Worker")
 
@@ -44,7 +30,7 @@ def startup_event():
     else:
         print("CRITICAL: Could not connect to DB at startup.")
 
-    vqa_engine = VQAEngine()
+    vqa_engine = VQAEngine(Config())
     print("AI Worker is ready to receive requests from Node.js!")
 
 
@@ -74,7 +60,7 @@ def do_vqa(request: VQARequest):
         raise HTTPException(status_code=500, detail="VQA engine not initialized")
 
     try:
-        answer = vqa_engine.answer(request.image_path, request.question)
+        answer = vqa_engine.answer_question(request.image_path, request.question)
         return {"answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -8,12 +8,13 @@ PROJECT_ROOT = VIDEO_PROCESSING_ROOT.parent
 
 @dataclass
 class Config:
-    # --- Model parameters ---
-    MODEL_NAME: str = "google/siglip2-large-patch16-384"
+    # --- KIS Model parameters ---
+    KIS_MODEL_NAME: str = "google/siglip2-large-patch16-384"
     EMBEDDING_BATCH_SIZE: int = 16
-
-    # --- Search parameters ---
     SEARCH_TOP_K: int = 48
+
+    # --- VQA Model parameters ---
+    VQA_MODEL_NAME: str = "Salesforce/blip2-opt-2.7b"
 
     # --- Video Compression ---
     WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
