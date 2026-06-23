@@ -23,9 +23,9 @@ class VQAEngine:
             self.processor = Blip2Processor.from_pretrained(config.VQA_MODEL_NAME)
             
             if self.device == "cuda":
-                self.logger.info("Configuring 8-bit quantization with memory capping...")
+                self.logger.info("Configuring BLIP model for GPU ...")
                 
-                # Limit VRAM for BLIP-2 to 7GB, so SigLIP 2 has safe space
+                # Limit VRAM for BLIP-2 to 7GB, so SigLIP 2 has space
                 max_memory_mapping = {0: "7GiB"}
                 quantization_config = BitsAndBytesConfig(load_in_8bit=True)
                 
@@ -34,9 +34,12 @@ class VQAEngine:
                     quantization_config=quantization_config,
                     device_map="auto",
                     max_memory=max_memory_mapping,
-                    low_cpu_mem_usage=True  # Verhindert den OOM-Crash beim Laden
+                    low_cpu_mem_usage=True  # avoids loading the full model into CPU memory before quantization, which can cause OOM errors
                 )
+                
             else:
+                self.logger.info("Loading BLIP model on CPU with 32-bit precision ...")
+                # If CUDA is not available, load the model with 32 float precision as standard
                 self.model = Blip2ForConditionalGeneration.from_pretrained(
                     config.VQA_MODEL_NAME,
                     torch_dtype=torch.float32
