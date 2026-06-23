@@ -6,13 +6,25 @@ function VideoPlayer({ result, apiUrl }) {
 
   const startSec = result.start_time_ms / 1000;
   const endSec = result.end_time_ms / 1000;
+  const videoUrl = `${apiUrl}/videos/${result.video_id}.mp4`;
 
-  // When a new result is selected, seek to the start time
+  // When video_id changes, reload the video. When only the segment changes, just seek.
   useEffect(() => {
-    if (videoRef.current && result) {
-      videoRef.current.currentTime = startSec;
-    }
-  }, [result, startSec]);
+    const video = videoRef.current;
+    if (!video) return;
+
+    // Force reload when source changes
+    video.load();
+    video.currentTime = startSec;
+    video.play().catch(() => { });
+  }, [result.video_id]);
+
+  // When segment changes (same video, different shot), just seek
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = startSec;
+  }, [result.shot_id, startSec]);
 
   // Loop segment: when video time passes end, jump back to start
   useEffect(() => {
@@ -29,9 +41,6 @@ function VideoPlayer({ result, apiUrl }) {
     return () => video.removeEventListener("timeupdate", handleTimeUpdate);
   }, [loopSegment, startSec, endSec]);
 
-  // In production: use real video URL from backend
-  const videoUrl = `${apiUrl}/videos/${result.video_id}.mp4`;
-
   return (
     <div className="video-player">
       <div className="video-container">
@@ -43,7 +52,6 @@ function VideoPlayer({ result, apiUrl }) {
         >
           <source src={videoUrl} type="video/mp4" />
         </video>
-
       </div>
 
       <div className="player-controls">
