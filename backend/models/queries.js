@@ -41,21 +41,27 @@ module.exports = {
             const res = await axios.post('http://localhost:5000/api/search', {
                 prompt: queryText
             });
-
+    
+            // Get middle_frame for each shot from database
+            const shotIds = res.data.results.map(s => s.shot_id);
+            const middleFrameSql = `SELECT shot_id, middle_frame FROM shots WHERE shot_id = ANY($1)`;
+            const middleFrameRes = await pool.query(middleFrameSql, [shotIds]);
+            const middleFrameMap = {};
+            middleFrameRes.rows.forEach(r => { middleFrameMap[r.shot_id] = r.middle_frame; });
+    
             return res.data.results.map(shot => ({
                 video_id: shot.video_id,
                 shot_id: shot.shot_id,
                 score: shot.similarity_score,
                 start_frame: shot.start_frame,
                 end_frame: shot.end_frame,
+                middle_frame: middleFrameMap[shot.shot_id] || null,
                 fps: shot.fps,
                 start_time_ms: shot.start_frame_time_ms,
                 end_time_ms: shot.end_frame_time_ms,
-                // Make sure this points to your Express static folder path!
                 thumbnail_url: `${BACKEND_URL}/keyframes/${shot.image_path.split('/').pop()}`
             }));
-
-
+    
         } catch (error) {
             console.error("Failed to connect to Python Worker");
             throw error;
@@ -103,8 +109,8 @@ module.exports = {
 
     getVideoShots: async (videoId) => {
         const sql = `
-            SELECT shot_id, start_frame, end_frame, image_path
-            FROM shots
+        SELECT shot_id, start_frame, end_frame, middle_frame, image_path
+        FROM shots
             WHERE video_id = $1
             ORDER BY start_frame;
         `;
@@ -121,6 +127,7 @@ module.exports = {
             shot_id: row.shot_id,
             start_frame: row.start_frame,
             end_frame: row.end_frame,
+            middle_frame: row.middle_frame,
             fps: fps,
             thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
         }));
@@ -165,12 +172,19 @@ module.exports = {
     },
 
     askVQA: async (videoId, shotId, question) => {
-        // TODO: Add SQL query here to get the image_path for this videoId/shotId to send to Python
+        // Get actual image path from database
+        const pathSql = `SELECT image_path FROM shots WHERE shot_id = $1`;
+        const pathRes = await pool.query(pathSql, [shotId]);
+        
+        if (pathRes.rows.length === 0) throw new Error("Shot not found");
+        
+        const imagePath = pathRes.rows[0].image_path;
+        
         const res = await axios.post('http://localhost:5000/api/vqa', {
-            image_path: `/path/to/v3c_keyframes/${videoId}_shot_${shotId}.jpg`, // TODO: Update with real path
+            image_path: imagePath,
             question: question
         });
-
+    
         return res.data.answer;
     }
 };

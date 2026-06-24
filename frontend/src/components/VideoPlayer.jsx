@@ -4,9 +4,12 @@ function VideoPlayer({ result, apiUrl }) {
   const videoRef = useRef(null);
   const [loopSegment, setLoopSegment] = useState(true);
 
-  const startSec = result.start_time_ms / 1000;
-  const endSec = result.end_time_ms / 1000;
+  const startSec = result.middle_frame
+    ? result.middle_frame / result.fps
+    : result.start_time_ms / 1000;
+  const endSec = startSec + 5;
   const videoUrl = `${apiUrl}/videos/${result.video_id}.mp4`;
+  console.log("middle_frame:", result.middle_frame, "startSec:", startSec, "fps:", result.fps);
 
   // When video_id changes, reload the video. When only the segment changes, just seek.
   useEffect(() => {
