@@ -42,20 +42,13 @@ module.exports = {
                 prompt: queryText
             });
     
-            // Get middle_frame for each shot from database
-            const shotIds = res.data.results.map(s => s.shot_id);
-            const middleFrameSql = `SELECT shot_id, middle_frame FROM shots WHERE shot_id = ANY($1)`;
-            const middleFrameRes = await pool.query(middleFrameSql, [shotIds]);
-            const middleFrameMap = {};
-            middleFrameRes.rows.forEach(r => { middleFrameMap[r.shot_id] = r.middle_frame; });
-    
             return res.data.results.map(shot => ({
                 video_id: shot.video_id,
                 shot_id: shot.shot_id,
                 score: shot.similarity_score,
                 start_frame: shot.start_frame,
                 end_frame: shot.end_frame,
-                middle_frame: middleFrameMap[shot.shot_id] || null,
+                middle_frame: shot.middle_frame,
                 fps: shot.fps,
                 start_time_ms: shot.start_frame_time_ms,
                 end_time_ms: shot.end_frame_time_ms,
@@ -112,7 +105,7 @@ module.exports = {
         SELECT shot_id, start_frame, end_frame, middle_frame, image_path
         FROM shots
             WHERE video_id = $1
-            ORDER BY start_frame;
+            ORDER BY start_frame ASC, middle_frame ASC;
         `;
         const fpsSql = `SELECT fps FROM videos WHERE video_id = $1`;
 
