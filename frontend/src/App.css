@@ -676,6 +676,55 @@ body {
   color: #fff;
 }
 
+.vqa-shot-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #1a1a1a;
+  border-radius: 6px;
+}
+
+.vqa-shot-id {
+  font-size: 13px;
+  color: #ddd;
+  font-weight: 600;
+  font-family: monospace;
+}
+
+.vqa-shot-id.empty {
+  color: #555;
+  font-weight: 400;
+}
+
+.vqa-field-label {
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.vqa-ask-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  background: #5b8def;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.vqa-ask-btn:hover:not(:disabled) {
+  background: #4a7de0;
+}
+
+.vqa-ask-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ── Video Browser (Browse Mode) ── */
 .browse-view {
   display: flex;

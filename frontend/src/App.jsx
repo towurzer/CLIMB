@@ -101,6 +101,7 @@ function App() {
       const res = await fetch(`${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}`);
       // answer again in javascript object
       const data = await res.json();
+      console.log("first result:", data.results[0]);
       // displaying results
       setResults(data.results || []);
     } catch (err) {
@@ -139,8 +140,10 @@ function App() {
       video_id: prev?.video_id || shot.video_id,
       shot_id: shot.shot_id,
       score: prev?.score || 0,
+      middle_frame: shot.middle_frame,
       start_frame: shot.start_frame,
       end_frame: shot.end_frame,
+
       // 25 is just a backup becuase it is most common
       fps: shot.fps || prev?.fps || 25,
       // we need to recalculate, because DRES is usinf ms not frames
@@ -204,6 +207,7 @@ function App() {
 
   // Select result 
   const handleSelect = useCallback((result) => {
+    console.log("handleSelect middle_frame:", result.middle_frame);
     setSelectedResult(result);
     setConfirmSubmit(false);
     setSubmitStatus(null);
