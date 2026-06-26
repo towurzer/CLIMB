@@ -225,10 +225,18 @@ function App() {
         const detailsText = data.details ? ` ${data.details}` : "";
         throw new Error(`${errorText}${detailsText}`);
       }
-      // it worked
-      entry.status = "success";
-      setSubmitStatus("success");
-      setSubmitMessage(data.message || "Submitted successfully.");
+      const submissionState = data.dres_response?.submission;
+      const submissionDetails = data.dres_response?.description || data.message || "Submitted successfully.";
+      if (submissionState === "CORRECT") {
+        entry.status = "success";
+        setSubmitStatus("success");
+        setSubmitMessage(submissionDetails);
+      } else {
+        const errorText = submissionState ? `DRES Submission failed: ${submissionDetails}` : (data.message || "DRES Submission failed.");
+        entry.status = "error";
+        setSubmitStatus("error");
+        setSubmitMessage(errorText);
+      }
     } catch (err) {
       // it did not work
       console.error("DRES submit failed:", err);
