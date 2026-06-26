@@ -34,7 +34,6 @@ exports.askShotVQA = async (req, res) => {
 
     if (!question) return res.status(400).json({ error: "Question is required in body" });
     console.log(`Asking the question ${question} (shot based)`)
-    // TODO check
     const answer = await queries.askVQA(video_id, shot_id, question);
     res.status(200).json({ question, answer });
 };

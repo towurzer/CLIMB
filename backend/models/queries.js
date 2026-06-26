@@ -172,7 +172,8 @@ module.exports = {
         if (pathRes.rows.length === 0) throw new Error("Shot not found");
         
         const imagePath = pathRes.rows[0].image_path;
-        
+
+        console.log(`Asking python ${imagePath}, ${question}`);
         const res = await axios.post('http://localhost:5000/api/vqa', {
             image_path: imagePath,
             question: question

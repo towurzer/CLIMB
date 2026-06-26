@@ -20,7 +20,14 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedResult, setSelectedResult] = useState(null);
   const [submitStatus, setSubmitStatus] = useState(null);
+  const [submitMessage, setSubmitMessage] = useState("");
   const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [dresUrl, setDresUrl] = useState("https://vbs.videobrowsing.org");
+  const [dresUsername, setDresUsername] = useState("");
+  const [dresPassword, setDresPassword] = useState("");
+  const [dresConnected, setDresConnected] = useState(false);
+  const [dresStatus, setDresStatus] = useState("Not connected");
+  const [dresLoading, setDresLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState([]);
   const [submissions, setSubmissions] = useState([]);
 
@@ -131,6 +138,38 @@ function App() {
     }
   }, []);
 
+  const handleDresLogin = useCallback(async () => {
+    if (!dresUsername.trim() || !dresPassword.trim()) {
+      setDresStatus("Enter username and password");
+      return;
+    }
+    setDresLoading(true);
+    setDresStatus("Connecting to DRES...");
+    try {
+      const res = await fetch(`${API_URL}/climb/dres/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: dresUsername,
+          password: dresPassword,
+          dres_url: dresUrl,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.details || "Failed to connect to DRES");
+      }
+      setDresConnected(true);
+      setDresStatus(data.message || "Connected to DRES");
+    } catch (err) {
+      console.error("DRES login failed:", err);
+      setDresConnected(false);
+      setDresStatus(err.message || "DRES login failed");
+    } finally {
+      setDresLoading(false);
+    }
+  }, [dresUrl, dresUsername, dresPassword]);
+
   // Shot select from filmstrip - the one under video - that is why we can use the same video id 
   const handleShotSelect = useCallback((shot) => {
     // of something was submitted - reseting it
@@ -156,6 +195,7 @@ function App() {
   //Submit to DRES  - calles after clicking on submit button
   const handleSubmit = useCallback(async (result) => {
     setSubmitStatus("submitting");
+    setSubmitMessage("Submitting to DRES...");
     setConfirmSubmit(false);
     // what is submitted
     const entry = {
@@ -179,19 +219,22 @@ function App() {
           end_time_ms: result.end_time_ms,
         }),
       });
-      // waiting for a response
-      await res.json();
+      const data = await res.json();
+      if (!res.ok) {
+        const errorText = data.error || data.message || "DRES Submission failed";
+        const detailsText = data.details ? ` ${data.details}` : "";
+        throw new Error(`${errorText}${detailsText}`);
+      }
       // it worked
       entry.status = "success";
       setSubmitStatus("success");
-      // after 3 seconds the button is working again
-      setTimeout(() => setSubmitStatus(null), 3000);
+      setSubmitMessage(data.message || "Submitted successfully.");
     } catch (err) {
       // it did not work
       console.error("DRES submit failed:", err);
       entry.status = "error";
       setSubmitStatus("error");
-      setTimeout(() => setSubmitStatus(null), 3000);
+      setSubmitMessage(`DRES Submission failed: ${err.message || "Please check DRES connection."}`);
     }
     // for our submitted array
     setSubmissions((prev) => [entry, ...prev]);
@@ -211,12 +254,14 @@ function App() {
     setSelectedResult(result);
     setConfirmSubmit(false);
     setSubmitStatus(null);
+    setSubmitMessage("");
   }, []);
 
   const handleBrowseSelect = useCallback((result) => {
     setSelectedResult(result);
     setConfirmSubmit(false);
     setSubmitStatus(null);
+    setSubmitMessage("");
   }, []);
 
   const isDuplicate = selectedResult ? alreadySubmitted(selectedResult) : false;
@@ -225,11 +270,43 @@ function App() {
     <div className="app">
       {/* for the top top bar */}
       <header className="app-header">
-        <h1>Video Retrieval System - Wurzer, Eisner, Hraničková </h1>
-        <TaskTimer />
-        <div className="mode-toggle">
-          <button className={`mode-btn ${mode === "search" ? "active" : ""}`} onClick={() => setMode("search")}>Search</button>
-          <button className={`mode-btn ${mode === "browse" ? "active" : ""}`} onClick={() => setMode("browse")}>Browse</button>
+        <div className="app-header-left">
+          <h1>Video Retrieval System - Wurzer, Eisner, Hraničková </h1>
+          <TaskTimer />
+        </div>
+
+        <div className="app-header-right">
+          <div className="dres-login-panel">
+            <input
+              type="text"
+              value={dresUrl}
+              onChange={(e) => setDresUrl(e.target.value)}
+              placeholder="DRES URL"
+              title="DRES server URL"
+            />
+            <input
+              type="text"
+              value={dresUsername}
+              onChange={(e) => setDresUsername(e.target.value)}
+              placeholder="Username"
+              title="DRES username"
+            />
+            <input
+              type="password"
+              value={dresPassword}
+              onChange={(e) => setDresPassword(e.target.value)}
+              placeholder="Password"
+              title="DRES password"
+            />
+            <button className="dres-login-btn" onClick={handleDresLogin} disabled={dresLoading}>
+              {dresLoading ? "Connecting..." : dresConnected ? "Reconnect DRES" : "DRES Login"}
+            </button>
+            <span className={`dres-status ${dresConnected ? "connected" : ""}`}>{dresStatus}</span>
+          </div>
+          <div className="mode-toggle">
+            <button className={`mode-btn ${mode === "search" ? "active" : ""}`} onClick={() => setMode("search")}>Search</button>
+            <button className={`mode-btn ${mode === "browse" ? "active" : ""}`} onClick={() => setMode("browse")}>Browse</button>
+          </div>
         </div>
       </header>
       {/* if statement, because for browsing we dont need it */}
@@ -303,6 +380,12 @@ function App() {
                 <button className="similar-btn" onClick={() => handleFindSimilar(selectedResult)}>
                   Find similar
                 </button>
+
+                {submitMessage && (
+                  <div className={`submit-result-box ${submitStatus || ""}`}>
+                    {submitMessage}
+                  </div>
+                )}
 
                 <div className="result-details">
                   <span>Video: {selectedResult.video_id}</span>

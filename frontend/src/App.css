@@ -24,15 +24,6 @@ body {
 }
 
 /* ── Header ── */
-.app-header {
-  padding: 8px 20px;
-  background: #1a1a1a;
-  border-bottom: 1px solid #333;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 .app-header h1 {
   font-size: 16px;
   font-weight: 600;
@@ -67,6 +58,74 @@ body {
 
 .mode-btn:hover:not(.active) {
   color: #bbb;
+}
+
+.app-header {
+  padding: 8px 20px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.app-header-left,
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dres-login-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #181818;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.dres-login-panel input {
+  width: 120px;
+  min-width: 100px;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #fff;
+}
+
+.dres-login-panel input::placeholder {
+  color: #666;
+}
+
+.dres-login-panel button {
+  padding: 7px 12px;
+  background: #5b8def;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dres-login-panel button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dres-status {
+  font-size: 11px;
+  color: #aaa;
+}
+
+.dres-status.connected {
+  color: #7ade7a;
 }
 
 /* ── Search Bar ── */
@@ -388,6 +447,30 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.submit-result-box {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #444;
+  background: #171717;
+  color: #d8d8d8;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 100%;
+  min-height: 42px;
+}
+
+.submit-result-box.success {
+  border-color: #3a8;
+  background: rgba(58, 170, 136, 0.12);
+  color: #7ade7a;
+}
+
+.submit-result-box.error {
+  border-color: #e67;
+  background: rgba(230, 103, 119, 0.12);
+  color: #ff9fb3;
 }
 
 .submit-btn {
