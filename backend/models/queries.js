@@ -132,11 +132,13 @@ module.exports = {
 
         if (embedRes.rows.length === 0) throw new Error("Shot not found");
 
-        const targetVectorString = embedRes.rows[0].embedding;
+        const targetVectorArray = embedRes.rows[0].embedding;
 
-        if (!targetVectorString) {
+        if (!targetVectorArray) {
             return [];
         }
+        const formattedVectorString = pgvector.toSql(targetVectorArray);
+
         const searchSql = `
             SELECT
                 s.shot_id, s.video_id, s.start_frame, s.end_frame, s.image_path, v.fps,
@@ -149,7 +151,7 @@ module.exports = {
                 LIMIT 50;
         `;
 
-        const { rows } = await pool.query(searchSql, [targetVectorString, shotId]);
+        const { rows } = await pool.query(searchSql, [formattedVectorString, shotId]);
 
         return rows.map(row => ({
             video_id: row.video_id,
