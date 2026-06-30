@@ -42,8 +42,20 @@ class Config:
     # --- Database ---
     DB_CONTAINER_NAME: str = "climb"
     DB_CONTAINER_MOUNT_PATH: str = "/var/lib/postgresql/"
-    DB_HOST: str = "localhost"
-    DB_PORT: str = "5432"
+
+    @property
+    def db_host(self) -> str:
+        value = os.getenv("DB_HOST")
+        if not value:
+            return "localhost"
+        return value
+
+    @property
+    def db_port(self) -> str:
+        value = os.getenv("DB_PORT")
+        if not value:
+            return "5432"
+        return value
 
     @property
     def db_name(self) -> str:
