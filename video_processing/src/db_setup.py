@@ -17,7 +17,7 @@ def get_container_command():
             -e POSTGRES_PASSWORD={conf.db_password} \\
             -e POSTGRES_DB={conf.db_name} \\
             -v postgres_data:{conf.DB_CONTAINER_MOUNT_PATH} \\
-            -p {conf.DB_PORT}:5432 \\
+            -p {conf.db_port}:5432 \\
             -d docker.io/ankane/pgvector:latest"""
 
         logger.debug("Created Database Command")
@@ -54,8 +54,8 @@ def connect_to_database():
             "dbname": conf.db_name,
             "user": "postgres",
             "password": conf.db_password,
-            "host": conf.DB_HOST,
-            "port": conf.DB_PORT
+            "host": conf.db_host,
+            "port": conf.db_port
         }
         return psycopg2.connect(**DB_CONFIG)
     except Exception as e:
