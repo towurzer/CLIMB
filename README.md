@@ -13,38 +13,57 @@ segments.
 ## Project Structure
 
 ```text
-dataset/                    # Image source files (local only)
-results/                    # Results to display in README
-video_processing/
-	src/
-	    config.py               # Settings
-	    main.py                 # Manages the whole pipeline 
-	    model.py                # model
-	    model_trainer.py        # trains the model
-	    utils.py                # utility functions
-	---
-	logs/                       # Log File/s
-	model/                      # trained model
-	output/                     # Saved plots, inferred data and evaluation results (local only)
----
-frontend/
-    src/
-        App.jsx                 # Main application component
-        App.css                 # Styles
-        main.jsx                # React entry point
-        components/
-            SearchBar.jsx       # Search input with history
-            ResultsGrid.jsx     # Thumbnail grid of results
-            VideoPlayer.jsx     # Video player with segment loop
-            ShotBrowser.jsx     # Filmstrip navigation
-            VideoBrowser.jsx    # Browse all videos
-            VqaAnswer.jsx       # VQA text answer input
-            TaskTimer.jsx       # 5-minute countdown
-            SubmissionLog.jsx   # Submission history log
----
+.env                        # Environment variables and secrets
+start_vbs.sh                # Launch helper script
 backend/
-    server.js                   # TODO Server
+    openapi.yaml            # API specification
+    package.json            # Backend dependencies
+    server.js               # Express API server
+    controller/             # Route handlers
+    models/                 # Database models and queries
+    routes/                 # Express routes
 
+dataset/                    # local folder only
+    climb_db_backup.dump    # Database dump
+    compression.checkpoint  # Compression checkpoint metadata
+    keyframes/              # Extracted keyframes
+    V3C1_200/               # Source video dataset
+    web_ready/              # Compressed videos for web playback
+
+frontend/
+    index.html              # Application shell
+    package.json            # Frontend dependencies
+    vite.config.js          # Vite dev server config
+    public/                 # Static assets
+    src/
+        App.jsx             # Main application component
+        App.css             # Styles
+        main.jsx            # React entry point
+        components/
+            SearchBar.jsx   # Search input with history
+            ResultsGrid.jsx # Thumbnail grid of results
+            VideoPlayer.jsx # Video player with segment loop
+            ShotBrowser.jsx # Filmstrip navigation
+            VideoBrowser.jsx# Browse all videos
+            VqaAnswer.jsx   # VQA text answer input
+            TaskTimer.jsx   # 5-minute countdown
+            SubmissionLog.jsx # Submission history log
+
+video_processing/
+    src/
+        config.py              # Settings
+        custom_logger.py       # Logging utilities
+        dataset_compression.py # Dataset compression helpers
+        db_queries.py          # Database queries
+        db_setup.py            # Database setup
+        embeddings_extraction.py # Feature extraction
+        keyframe_extraction.py  # Keyframe extraction
+        main.py                # Pipeline entry point
+        search_engine.py       # Search and embedding service
+        utils.py               # Utility functions
+        vqa_engine.py          # VQA inference engine
+        worker_http_endpoint.py # Search Engine HTTP interface 
+    logs/                     # Log files (local only)
 ```
 
 ## Getting Started - User
