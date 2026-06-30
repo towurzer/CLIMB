@@ -202,9 +202,10 @@ Since the console will not be yours anymore I guess, so start up a new one and f
 
 ### 2. Backend
 
-To get the backend working you need to do 3 things.
+To get the backend working you need to do 3 to 4 things.
 
 - Spin up the DB-Container
+- Optionally create and spin up the caching container
 - Start the AI-Embedding Endpoint
 - Start the backend server itself
 
@@ -219,9 +220,39 @@ As previously stated, to start the container run
 podman start climb
 ```
 
-##### 2.3 Start the backend server itself
+#### 2.2 Caching
+In order to reduce load times during video browsing we added some paging and caching using Redis.
+It's importnat to note that CLIMB will run completely fine without any caching enabled but you might find that video browsing
+takes longer to load. If you want to activate it just create a new podman container
 
-Please step into the backend folder, install all dependencies and start it.
+```bash 
+podman run --name climb_caching -p 6379:6379 -d docker.io/library/redis:7
+```
+
+and spin it up everytime you need some performance boost.
+
+```bash:
+podman start climb_caching
+```
+
+Redis is configurable via the following parameters in your root environment file:
+```text:
+REDIS_URL=<url>:<port>
+VIDEOS_CACHE_TTL_SECONDS=<time>
+```
+
+##### 2.3 Start the search endpoint
+
+In order to embed the user searches start the search engine by navigating into the 'video_processing/src' folder and running
+
+```bash:
+python main.py --startSearchEngine
+```
+
+##### 2.4 Start the backend server itself
+
+Now you are all set.
+please open a new console if necessary and step into the backend folder, install all dependencies and start the backend.
 
 ```bash
 cd backend
@@ -229,7 +260,11 @@ npm install
 npm start
 ```
 
+
 ### 3. Frontend
+
+Starting the frontend is even easier.
+All you need to do is to open a new terminal, navigate to the frontend directory, install all dependencies and run it.
 
 ```bash
 cd frontend
@@ -237,10 +272,15 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` in your browser.
+To now see the User interface open the url provided in the terminal. By default it will be `http://localhost:3000`.
 
+#### 3.1 Backend API
 
-podman run --name climb_caching -p 6379:6379 -d docker.io/library/redis:7
+If you are interested in creating your own frontend or are just interested in general, you can find the API Specifications of our backend under `/backend/openapi.yaml`.
+In order to properly view it I would recommend using an openapi viewer of your choice. JetBrains products typically have one included, browser based wise I like to use 
+"https://editor.swagger.io/", but thats completely up to you 
 
 TODO: CLI Help String
 TODO: CLI readme
+TODO: Explain how to use frontend.
+TODO: database dump 
