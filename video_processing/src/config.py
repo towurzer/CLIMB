@@ -35,9 +35,9 @@ class Config:
     COMPRESSION_CHECKPOINT_FILE: str = "compression.checkpoint"
     # Log Levels: DEBUG | INFO | WARN | ERROR | CRITICAL
     LOG_LEVEL_MIN: str = "DEBUG" # logs with a lower level will be ignored before reaching the other loggers (i.e. console / file), DO NOT TOUCH
-    LOG_LEVEL_CONSOLE: str = "DEBUG"
+    LOG_LEVEL_CONSOLE: str = "INFO"
     LOG_LEVEL_FILE: str = "DEBUG"
-    LOG_LEVEL_ERROR: str = "WARNING"
+    LOG_LEVEL_ERROR: str = "WARN"
 
     # --- Database ---
     DB_CONTAINER_NAME: str = "climb"

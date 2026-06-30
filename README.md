@@ -10,7 +10,13 @@ The system provides an intuitive graphical user interface for interactive video 
 Distributed Retrieval Evaluation Server (DRES) through its REST API, enabling seamless submission of retrieved video
 segments.
 
-## Project Structure
+## Getting Started - User
+
+// TODO
+
+## Getting Started - Developer
+
+### Project Structure
 
 ```text
 .env                        # Environment variables and secrets
@@ -65,12 +71,6 @@ video_processing/
         worker_http_endpoint.py # Search Engine HTTP interface 
     logs/                     # Log files (local only)
 ```
-
-## Getting Started - User
-
-// TODO
-
-## Getting Started - Developer
 
 ### 1. Video Processing
 
@@ -303,3 +303,5 @@ TODO: CLI Help String
 TODO: CLI readme
 TODO: Explain how to use frontend.
 TODO: database dump 
+TODO: example .env
+
