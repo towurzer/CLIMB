@@ -62,7 +62,7 @@ def connect_to_database():
         logger.error(f"Database connection failed: {e}")
         return None
 
-def populate_db_with_keyframes():
+def populate_db_with_keyframes(do_db_population):
     conf = Config()
     dataset_dir = os.path.join(conf.DATA_DIR, conf.DATASET_FOLDER)
     scenes_dir = os.path.join(dataset_dir, conf.SCENES_DIR)
@@ -94,7 +94,7 @@ def populate_db_with_keyframes():
 
         video_path = Path(dataset_dir) / f"{video_id}.{video_stem}"
         if video_path.exists():
-            keyframe_extraction.process_video_and_shots(conn, video_id, video_path, scene_file)
+            keyframe_extraction.process_video_and_shots(conn, video_id, video_path, scene_file, do_db_population)
         else:
             logger.warn(f"Could not find video file for {video_id} in {dataset_dir}")
 

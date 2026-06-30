@@ -16,6 +16,10 @@ class Config:
     # --- VQA Model parameters ---
     VQA_MODEL_NAME: str = "Salesforce/blip2-opt-2.7b"
 
+    # --- Search Engine URL ---
+    SEARCH_ENGINE_URL: str = ("0.0.0.0")
+    SEARCH_ENGINE_PORT: int = 5000
+
     # --- Video Compression ---
     WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
     VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"} # valid video extensions
@@ -31,11 +35,13 @@ class Config:
 
     # --- Logging ---
     LOG_FILE: str = "CLIMB.log"
+    ERROR_FILE: str = "CLIMB_ERROR.log"
     COMPRESSION_CHECKPOINT_FILE: str = "compression.checkpoint"
     # Log Levels: DEBUG | INFO | WARN | ERROR | CRITICAL
     LOG_LEVEL_MIN: str = "DEBUG" # logs with a lower level will be ignored before reaching the other loggers (i.e. console / file), DO NOT TOUCH
     LOG_LEVEL_CONSOLE: str = "DEBUG"
     LOG_LEVEL_FILE: str = "DEBUG"
+    LOG_LEVEL_ERROR: str = "WARNING"
 
     # --- Database ---
     DB_CONTAINER_NAME: str = "climb"
@@ -64,8 +70,9 @@ class CLIConfig:
     compression_flags: List[str] = field(default_factory=lambda: ["-c", "--compress"])
     database_container_creation_flag: List[str] = field(default_factory=lambda: ["-spc", "--showPostgresCommand"])
     extract_keyframes: List[str] = field(default_factory=lambda: ["-ek", "--extractKeyframes"])
+    extract_keyframes_no_db: List[str] = field(default_factory=lambda: ["-ekndb", "--extractKeyframesNoDatabase"])
     extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
-    start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startEmbeddingWorker"])
+    start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startSearchEngine"])
     help_flags: List[str] = field(default_factory=lambda: ["-h", "--help"])
 
     help_string = """
@@ -79,7 +86,9 @@ Options:
 -c, --compress					// TODO: COMMENT
 -spc, --showPostgresCommand     // TODO: COMMENT
 -ek, --extractKeyframes        // TODO: COMMENT
+-ekndb, --extractKeyframesNoDatabase // TODO: COMMENT
 -ee, --extractEmbeddings       // TODO: COMMENT
+-start, --startSearchEngine                     // TODO: COMMENT 
 -h, --help						Show this help message and exit
 
 Examples:

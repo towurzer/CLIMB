@@ -102,7 +102,7 @@ If you want tho get an overview about all possible configurations you can also r
 python main.py --help
 ```
 
-### 1.2 Data Preprocessing
+#### 1.2 Data Preprocessing
 
 Download and extract your Dataset (i.e. from: "https://www2.itec.aau.at/owncloud/index.php/s/AcA1pvZIpDrOom5").
 Save it to ```/dataset/V3C1_200``` also extract the scenes and put them under ```/dataset/V3C1_200/scenes_v3c1_200```.
@@ -120,7 +120,7 @@ This will initiate a FFmpeg based compression of all the videos which will by de
 Please be sure that you have FFmpeg installed under your system as CLIMB will spawn a child-process executing FFmpeg.
 To download FFmpeg visit: https://ffmpeg.org/download.html
 
-### 1.3 Keyframe extraction
+#### 1.3 Keyframe extraction
 
 Next you will need to extract the keyframes from the dataset. Additionally you will need to save the frame rate of every
 video to later be able to build the Milisecond payload for the dres server. For that we will need to create simple
@@ -157,6 +157,48 @@ properly.
 the logs if you stumble upon undesired behaviour. For more details however I will recommend their excellent
 documentation found under https://docs.podman.io/en/latest/)
 
+Now that you set up the Database, you can populate it. In order to do so, run
+
+```bash 
+python main.py --extractKeyframes
+```
+
+This will extract the keyframes out of the videos, save the Screenshots locally to later calculate the embeddings and will also insert them into the postgres climb Database.
+If you already got your Database set up (i.e. through a provided) dumb, but deleted the keyframes folder (I don't know why you would do that but still) you can run
+
+```bash 
+python main.py --extractKeyframesNoDatabase
+```
+
+to still extract the keyframes, without updating the Database. (Please not you will still need an active database connection to do so)
+
+
+#### 1.4 Video Embedding
+
+In order to later to semantic video retrieval, we will need to encode the Videos (Keyframes to be more specific) into a high Dimensional 
+Vector Space (1024dim). By doing so, we can later encode your searches into the same space, and do semantic retrieval by performing nearest neighbour searches 
+in this space. The setup is pretty easy. Just run
+
+```bash 
+python main.py --extractEmbeddings
+```
+
+This will scan your climb database for video shots missing embeddings, extract the their features using SigLIP2, and store the vectors in the db.
+For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
+
+#### 1.5 Start the Search Engine
+
+You are all set, now you can finally start the Search Engine which will open up a connection for the backend to connect to, to encode the searches and anser VQA-Questions.
+Just run 
+
+```bash
+python main.py --startSearchEngine
+```
+
+and relax.
+Since the console will not be yours anymore I guess, so start up a new one and find your way to the root directory and start if the next Section.
+
+
 ### 2. Backend
 
 To get the backend working you need to do 3 things.
@@ -176,21 +218,9 @@ As previously stated, to start the container run
 podman start climb
 ```
 
-#### 2.2 Start the AI-Embedding Endpoint
-
-To start the AI-Embedding Endpoint you need to go into the video_processing folder and run the main script with
-appropriate flags.
-
-```bash
-cd video_processing/src
-python main.py -start
-```
-
 ##### 2.3 Start the backend server itself
 
-Well your console will not be yours anymore I guess, so start up a new one and find your way to the root directory.
-
-Now please step into the backend folder, install all dependencies and start it.
+Please step into the backend folder, install all dependencies and start it.
 
 ```bash
 cd backend
@@ -207,3 +237,9 @@ npm run dev
 ```
 
 Open `http://localhost:3000` in your browser.
+
+
+podman run --name climb_caching -p 6379:6379 -d docker.io/library/redis:7
+
+TODO: CLI Help String
+TODO: CLI readme
