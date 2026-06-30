@@ -12,6 +12,9 @@ def setup_logging():
     file_handler = logging.FileHandler(os.path.join(Config.LOG_FOLDER, Config.LOG_FILE))
     file_handler.setFormatter(formatter)
 
+    error_file_handler = logging.FileHandler(os.path.join(Config.LOG_FOLDER, Config.LOG_FILE))
+    error_file_handler.setFormatter(formatter)
+
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
@@ -19,9 +22,11 @@ def setup_logging():
     root_logger.setLevel(Config.LOG_LEVEL_MIN)
 
     file_handler.setLevel(Config.LOG_LEVEL_FILE)
+    error_file_handler.setLevel(Config.LOG_LEVEL_ERROR)
     console_handler.setLevel(Config.LOG_LEVEL_CONSOLE)
 
     root_logger.addHandler(file_handler)
+    root_logger.addHandler(error_file_handler)
     root_logger.addHandler(console_handler)
 
 

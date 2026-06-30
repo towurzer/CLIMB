@@ -7,7 +7,7 @@ import custom_logger
 from db_queries import DBQueries
 
 
-def process_video_and_shots(conn, video_id, video_path, scene_file_path):
+def process_video_and_shots(conn, video_id, video_path, scene_file_path, do_db_population):
     """Extracts FPS, saves it, calculates middle frames, and saves JPEGs."""
     conf = Config()
     opencv_logger = custom_logger.get_logger("opencv")
@@ -23,15 +23,15 @@ def process_video_and_shots(conn, video_id, video_path, scene_file_path):
         opencv_logger.warn(f"Could not extract FPS from video {video_path}, defaulting to 30")
         fps = 30.0
 
-    # Since FPS might be float
     sample_interval = int(round(fps))
 
     keyframe_count_total = 0
 
     with conn.cursor() as cur:
-        db_logger.debug(f"Inserting FPS of video ({video_path}) into database")
+        if (do_db_population):
+            db_logger.debug(f"Inserting FPS of video ({video_path}) into database")
 
-        cur.execute(DBQueries.insert_FPS, (video_id, fps))
+            cur.execute(DBQueries.insert_FPS, (video_id, fps))
 
         with open(scene_file_path, 'r') as f:
             lines = f.readlines()
@@ -83,8 +83,9 @@ def process_video_and_shots(conn, video_id, video_path, scene_file_path):
                         opencv_logger.warn(f"Could not read frame {target} in {video_id}")
                         continue
 
-                db_logger.debug(f"Inserting keyframe {target} of shot {line_num} for video {video_id} into database")
-                cur.execute(DBQueries.insert_shot_metadata, (video_id, start_frame, end_frame, target, img_path))
+                if do_db_population:
+                    db_logger.debug(f"Inserting keyframe {target} of shot {line_num} for video {video_id} into database")
+                    cur.execute(DBQueries.insert_shot_metadata, (video_id, start_frame, end_frame, target, img_path))
 
                 keyframe_count += 1
             
