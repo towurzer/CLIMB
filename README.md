@@ -109,13 +109,15 @@ You can control different stages of CLIMB using the following flags:
 python main.py [OPTIONS]
 ```
 
-| Flag | Long option               | Description                                                                     |
-|------|---------------------------|---------------------------------------------------------------------------------|
-| -c   | --compress                | Compress the dataset videos using FFmpeg to allow for efficient video retrieval |
-| -spc | --showshowPostgresCommand | Create and show the command to create and start the postgres database           |
-| -h   | --help                    | Shows how to use the CLIMB-CLI and exits                                        |  
-
-If you want tho get an overview about all possible configurations you can also run
+| Flag   | Long option                  | Description                                                                     |
+|--------|------------------------------|---------------------------------------------------------------------------------|
+| -c     | --compress                   | Compress the dataset videos using FFmpeg to allow for efficient video retrieval |
+| -spc   | --showshowPostgresCommand    | Create and show the command to create and start the postgres database           |
+| -ek    | --extractKeyframes           | Extract the Keyframes to store and embed, also updates the Database             |
+| -ekndb | --extractKeyframesNoDatabase | Keyframe extraction without editing the Database                                |
+| -ee    | --extractEmbeddings          | Embed the Images and store the vectors in the Database                          |
+| -start | --startSearchEngine          | Start the Webserver which embeds user Queries and answers VQA Questions.        |
+| -h     | --help                       | Shows how to use the CLIMB-CLI and exits                                        |  
 
 ```bash:
 python main.py --help
@@ -182,42 +184,49 @@ Now that you set up the Database, you can populate it. In order to do so, run
 python main.py --extractKeyframes
 ```
 
-This will extract the keyframes out of the videos, save the Screenshots locally to later calculate the embeddings and will also insert them into the postgres climb Database.
-If you already got your Database set up (i.e. through a provided) dumb, but deleted the keyframes folder (I don't know why you would do that but still) you can run
+This will extract the keyframes out of the videos, save the Screenshots locally to later calculate the embeddings and
+will also insert them into the postgres climb Database.
+If you already got your Database set up (i.e. through a provided) dumb, but deleted the keyframes folder (I don't know
+why you would do that but still) you can run
 
 ```bash 
 python main.py --extractKeyframesNoDatabase
 ```
 
-to still extract the keyframes, without updating the Database. (Please not you will still need an active database connection to do so)
-
+to still extract the keyframes, without updating the Database. (Please not you will still need an active database
+connection to do so)
 
 #### 1.4 Video Embedding
 
-In order to later to semantic video retrieval, we will need to encode the Videos (Keyframes to be more specific) into a high Dimensional 
-Vector Space (1024dim). By doing so, we can later encode your searches into the same space, and do semantic retrieval by performing nearest neighbour searches 
+In order to later to semantic video retrieval, we will need to encode the Videos (Keyframes to be more specific) into a
+high Dimensional
+Vector Space (1024dim). By doing so, we can later encode your searches into the same space, and do semantic retrieval by
+performing nearest neighbour searches
 in this space. The setup is pretty easy. Just run
 
 ```bash 
 python main.py --extractEmbeddings
 ```
 
-This will scan your climb database for video shots missing embeddings, extract the their features using SigLIP2, and store the vectors in the db.
+This will scan your climb database for video shots missing embeddings, extract the their features using SigLIP2, and
+store the vectors in the db.
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
 #### 1.5 Start the Search Engine
 
-You are all set, now you can finally start the Search Engine which will open up a connection for the backend to connect to, to encode the searches and anser VQA-Questions.
-Just run 
+You are all set, now you can finally start the Search Engine which will open up a connection for the backend to connect
+to, to encode the searches and anser VQA-Questions.
+Just run
 
 ```bash
 python main.py --startSearchEngine
 ```
 
-and relax. By default the search engine will run locally on port 5000 but just as everything else, this is configurable in the config file.
+and relax. By default the search engine will run locally on port 5000 but just as everything else, this is configurable
+in the config file.
 
-Since the console will not be yours anymore I guess, so start up a new one and find your way to the root directory and start if the next Section.
-
+Since the console will not be yours anymore I guess, so start up a new one and find your way to the root directory and
+start if the next Section.
 
 ### 2. Backend
 
@@ -240,8 +249,10 @@ podman start climb
 ```
 
 #### 2.2 Caching
+
 In order to reduce load times during video browsing we added some paging and caching using Redis.
-It's importnat to note that CLIMB will run completely fine without any caching enabled but you might find that video browsing
+It's importnat to note that CLIMB will run completely fine without any caching enabled but you might find that video
+browsing
 takes longer to load. If you want to activate it just create a new podman container
 
 ```bash 
@@ -255,6 +266,7 @@ podman start climb_caching
 ```
 
 Redis is configurable via the following parameters in your root environment file:
+
 ```text:
 REDIS_URL=<url>:<port>
 VIDEOS_CACHE_TTL_SECONDS=<time>
@@ -262,7 +274,8 @@ VIDEOS_CACHE_TTL_SECONDS=<time>
 
 ##### 2.3 Start the search endpoint
 
-In order to embed the user searches start the search engine by navigating into the 'video_processing/src' folder and running
+In order to embed the user searches start the search engine by navigating into the 'video_processing/src' folder and
+running
 
 ```bash:
 python main.py --startSearchEngine
@@ -279,7 +292,6 @@ npm install
 npm start
 ```
 
-
 ### 3. Frontend
 
 Starting the frontend is even easier.
@@ -295,13 +307,14 @@ To now see the User interface open the url provided in the terminal. By default 
 
 #### 3.1 Backend API
 
-If you are interested in creating your own frontend or are just interested in general, you can find the API Specifications of our backend under `/backend/openapi.yaml`.
-In order to properly view it I would recommend using an openapi viewer of your choice. JetBrains products typically have one included, browser based wise I like to use 
-"https://editor.swagger.io/", but thats completely up to you 
+If you are interested in creating your own frontend or are just interested in general, you can find the API
+Specifications of our backend under `/backend/openapi.yaml`.
+In order to properly view it I would recommend using an openapi viewer of your choice. JetBrains products typically have
+one included, browser based wise I like to use
+"https://editor.swagger.io/", but thats completely up to you
 
-TODO: CLI Help String
-TODO: CLI readme
 TODO: Explain how to use frontend.
-TODO: database dump 
+TODO: database dump
 TODO: example .env
+
 

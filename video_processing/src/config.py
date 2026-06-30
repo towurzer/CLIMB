@@ -111,14 +111,11 @@ Description:
   TODO
 
 Options:
--c, --compress					// TODO: COMMENT
--spc, --showPostgresCommand     // TODO: COMMENT
--ek, --extractKeyframes        // TODO: COMMENT
--ekndb, --extractKeyframesNoDatabase // TODO: COMMENT
--ee, --extractEmbeddings       // TODO: COMMENT
--start, --startSearchEngine                     // TODO: COMMENT 
+-c, --compress					Compress the dataset videos (to 480p) using FFmpeg to allow for efficient video retrieval
+-spc, --showPostgresCommand     Create and show the commands to create a podman container housing the postgres database and activate the vector addition for postgres 
+-ek, --extractKeyframes        Extract the Keyframes to store and embed, and update the Database 
+-ekndb, --extractKeyframesNoDatabase    Keyframe extraction without editing the Database
+-ee, --extractEmbeddings       Embed the Images and store the vectors in the Database
+-start, --startSearchEngine                     Start the Webserver which embeds user Queries and answers VQA Questions.
 -h, --help						Show this help message and exit
-
-Examples:
-  // TODO
 """
