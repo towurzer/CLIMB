@@ -195,7 +195,8 @@ Just run
 python main.py --startSearchEngine
 ```
 
-and relax.
+and relax. By default the search engine will run locally on port 5000 but just as everything else, this is configurable in the config file.
+
 Since the console will not be yours anymore I guess, so start up a new one and find your way to the root directory and start if the next Section.
 
 
