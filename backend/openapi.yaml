@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Video Retrieval API",
-    "description": "API specification for the Video Browser Showdown (VBS) Retrieval System. Includes search, video metadata, VQA generation, and DRES integration.",
+    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, Visual Question answering and providing, and DRES integration.",
     "version": "1.0.0"
   },
   "servers": [
@@ -76,7 +76,7 @@
     },
     "/climb/videos/{video_id}": {
       "get": {
-        "summary": "Get metadata for a specific video (NOT FOUND IN FRONTEND)",
+        "summary": "Get metadata for a specific video",
         "operationId": "getVideoInfo",
         "parameters": [
           {
@@ -104,7 +104,7 @@
     },
     "/climb/videos/{video_id}/shots": {
       "get": {
-        "summary": "Get all shots for a specific video (for browsing)",
+        "summary": "Get all shots for a specific video",
         "operationId": "getVideoShots",
         "parameters": [
           {
@@ -143,7 +143,7 @@
     },
     "/climb/videos/{video_id}/ask": {
       "post": {
-        "summary": "Ask the AI model a question about a specific video (NEW)",
+        "summary": "Ask the AI model a question about a specific video",
         "operationId": "askVideoVQA",
         "parameters": [
           {
@@ -189,7 +189,7 @@
     },
     "/climb/videos/{video_id}/{shot_id}/ask": {
       "post": {
-        "summary": "Ask the AI model a question about a specific shot (NEW)",
+        "summary": "Ask the AI model a question about a specific shot",
         "operationId": "askShotVQA",
         "parameters": [
           {
@@ -293,7 +293,7 @@
     },
     "/climb/dres/connect": {
       "post": {
-        "summary": "Authenticate with DRES and fetch the active evaluation ID (NEW)",
+        "summary": "Authenticate with DRES and fetch the active evaluation ID",
         "operationId": "connectDres",
         "requestBody": {
           "required": true,
@@ -329,7 +329,7 @@
     },
     "/climb/dres/status": {
       "get": {
-        "summary": "Check current DRES connection status and active task (NEW)",
+        "summary": "Check current DRES connection status and active task",
         "operationId": "dresStatus",
         "responses": {
           "200": {

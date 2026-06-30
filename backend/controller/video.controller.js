@@ -4,6 +4,8 @@ const { createClient } = require('redis');
 
 // Caching Videos to reduce load time
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const VIDEOS_CACHE_TTL_SECONDS = process.env.VIDEOS_CACHE_TTL_SECONDS ||30;
+
 const redisClient = createClient({ url: REDIS_URL, socket: { connectTimeout: 3000, reconnectStrategy: false } });
 redisClient.on('error', (err) => {
     // We don't like errors
@@ -19,8 +21,6 @@ redisClient.on('error', (err) => {
         console.log('Redis not available, continuing without caching');
     }
 })();
-
-const VIDEOS_CACHE_TTL_SECONDS = 30;
 
 exports.listVideos = async (req, res) => {
     console.log('all videos queried')
