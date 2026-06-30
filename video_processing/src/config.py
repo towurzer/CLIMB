@@ -73,7 +73,11 @@ class Config:
         if not value:
             raise ValueError(
                 "The property 'SEARCH_ENGINE_PORT' is required to run the search engine, please add it to your .env file in the project root directory")
-        return value
+        try:
+            return int(value)
+        except ValueError as e:
+            raise ValueError(
+                "SEARCH_ENGINE_PORT must be an integer in your .env file, e.g. SEARCH_ENGINE_PORT=5000") from e
 
 
 
