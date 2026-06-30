@@ -16,10 +16,6 @@ class Config:
     # --- VQA Model parameters ---
     VQA_MODEL_NAME: str = "Salesforce/blip2-opt-2.7b"
 
-    # --- Search Engine URL ---
-    SEARCH_ENGINE_URL: str = ("0.0.0.0")
-    SEARCH_ENGINE_PORT: int = 5000
-
     # --- Video Compression ---
     WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
     VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"} # valid video extensions
@@ -61,6 +57,22 @@ class Config:
         value = os.getenv("POSTGRES_PASSWORD")
         if not value:
             raise ValueError("The property 'POSTGRES_PASSWORD' is required for database operations, please add it to your .env file in the project root directory")
+        return value
+
+    # --- Search Engine URL ---
+    @property
+    def search_engine_url(self) -> str:
+        value = os.getenv("SEARCH_ENGINE_URL")
+        if not value:
+            raise ValueError("The property 'SEARCH_ENGINE_URL' is required to run the search engine, please add it to your .env file in the project root directory")
+        return value
+
+    @property
+    def search_engine_port(self) -> int:
+        value = os.getenv("SEARCH_ENGINE_PORT")
+        if not value:
+            raise ValueError(
+                "The property 'SEARCH_ENGINE_PORT' is required to run the search engine, please add it to your .env file in the project root directory")
         return value
 
 
