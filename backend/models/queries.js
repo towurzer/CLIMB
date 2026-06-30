@@ -61,26 +61,56 @@ module.exports = {
         }
     },
 
-    getAllVideos: async () => {
-        const sql = `
+
+    getAllVideos: async (page = 1, perPage = 20) => {
+        const offset = (page - 1) * perPage;
+
+        const countSql = `SELECT COUNT(*)::int AS total FROM videos;`;
+        const videosSql = `
             SELECT
                 v.video_id,
                 v.fps,
                 COUNT(s.shot_id)::integer AS num_shots
             FROM videos v
                      LEFT JOIN shots s ON v.video_id = s.video_id
-            GROUP BY v.video_id
-            ORDER BY v.video_id;
+            GROUP BY v.video_id, v.fps
+            ORDER BY v.video_id
+            LIMIT $1 OFFSET $2;
         `;
-        const { rows } = await pool.query(sql);
 
-        return rows.map(row => ({
+        const [countRes, videosRes] = await Promise.all([
+            pool.query(countSql),
+            pool.query(videosSql, [perPage, offset])
+        ]);
+
+        const total = countRes.rows[0].total || 0;
+
+        const videoIds = videosRes.rows.map(r => r.video_id);
+
+        // Fetch preferred keyframes only for returned video ids
+        let prefMap = new Map();
+        if (videoIds.length > 0) {
+            const preferredSql = `
+                SELECT DISTINCT ON (video_id) video_id, image_path
+                FROM shots
+                WHERE image_path LIKE '%_kf_00010.jpg' AND video_id = ANY($1)
+                ORDER BY video_id, start_frame ASC;
+            `;
+            const prefRes = await pool.query(preferredSql, [videoIds]);
+            prefMap = new Map(prefRes.rows.map(r => [r.video_id, r.image_path]));
+        }
+
+        const videos = videosRes.rows.map(row => ({
             video_id: row.video_id,
             fps: row.fps,
             duration_sec: 0,
             num_shots: row.num_shots,
-            thumbnail_url: `${BACKEND_URL}/keyframes/${row.video_id}_shot_00000.jpg`
+            thumbnail_url: prefMap.has(row.video_id)
+                ? `${BACKEND_URL}/keyframes/${path.basename(prefMap.get(row.video_id))}`
+                : `${BACKEND_URL}/keyframes/${row.video_id}_shot_00000_kf_00000.jpg`
         }));
+
+        return { total, videos };
     },
 
     getVideoDetails: async (videoId) => {

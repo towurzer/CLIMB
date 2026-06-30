@@ -81,7 +81,7 @@ if __name__ == "__main__":
     vqa_engine = VQAEngine(config)
 
     # Example question about a keyframe image
-    keyframe_image_path = "/home/sebastian/Uni/IVADL/CLIMB/dataset/keyframes/00017_shot_00017_kf_00099.jpg"
+    keyframe_image_path = os.path.join(config.DATA_DIR, config.KEYFRAME_FOLDER, "00017_shot_00017_kf_00099.jpg")
     question = "What objects are visible in this image?"
     answer = vqa_engine.answer_question(keyframe_image_path, question)
     print(f"Question: {question}\nAnswer: {answer}")

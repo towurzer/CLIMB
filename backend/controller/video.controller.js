@@ -1,9 +1,67 @@
 const queries = require('../models/queries');
+const path = require('path');
+const { createClient } = require('redis');
+
+// Caching Videos to reduce load time
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const redisClient = createClient({ url: REDIS_URL, socket: { connectTimeout: 3000, reconnectStrategy: false } });
+redisClient.on('error', (err) => {
+    // We don't like errors
+});
+(async () => {
+    try {
+        await Promise.race([
+            redisClient.connect(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Redis connect timeout')), 3000))
+        ]);
+        console.log('Connected to Redis');
+    } catch (err) {
+        console.log('Redis not available, continuing without caching');
+    }
+})();
+
+const VIDEOS_CACHE_TTL_SECONDS = 30;
 
 exports.listVideos = async (req, res) => {
     console.log('all videos queried')
-    const videos = await queries.getAllVideos();
-    res.status(200).json({ count: videos.length, videos });
+
+    const page = parseInt(req.query.page || '1');
+    const perPage = Math.min(parseInt(req.query.per_page || '25'), 100);
+
+    const cacheKey = `videos:page:${page}:perPage:${perPage}`;
+
+    // Let's look at our cache
+    try {
+        if (redisClient && redisClient.isOpen) {
+            const cached = await redisClient.get(cacheKey);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+
+                if (parsed.count !== undefined && parsed.total === undefined) {
+                    parsed.total = parsed.count;
+                    delete parsed.count;
+                }
+                console.log(`Returning cached videos page=${page} perPage=${perPage} videos=${(parsed.videos||[]).length}`);
+                return res.status(200).json({ ...parsed, cached: true });
+            }
+        }
+    } catch (err) {
+        console.warn('Redis get failed, continuing without cache:', err.message || err);
+    }
+
+    const result = await queries.getAllVideos(page, perPage);
+
+    // Cache miss, load video into cach and use this :)
+    try {
+        if (redisClient && redisClient.isOpen) {
+            await redisClient.setEx(cacheKey, VIDEOS_CACHE_TTL_SECONDS, JSON.stringify(result));
+        }
+    } catch (err) {
+        console.warn('Redis set failed:', err.message || err);
+    }
+
+    console.log(`Returning fresh videos page=${page} perPage=${perPage} videos=${(result.videos||[]).length}`);
+    res.status(200).json(result);
 };
 
 exports.getVideoInfo = async (req, res) => {
