@@ -12,7 +12,11 @@ const pool = new Pool({
     port: process.env.DB_PORT || 5432,
     database: process.env.POSTGRES_DB_NAME || 'climb_db'
 });
-const BACKEND_URL = "http://localhost:8000";
+const backendHost = process.env.BACKEND_URL || 'localhost';
+const backendPort = process.env.BACKEND_PORT || 8000;
+const BACKEND_URL = backendHost.startsWith('http://') || backendHost.startsWith('https://')
+    ? backendHost
+    : `http://${backendHost}:${backendPort}`;
 
 async function initDatabase() {
     try {
