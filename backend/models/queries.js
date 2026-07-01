@@ -18,6 +18,12 @@ const BACKEND_URL = backendHost.startsWith('http://') || backendHost.startsWith(
     ? backendHost
     : `http://${backendHost}:${backendPort}`;
 
+const searchEngineHost = process.env.SEARCH_ENGINE_URL || 'localhost';
+const searchEnginePort = process.env.SEARCH_ENGINE_PORT || 5000;
+const SEARCH_ENGINE_URL = searchEngineHost.startsWith('http://') || searchEngineHost.startsWith('https://')
+    ? searchEngineHost
+    : `http://${searchEngineHost}:${searchEnginePort}`;
+
 async function initDatabase() {
     try {
         const client = await pool.connect();
@@ -42,7 +48,7 @@ pool.on('connect', async (client) => {
 module.exports = {
     searchByText: async (queryText) => {
         try {
-            const res = await axios.post('http://localhost:5000/api/search', {
+            const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
                 prompt: queryText
             });
     
@@ -210,7 +216,7 @@ module.exports = {
         const imagePath = pathRes.rows[0].image_path;
 
         console.log(`Asking python ${imagePath}, ${question}`);
-        const res = await axios.post('http://localhost:5000/api/vqa', {
+        const res = await axios.post(`${SEARCH_ENGINE_URL}/api/vqa`, {
             image_path: imagePath,
             question: question
         });
