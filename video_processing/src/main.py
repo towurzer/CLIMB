@@ -36,7 +36,3 @@ if __name__ == '__main__':
         embeddings_extraction.extract_and_store_embeddings()
     elif start_embedding_worker:
         worker_http_endpoint.start()
-
-
-
-    utils.graceful_exit()

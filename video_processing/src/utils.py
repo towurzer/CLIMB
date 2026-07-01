@@ -1,5 +1,4 @@
 import os
-import matplotlib.pyplot as plt
 
 
 def create_dir(dir_path):
@@ -11,10 +10,3 @@ def create_dir(dir_path):
 
 def has_flag(argv, flags):
     return any(flag in argv for flag in flags)
-
-def graceful_exit():
-    """Wait for all pots to be closed before exiting"""
-    while plt.get_fignums():
-        plt.pause(0.1)
-
-    exit(0)
