@@ -12,7 +12,7 @@ cleanup() {
         fi
     done
     podman stop climb_caching 2>/dev/null
-    podman stop climb_db 2>/dev/null
+    podman stop climb 2>/dev/null
     echo "All background processes stopped."
     exit 0
 }
@@ -67,7 +67,7 @@ run_in_new_terminal() {
 # Start Podman Containers
 echo "Starting Podman containers..."
 podman start climb_caching 2>/dev/null || echo "Notice: 'climb_caching' container not found or already running."
-podman start climb_db 2>/dev/null || echo "Notice: 'climb_db' container not found or already running."
+podman start climb 2>/dev/null || echo "Notice: 'climb_db' container not found or already running."
 
 # Wait briefly for them to spin up
 sleep 1
