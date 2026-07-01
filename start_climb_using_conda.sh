@@ -3,6 +3,7 @@
 # 1. Start Podman DB Container
 echo "Starting Database Container..."
 podman start climb
+podman start climb_caching
 
 # 2. Kill old session if it still exists in the background
 tmux kill-session -t vbs 2>/dev/null
