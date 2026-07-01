@@ -15,36 +15,66 @@ segments.
 ### Run CLIMB for the first time
 
 In order to run CLIMB, you will need to make sure that the following things are true:
-- You will need to store all the Videos in `dataset/web_ready/`
-- There will need to be all the keyframes in `dataset/keyframes/` with a naming scheme of `<video_id>_shot_<shot_num>_kf_<shot_num>.jpg`
-- (To see how to do extract the keyframes see the "Keyframe extraction" section under  "Getting Started - Developer")
-- make sure there is a Database Dump with the embeddings stored under `/dataset/climb_db.dump` 
-- (If you don't have a db-dump you will need to embed everything yourself, for that follow the "Getting Started - Developer" Section)
-- verify that there is a `.env` file in the root directory having all the necessary Parameters (listed in Section "Environment Variables")
 
+- You will need to store all the Videos in `dataset/web_ready/`
+- There will need to be all the keyframes in `dataset/keyframes/` with a naming scheme of
+  `<video_id>_shot_<shot_num>_kf_<shot_num>.jpg`
+- (To see how to do extract the keyframes see the "Keyframe extraction" section under  "Getting Started - Developer")
+- make sure there is a Database Dump with the embeddings stored under `/dataset/climb_db.dump`
+- (If you don't have a db-dump you will need to embed everything yourself, for that follow the "Getting Started -
+  Developer" Section)
+- verify that there is a `.env` file in the root directory having all the necessary Parameters (listed in Section "
+  Environment Variables")
 
 If all that is done, you can run `setup_climb.sh` (found in the root directory)
+
 ```bash:
 ./setup_climb.sh
 ```
 
 Once you are set up, simply run `start_climb.sh` (also found in the root directory)
+
 ```bash:
 ./start_climb.sh
 ```
 
 ### Restart CLIMB
+
 If you already setup climb you can always restart it using the shell scripts
+
 ```bash:
 ./start_climb.sh
 ```
+
 If we don't support your terminal emulator, and you don't want to have all processes running in the same one, you can
+
 ```bash:
 ./start_climb_using_conda.sh
 ```
+
 but for that you will need to use conda, otherwise you are fine with plain python.
 
 ## Environment Variables
+
+In order for CLIMB to work correctly you will need to create a `.env` file in the root directory.
+
+And example file is provided here (please change the password):
+
+```text:
+POSTGRES_DB_NAME=CLIMB_DB
+POSTGRES_PASSWORD=password
+SEARCH_ENGINE_URL=localhost
+SEARCH_ENGINE_PORT=5000
+REDIS_URL=redis://localhost:6379
+VIDEOS_CACHE_TTL_SECONDS=30
+DB_PORT=5432
+DB_HOST=localhost
+BACKEND_URL=localhost
+BACKEND_PORT=8000
+FRONTEND_PORT=3000
+ALLOWED_ORIGIN_REGEX=^https?:\/\/(?:[a-zA-Z0-9-]+\.)*q1studios\.at(?::\d+)?$
+```
+
 ---
 
 ## Getting Started - Developer
@@ -347,6 +377,3 @@ one included, browser based wise I like to use
 "https://editor.swagger.io/", but thats completely up to you
 
 TODO: Explain how to use frontend.
-TODO: example .env
-
-
