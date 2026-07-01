@@ -279,7 +279,7 @@ function App() {
       {/* for the top top bar */}
       <header className="app-header">
         <div className="app-header-left">
-          <h1>Video Retrieval System - Wurzer, Eisner, Hraničková </h1>
+          <h1>CLIMB - Wurzer, Eisner, Hraničková </h1>
           <TaskTimer />
         </div>
 

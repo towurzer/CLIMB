@@ -54,6 +54,42 @@ If we don't support your terminal emulator, and you don't want to have all proce
 
 but for that you will need to use conda, otherwise you are fine with plain python.
 
+
+## How To use CLIMB
+Using CLIMB is as simple as climbing a ladder ;)
+
+When opening up the climb website, you will see a pretty empty screen. Don't be scared it's all how it's supposed to be:
+
+<img src="readme_images/bootup.png" alt="bootup.png" width="500"/>
+
+If you are in a competition I can recommend 2 things:
+- sabotage your opponents
+- connect to DRES  in order to be able to submit frames to the server.
+In order to connect to dres, fill out the login field in the header.
+
+If you don't want to search for something specific, but want to just browse through all the videos select the browsing tab on the top right.
+We will dynamically load more videos on scrolling and cache the Videos loaded for faster retrieval.
+
+<img src="readme_images/browsing.png" alt="browsing.png" width="500"/>
+
+If you click on a video you can see all the scenes. If you click one it will open up in the right bar.
+
+<img src="readme_images/select_video.png" alt="select_video.png" width="500"/>
+
+Under the main video screen you cann see all scenes to scroll through and a large submit to DRES button if you want to submit the current scene.
+additionally there is an "ask VQA" field where you can ask the backend easy questions like the color of the protagonists shirt.
+
+Going back to the search tab, you can search for video scenes including specific content.  
+
+<img src="readme_images/search.png" alt="search.png" width="500"/>
+
+Under the "submit to DRES" button, you can find a "find similar" button which will instead of asking the backend for 
+scenes including your queries will search for scenes similar to the one you clicked earlier.
+
+<img src="readme_images/similarity_search.png" alt="similarity_search.png" width="500"/>
+
+Well and that's it. 
+
 ## Environment Variables
 
 In order for CLIMB to work correctly you will need to create a `.env` file in the root directory.
@@ -83,7 +119,9 @@ ALLOWED_ORIGIN_REGEX=^https?:\/\/(?:[a-zA-Z0-9-]+\.)*q1studios\.at(?::\d+)?$
 
 ```text
 .env                        # Environment variables and secrets
-start_vbs.sh                # Launch helper script
+start_climb.sh                # Launch ClIMB
+setup_climb.sh                # Setup CLIMB
+start_climb_using_conda.sh    # Launch CLIMB using Conda
 backend/
     openapi.yaml            # API specification
     package.json            # Backend dependencies
@@ -133,6 +171,8 @@ video_processing/
         vqa_engine.py          # VQA inference engine
         worker_http_endpoint.py # Search Engine HTTP interface 
     logs/                     # Log files (local only)
+   
+readme_images/              # Images displayed in readme
 ```
 
 ### 1. Video Processing
@@ -374,6 +414,6 @@ If you are interested in creating your own frontend or are just interested in ge
 Specifications of our backend under `/backend/openapi.yaml`.
 In order to properly view it I would recommend using an openapi viewer of your choice. JetBrains products typically have
 one included, browser based wise I like to use
-"https://editor.swagger.io/", but thats completely up to you
+"https://editor.swagger.io/", but that's completely up to you
 
-TODO: Explain how to use frontend.
+<div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
