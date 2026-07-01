@@ -54,7 +54,7 @@ If we don't support your terminal emulator, and you don't want to have all proce
 
 but for that you will need to use conda, otherwise you are fine with plain python.
 
-To setup the exact same conda environment used in this shell script, move to the root and run
+To setup the exact same conda environment used in this shell script, move to the video_processing folder and run
 ```bash:
 conda env create -n climb -f conda_environment.yml
 ```
@@ -205,7 +205,7 @@ pip install -r requirements.txt
 
 to install neccessary requirements.
 
-In case you prefer using a conda environment, cd to the root of this project and run
+In case you prefer using a conda environment run
 ```bash:
 conda env create -n climb -f conda_environment.yml
 ```
