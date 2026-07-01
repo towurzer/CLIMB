@@ -10,7 +10,11 @@ import TaskTimer from "./components/TaskTimer";
 import SubmissionLog from "./components/SubmissionLog";
 import "./App.css";
 
-const API_URL = "http://localhost:8000";
+const backendHost = import.meta.env.BACKEND_URL || "localhost";
+const backendPort = import.meta.env.BACKEND_PORT || "8000";
+const API_URL = backendHost.startsWith("http://") || backendHost.startsWith("https://")
+  ? backendHost
+  : `http://${backendHost}:${backendPort}`;
 
 function App() {
   // memory variables - calling set... and react changes everything based on the other variable
