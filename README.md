@@ -4,7 +4,7 @@ Content Localization and Intelligent Multimedia Retrieval
 
 ---
 
-A content-based video retrieval system designed for searching short video segments, focusing on sKnown-Item Search (KIS)
+A content-based video retrieval system designed for searching short video segments, focusing on Known-Item Search (KIS)
 and Visual Question Answering (VQA) tasks inspired by the Video Browser Showdown (VBS).
 The system provides an intuitive graphical user interface for interactive video exploration and integrates with the
 Distributed Retrieval Evaluation Server (DRES) through its REST API, enabling seamless submission of retrieved video
@@ -14,16 +14,16 @@ segments.
 
 ### Run CLIMB for the first time
 
-In order to run CLIMB, you will need to make sure that the following things are true:
+In order to run CLIMB, you will need to make sure that the following things are fulfilled:
 
 - You will need to store all the Videos in `dataset/web_ready/`
 - There will need to be all the keyframes in `dataset/keyframes/` with a naming scheme of
   `<video_id>_shot_<shot_num>_kf_<shot_num>.jpg`
 - (To see how to do extract the keyframes see the "Keyframe extraction" section under  "Getting Started - Developer")
-- make sure there is a Database Dump with the embeddings stored under `/dataset/climb_db.dump`
+- Make sure there is a Database Dump with the embeddings stored under `/dataset/climb_db.dump`
 - (If you don't have a db-dump you will need to embed everything yourself, for that follow the "Getting Started -
   Developer" Section)
-- verify that there is a `.env` file in the root directory having all the necessary Parameters (listed in Section "
+- Verify that there is a `.env` file in the root directory having all the necessary Parameters (listed in Section "
   Environment Variables")
 
 If all that is done, you can run `setup_climb.sh` (found in the root directory)
@@ -54,6 +54,11 @@ If we don't support your terminal emulator, and you don't want to have all proce
 
 but for that you will need to use conda, otherwise you are fine with plain python.
 
+To setup the exact same conda environment used in this shell script, move to the root and run
+```bash:
+conda env create -n climb -f conda_environment.yml
+```
+
 ## How To use CLIMB
 
 Using CLIMB is as simple as climbing a ladder ;)
@@ -78,9 +83,9 @@ If you click on a video you can see all the scenes. If you click one it will ope
 
 <img src="readme_images/select_video.png" alt="select_video.png" width="500"/>
 
-Under the main video screen you cann see all scenes to scroll through and a large submit to DRES button if you want to
+Under the main video screen you cann see all keyframes to scroll through and a large submit to DRES button if you want to
 submit the current scene.
-additionally there is an "ask VQA" field where you can ask the backend easy questions like the color of the protagonists
+Additionally there is an "ask VQA" field where you can ask the backend easy questions like the color of the protagonists
 shirt.
 
 Going back to the search tab, you can search for video scenes including specific content.
@@ -200,6 +205,11 @@ pip install -r requirements.txt
 
 to install neccessary requirements.
 
+In case you prefer using a conda environment, cd to the root of this project and run
+```bash:
+conda env create -n climb -f conda_environment.yml
+```
+
 All steps can be done by running ```main.py``` with the respective options. In order to have the correct relative paths
 please run
 
@@ -252,7 +262,7 @@ To download FFmpeg visit: https://ffmpeg.org/download.html
 #### 1.3 Keyframe extraction
 
 Next you will need to extract the keyframes from the dataset. Additionally you will need to save the frame rate of every
-video to later be able to build the Milisecond payload for the dres server. For that we will need to create simple
+video to later be able to build the millisecond payload for the dres server. For that we will need to create simple
 postgres-database.
 Because every sane people hates it when postgres runs locally on your machine we will spin up a podman container for
 that. The parameters
@@ -301,7 +311,7 @@ why you would do that but still) you can run
 python main.py --extractKeyframesNoDatabase
 ```
 
-to still extract the keyframes, without updating the Database. (Please not you will still need an active database
+to still extract the keyframes, without updating the Database. (Please note you will still need an active database
 connection to do so)
 
 #### 1.4 Video Embedding
@@ -419,6 +429,6 @@ If you are interested in creating your own frontend or are just interested in ge
 Specifications of our backend under `/backend/openapi.yaml`.
 In order to properly view it I would recommend using an openapi viewer of your choice. JetBrains products typically have
 one included, browser based wise I like to use
-"https://editor.swagger.io/", but that's completely up to you
+"https://editor.swagger.io/", but that's completely up to you.
 
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
