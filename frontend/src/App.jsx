@@ -186,8 +186,10 @@ function App() {
       // 25 is just a backup becuase it is most common
       fps: shot.fps || prev?.fps || 25,
       // we need to recalculate, because DRES is usinf ms not frames
-      start_time_ms: shot.start_frame ? Math.round((shot.start_frame / (shot.fps || prev?.fps || 25)) * 1000) : 0,
-      end_time_ms: shot.end_frame ? Math.round((shot.end_frame / (shot.fps || prev?.fps || 25)) * 1000) : 0,
+      // use middle frame to set start and end time since start frame and end frame are the starting and end points of the whole scen
+      // we only want the starting frame of the shot currently selected by the user (called middle frame due to legacy code)
+      start_time_ms: shot.middle_frame ? Math.round((shot.middle_frame / (shot.fps || prev?.fps || 25)) * 1000) : 0,
+      end_time_ms: shot.middle_frame ? Math.round((shot.middle_frame / (shot.fps || prev?.fps || 25)) * 1000) : 0,
       thumbnail_url: shot.thumbnail_url,
     }));
   }, []);
