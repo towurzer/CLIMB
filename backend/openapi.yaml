@@ -615,6 +615,10 @@
           "text_answer": {
             "type": "string"
           },
+          "question": {
+            "type": "string",
+            "nullable": true
+          },
           "video_id": {
             "type": "string",
             "nullable": true

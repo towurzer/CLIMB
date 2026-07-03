@@ -110,17 +110,22 @@ exports.submitToDres = async (req, res) => {
 };
 
 exports.submitVqaToDres = async (req, res) => {
-    const { text_answer, video_id, start_time_ms, end_time_ms } = req.body;
+    const { text_answer, question, video_id, start_time_ms, end_time_ms } = req.body;
+    const textToSubmit = (text_answer || question || "").trim();
 
     if (!dresState.connected || !dresState.evaluationId) {
         return res.status(401).json({ error: "Not connected to DRES. Please login first." });
+    }
+
+    if (!textToSubmit) {
+        return res.status(400).json({ error: "VQA text is required for submission." });
     }
 
     try {
         const payload = {
             answerSets: [{
                 answers: [{
-                    text: text_answer,
+                    text: textToSubmit,
                     mediaItemName: video_id || null,
                     // mediaItemCollectionName: video_id ? "IVADL" : null,
                     start: start_time_ms || null,
@@ -131,13 +136,15 @@ exports.submitVqaToDres = async (req, res) => {
 
         const submitUrl = `${dresState.dres_url}/api/v2/submit/${dresState.evaluationId}`;
 
+        console.log("DRES VQA submit payload:", JSON.stringify({ url: submitUrl, payload }, null, 2));
+
         const response = await axios.post(submitUrl, payload, {
             params: { session: dresState.sessionId }
         });
 
         res.status(200).json({
             status: "success",
-            message: `VQA Answer '${text_answer}' submitted successfully!`,
+            message: `VQA Answer '${textToSubmit}' submitted successfully!`,
             dres_response: response.data
         });
 
