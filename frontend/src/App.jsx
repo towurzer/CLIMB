@@ -34,6 +34,7 @@ function App() {
   const [dresLoading, setDresLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState([]);
   const [submissions, setSubmissions] = useState([]);
+  const [excludedVideos, setExcludedVideos] = useState([]);
 
   // get current time string
   const timeNow = () => new Date().toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -141,6 +142,33 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  // Exclude video from search
+  const handleExcludeVideo = useCallback(async (result) => {
+    // Add video to excluded list
+    const updatedExcluded = [...new Set([...excludedVideos, result.video_id])];
+    setExcludedVideos(updatedExcluded);
+    
+    // Build exclude string
+    const excludeStr = updatedExcluded.join(", ");
+    
+    // Update query with exclude parameter
+    const baseQuery = query.split(" --exclude:")[0]; // Remove any existing exclude param
+    const updatedQuery = `${baseQuery} --exclude: ${excludeStr}`;
+    
+    // Re-search with updated query
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/climb/search?q=${encodeURIComponent(updatedQuery)}`);
+      const data = await res.json();
+      setQuery(updatedQuery);
+      setResults(data.results || []);
+    } catch (err) {
+      console.error("Search with exclude failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [query, excludedVideos]);
 
   const handleDresLogin = useCallback(async () => {
     if (!dresUsername.trim() || !dresPassword.trim()) {
@@ -347,6 +375,7 @@ function App() {
                 selectedResult={selectedResult}
                 onSelect={handleSelect}
                 onFindSimilar={handleFindSimilar}
+                onExcludeVideo={handleExcludeVideo}
               />
             </>
           ) :
@@ -390,10 +419,14 @@ function App() {
                     </button>
                   </div>
                 )}
-                {/* same as the arriw before, just finging similar */}
-                <button className="similar-btn" onClick={() => handleFindSimilar(selectedResult)}>
-                  Find similar
-                </button>
+                <div className="action-button-row">
+                  <button className="exclude-btn" onClick={() => handleExcludeVideo(selectedResult)}>
+                    Exclude video from search
+                  </button>
+                  <button className="similar-btn" onClick={() => handleFindSimilar(selectedResult)}>
+                    Find similar
+                  </button>
+                </div>
 
                 {submitMessage && (
                   <div className={`submit-result-box ${submitStatus || ""}`}>

@@ -46,10 +46,14 @@ pool.on('connect', async (client) => {
 });
 
 module.exports = {
-    searchByText: async (queryText) => {
+    searchByText: async (queryText, exclude = []) => {
         try {
+            // Remove exclude parameter from the prompt before sending to search engine
+            const cleanPrompt = queryText.split(" --exclude:")[0].trim();
+            
             const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
-                prompt: queryText
+                prompt: cleanPrompt,
+                exclude: exclude
             });
     
             return res.data.results.map(shot => ({

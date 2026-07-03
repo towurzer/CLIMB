@@ -8,7 +8,16 @@ exports.searchVideos = async (req, res) => {
         }
 
         console.log(`Searching for ${q}`)
-        const results = await queries.searchByText(q);
+        
+        // Parse exclude parameter from query
+        const excludeMatch = q.match(/--exclude:\s*([^]*?)(?:\s*$)/);
+        let exclude = [];
+        if (excludeMatch) {
+            // Extract video IDs from exclude parameter
+            exclude = excludeMatch[1].split(',').map(id => id.trim()).filter(id => id);
+        }
+        
+        const results = await queries.searchByText(q, exclude);
 
         res.status(200).json({
             query: q,

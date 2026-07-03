@@ -36,6 +36,7 @@ def startup_event():
 
 class SearchRequest(BaseModel):
     prompt: str
+    exclude: list = []
 
 
 class VQARequest(BaseModel):
@@ -48,7 +49,7 @@ def do_search(request: SearchRequest):
     if not search_engine:
         raise HTTPException(status_code=500, detail="Search engine not initialized")
 
-    raw_results = search_engine.search(request.prompt)
+    raw_results = search_engine.search(request.prompt, request.exclude)
     enriched = search_engine.enrich_results(raw_results)
 
     return {"results": enriched}

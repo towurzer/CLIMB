@@ -25,7 +25,7 @@
             "name": "q",
             "in": "query",
             "required": true,
-            "description": "Text query for search",
+            "description": "Text query for search. To exclude specific videos from results, append ' --exclude: videoId1, videoId2, ...' to the query. Example: 'person running --exclude: V3C1_001, V3C1_002'",
             "schema": {
               "type": "string"
             }

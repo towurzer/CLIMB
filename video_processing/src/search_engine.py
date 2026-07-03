@@ -78,16 +78,22 @@ class SearchEngine:
         # Flatten it to a clean 1-D list of exactly 1024 numbers
         return text_features.cpu().numpy().flatten().tolist()
 
-    def search(self,prompt: str) -> list:
+    def search(self, prompt: str, exclude: list = []) -> list:
         """
         Takes a text prompt, converts it to a vector, and performs a cosine similarity search in the database.
-        Returns a list of shots with their metadata and similarity scores.  
+        Returns a list of shots with their metadata and similarity scores.
+        Optionally excludes specified video IDs from results.
         """
         text_vector = self.get_text_vector(prompt)
         
         with self.db_conn.cursor() as cur:
             try:
-                cur.execute(DBQueries.perform_cosine_similarity_query, (text_vector, self.config.SEARCH_TOP_K))
+                if exclude and len(exclude) > 0:
+                    # Use the exclude query if there are videos to exclude
+                    cur.execute(DBQueries.perform_cosine_similarity_query_with_exclude, (text_vector, exclude, self.config.SEARCH_TOP_K))
+                else:
+                    # Use the standard query if no exclusions
+                    cur.execute(DBQueries.perform_cosine_similarity_query, (text_vector, self.config.SEARCH_TOP_K))
                 results = cur.fetchall()
                 return results
 

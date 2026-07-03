@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-function ResultsGrid({ results, selectedResult, onSelect, onFindSimilar }) {
+function ResultsGrid({ results, selectedResult, onSelect, onFindSimilar, onExcludeVideo }) {
   const selectedRef = useRef(null);
 
   // Scroll selected card into view when it changes
@@ -52,6 +52,18 @@ function ResultsGrid({ results, selectedResult, onSelect, onFindSimilar }) {
                   }}
                 >
                   ⟲
+                </button>
+              )}
+              {onExcludeVideo && (
+                <button
+                  className="exclude-icon"
+                  title="Exclude video from search"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onExcludeVideo(result);
+                  }}
+                >
+                  ✕
                 </button>
               )}
             </div>
