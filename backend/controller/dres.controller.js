@@ -122,7 +122,7 @@ exports.submitVqaToDres = async (req, res) => {
                 answers: [{
                     text: text_answer,
                     mediaItemName: video_id || null,
-                    mediaItemCollectionName: video_id ? "IVADL" : null,
+                    // mediaItemCollectionName: video_id ? "IVADL" : null,
                     start: start_time_ms || null,
                     end: end_time_ms || null
                 }]
