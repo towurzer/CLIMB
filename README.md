@@ -1,6 +1,10 @@
 # CLIMB
 
-Content Localization and Intelligent Multimedia Retrieval
+A contest winning Content Localization and Intelligent Multimedia Retrieval system.
+
+<img src="readme_images/competition_scores.png" alt="competition_scores" width="500"/>
+
+<i>Figure 1: Competition scores. We are Group 10.</i>
 
 ---
 
