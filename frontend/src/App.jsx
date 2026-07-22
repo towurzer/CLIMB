@@ -1,5 +1,5 @@
 // importing stuff - useState etc from react and components
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
@@ -27,6 +27,12 @@ function App() {
   const [submitMessage, setSubmitMessage] = useState("");
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [dresUrl, setDresUrl] = useState("https://vbs.videobrowsing.org");
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchPerPage] = useState(24);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
+  const resultsPanelRef = useRef(null);
+  const searchSentinelRef = useRef(null);
   const [dresUsername, setDresUsername] = useState("");
   const [dresPassword, setDresPassword] = useState("");
   const [dresConnected, setDresConnected] = useState(false);
@@ -93,36 +99,41 @@ function App() {
   }, [results, selectedResult]);
 
   // searchiing - asynchornous - waiting for the response from the server
+  const fetchSearchPage = useCallback(async (searchQuery, page = 1, append = false) => {
+    try {
+      const res = await fetch(
+        `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}`
+      );
+      const data = await res.json();
+      const pageResults = data.results || [];
+      setResults((prev) => (append ? [...prev, ...pageResults] : pageResults));
+      setSearchPage(page);
+      setSearchHasMore(Boolean(data.has_more));
+      return pageResults;
+    } catch (err) {
+      console.error("Search failed:", err);
+      return [];
+    }
+  }, [searchPerPage]);
+
   const handleSearch = useCallback(async (searchQuery) => {
-    // trimming empty spaces - it just that, returning nothing
     if (!searchQuery.trim()) return;
-    // reset of everything before calling
     setMode("search");
     setQuery(searchQuery);
     setLoading(true);
     setSelectedResult(null);
     setSubmitStatus(null);
     setConfirmSubmit(false);
-    // adding this into our history - prev is our array of previous, removing duplicit stuff, max 10 
+    setSearchHasMore(false);
+    setSearchPage(1);
     setSearchHistory((prev) => {
       const filtered = prev.filter((q) => q !== searchQuery);
       return [searchQuery, ...filtered].slice(0, 10);
     });
-    // try for preventing errors - sending request to the backend and waiting for a response
-    try {
-      const res = await fetch(`${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}`);
-      // answer again in javascript object
-      const data = await res.json();
-      console.log("first result:", data.results[0]);
-      // displaying results
-      setResults(data.results || []);
-    } catch (err) {
-      console.error("Search failed:", err);
-    } finally {
-      // always end searching
-      setLoading(false);
-    }
-  }, []);
+
+    await fetchSearchPage(searchQuery, 1, false);
+    setLoading(false);
+  }, [fetchSearchPage]);
 
   // Find similar
   const handleFindSimilar = useCallback(async (result) => {
@@ -132,10 +143,11 @@ function App() {
     setSelectedResult(null);
     setConfirmSubmit(false);
     try {
-      // getting it from the backend 
       const res = await fetch(`${API_URL}/climb/videos/${result.video_id}/${result.shot_id}/similar`);
       const data = await res.json();
       setResults(data.results || []);
+      setSearchPage(1);
+      setSearchHasMore(false);
     } catch (err) {
       console.error("Similar search failed:", err);
     } finally {
@@ -145,30 +157,26 @@ function App() {
 
   // Exclude video from search
   const handleExcludeVideo = useCallback(async (result) => {
-    // Add video to excluded list
     const updatedExcluded = [...new Set([...excludedVideos, result.video_id])];
     setExcludedVideos(updatedExcluded);
-    
-    // Build exclude string
     const excludeStr = updatedExcluded.join(", ");
-    
-    // Update query with exclude parameter
-    const baseQuery = query.split(" --exclude:")[0]; // Remove any existing exclude param
+    const baseQuery = query.split(" --exclude:")[0];
     const updatedQuery = `${baseQuery} --exclude: ${excludeStr}`;
-    
-    // Re-search with updated query
+
+    setQuery(updatedQuery);
     setLoading(true);
+    setSelectedResult(null);
+    setConfirmSubmit(false);
+    setSearchHasMore(false);
+    setSearchPage(1);
     try {
-      const res = await fetch(`${API_URL}/climb/search?q=${encodeURIComponent(updatedQuery)}`);
-      const data = await res.json();
-      setQuery(updatedQuery);
-      setResults(data.results || []);
+      await fetchSearchPage(updatedQuery, 1, false);
     } catch (err) {
       console.error("Search with exclude failed:", err);
     } finally {
       setLoading(false);
     }
-  }, [query, excludedVideos]);
+  }, [query, excludedVideos, fetchSearchPage]);
 
   const handleDresLogin = useCallback(async () => {
     if (!dresUsername.trim() || !dresPassword.trim()) {
@@ -299,6 +307,37 @@ function App() {
     setSubmitMessage("");
   }, []);
 
+  const handleLoadMoreSearch = useCallback(async () => {
+    if (!searchHasMore || loading || searchLoadingMore) return;
+    setSearchLoadingMore(true);
+    const nextPage = searchPage + 1;
+    try {
+      await fetchSearchPage(query, nextPage, true);
+    } catch (err) {
+      console.error("Load more search results failed:", err);
+    } finally {
+      setSearchLoadingMore(false);
+    }
+  }, [searchHasMore, loading, searchLoadingMore, searchPage, query, fetchSearchPage]);
+
+  useEffect(() => {
+    if (!searchSentinelRef.current || !resultsPanelRef.current || !searchHasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && !loading && !searchLoadingMore) {
+            handleLoadMoreSearch();
+          }
+        });
+      },
+      { root: resultsPanelRef.current, rootMargin: "300px", threshold: 0.1 }
+    );
+
+    const current = searchSentinelRef.current;
+    observer.observe(current);
+    return () => observer.disconnect();
+  }, [handleLoadMoreSearch, loading, searchLoadingMore, searchHasMore]);
+
   const handleBrowseSelect = useCallback((result) => {
     setSelectedResult(result);
     setConfirmSubmit(false);
@@ -357,19 +396,17 @@ function App() {
       )}
 
       <div className="main-content">
-        <div className="results-panel">
+        <div className="results-panel" ref={resultsPanelRef}>
           {/* difference between search and browse mode */}
           {mode === "search" ? (
             <>
-              {/* if it is loading, we display searching, if not and we hade results, we display results, if nothinf, display nothing */}
               {loading && <div className="loading">Searching...</div>}
               {!loading && results.length > 0 && (
                 <div className="results-info">
-                  {results.length} results for "{query}"
+                  {results.length}{searchHasMore ? "+" : ""} results for "{query}"
                   <span className="shortcuts-hint">← → navigate · Esc deselect · Ctrl+K search</span>
                 </div>
               )}
-              {/* selecting results, if we clicked on smth, we handle it, if we click on the arrow we find similar */}
               <ResultsGrid
                 results={results}
                 selectedResult={selectedResult}
@@ -377,6 +414,8 @@ function App() {
                 onFindSimilar={handleFindSimilar}
                 onExcludeVideo={handleExcludeVideo}
               />
+              <div ref={searchSentinelRef} className="search-sentinel" />
+              {searchLoadingMore && <div className="loading">Loading more results...</div>}
             </>
           ) :
             (

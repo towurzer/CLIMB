@@ -436,3 +436,11 @@ one included, browser based wise I like to use
 "https://editor.swagger.io/", but that's completely up to you.
 
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
+  
+TODO: add button opening keyframe browser in sideview
+TODO: add submit all scenes with apples
+TODO: add start end time slider to check submission
+TODO: add submit only text vqa
+TODO: add text field to connect to specific dres competition
+TODO: remove 5min timer
+TODO: fix keyframe extraction

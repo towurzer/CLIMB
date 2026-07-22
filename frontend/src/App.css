@@ -323,6 +323,17 @@ body {
   border-color: #5b8def;
 }
 
+.search-sentinel {
+  height: 1px;
+}
+
+.loading-more {
+  padding: 14px 0;
+  text-align: center;
+  color: #888;
+  font-size: 13px;
+}
+
 .thumbnail-wrapper {
   position: relative;
   aspect-ratio: 16 / 9;
