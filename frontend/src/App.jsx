@@ -6,7 +6,6 @@ import VideoPlayer from "./components/VideoPlayer";
 import ShotBrowser from "./components/ShotBrowser";
 import VideoBrowser from "./components/VideoBrowser";
 import VqaAnswer from "./components/VqaAnswer";
-import TaskTimer from "./components/TaskTimer";
 import SubmissionLog from "./components/SubmissionLog";
 import "./App.css";
 
@@ -353,7 +352,6 @@ function App() {
       <header className="app-header">
         <div className="app-header-left">
           <h1>CLIMB - Wurzer, Eisner, Hraničková </h1>
-          <TaskTimer />
         </div>
 
         <div className="app-header-right">

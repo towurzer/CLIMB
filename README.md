@@ -166,7 +166,6 @@ frontend/
             ShotBrowser.jsx # Filmstrip navigation
             VideoBrowser.jsx# Browse all videos
             VqaAnswer.jsx   # VQA text answer input
-            TaskTimer.jsx   # 5-minute countdown
             SubmissionLog.jsx # Submission history log
 
 video_processing/
@@ -442,5 +441,4 @@ TODO: add submit all scenes with apples
 TODO: add start end time slider to check submission
 TODO: add submit only text vqa
 TODO: add text field to connect to specific dres competition
-TODO: remove 5min timer
 TODO: fix keyframe extraction
