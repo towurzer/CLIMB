@@ -43,6 +43,7 @@ function App() {
     const [searchHistory, setSearchHistory] = useState([]);
     const [submissions, setSubmissions] = useState([]);
     const [excludedVideos, setExcludedVideos] = useState([]);
+    const [similarSource, setSimilarSource] = useState(null);
 
     // get current time string
     const timeNow = () => new Date().toLocaleTimeString("cs-CZ", {
@@ -122,6 +123,31 @@ function App() {
         }
     }, [searchPerPage]);
 
+    const fetchSimilarPage = useCallback(async (videoId, shotId, excluded = [], page = 1, append = false) => {
+        const params = new URLSearchParams({page, per_page: searchPerPage});
+        if (excluded.length) params.set("exclude", excluded.join(","));
+        try {
+            const res = await fetch(
+                `${API_URL}/climb/videos/${videoId}/${shotId}/similar?${params}`
+            );
+            const data = await res.json();
+            const pageResults = data.results || [];
+            setResults((prev) => (append ? [...prev, ...pageResults] : pageResults));
+            setSearchPage(page);
+            setSearchHasMore(Boolean(data.has_more));
+            return pageResults;
+        } catch (err) {
+            console.error("Similar search failed:", err);
+            return [];
+        }
+    }, [searchPerPage]);
+
+    // "Similar to X / shot Y" plus any active exclusions - shown in the results header
+    const similarLabel = (videoId, shotId, excluded = []) => {
+        const base = `Similar to ${videoId} / shot ${shotId}`;
+        return excluded.length ? `${base} --exclude: ${excluded.join(", ")}` : base;
+    };
+
     const handleSearch = useCallback(async (searchQuery) => {
         if (!searchQuery.trim()) return;
         setMode("search");
@@ -133,6 +159,7 @@ function App() {
         setSearchHasMore(false);
         setSearchPage(1);
         setExcludedVideos([]);
+        setSimilarSource(null);
         setSearchHistory((prev) => {
             const filtered = prev.filter((q) => q !== searchQuery);
             return [searchQuery, ...filtered].slice(0, 10);
@@ -142,25 +169,20 @@ function App() {
         setLoading(false);
     }, [fetchSearchPage]);
 
-    // Find similar
+    // Find similar refines what we are already looking at, so exclusions carry over
     const handleFindSimilar = useCallback(async (result) => {
         setLoading(true);
         setMode("search");
-        setQuery(`Similar to ${result.video_id} / shot ${result.shot_id}`);
+        setQuery(similarLabel(result.video_id, result.shot_id, excludedVideos));
+        setSimilarSource({video_id: result.video_id, shot_id: result.shot_id});
         setSelectedResult(null);
         setConfirmSubmit(false);
         try {
-            const res = await fetch(`${API_URL}/climb/videos/${result.video_id}/${result.shot_id}/similar`);
-            const data = await res.json();
-            setResults(data.results || []);
-            setSearchPage(1);
-            setSearchHasMore(false);
-        } catch (err) {
-            console.error("Similar search failed:", err);
+            await fetchSimilarPage(result.video_id, result.shot_id, excludedVideos);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [excludedVideos, fetchSimilarPage]);
 
     // Exclude video from search
     const handleExcludeVideo = useCallback(async (result) => {
@@ -170,8 +192,12 @@ function App() {
 
         const updatedExcluded = [...new Set([...excludedVideos, result.video_id])];
         setExcludedVideos(updatedExcluded);
-        const excludeStr = updatedExcluded.join(", ");
-        const updatedQuery = `${baseQuery} --exclude: ${excludeStr}`;
+
+        // re-run whichever kind of search produced the current results (similarity search / text search)
+        const isSimilar = Boolean(similarSource);
+        const updatedQuery = isSimilar
+            ? similarLabel(similarSource.video_id, similarSource.shot_id, updatedExcluded)
+            : `${baseQuery} --exclude: ${updatedExcluded.join(", ")}`;
 
         // can be triggered from the browse tab, so jump back to the results we just refreshed
         setMode("search");
@@ -182,13 +208,17 @@ function App() {
         setSearchHasMore(false);
         setSearchPage(1);
         try {
-            await fetchSearchPage(updatedQuery, 1, false);
+            if (isSimilar) {
+                await fetchSimilarPage(similarSource.video_id, similarSource.shot_id, updatedExcluded);
+            } else {
+                await fetchSearchPage(updatedQuery, 1, false);
+            }
         } catch (err) {
             console.error("Search with exclude failed:", err);
         } finally {
             setLoading(false);
         }
-    }, [query, excludedVideos, fetchSearchPage]);
+    }, [query, excludedVideos, similarSource, fetchSearchPage, fetchSimilarPage]);
 
     const handleDresLogin = useCallback(async () => {
         if (!dresUsername.trim() || !dresPassword.trim()) {
@@ -343,13 +373,18 @@ function App() {
         setSearchLoadingMore(true);
         const nextPage = searchPage + 1;
         try {
-            await fetchSearchPage(query, nextPage, true);
+            // ask for next page, endpoint depends on search type
+            if (similarSource) {
+                await fetchSimilarPage(similarSource.video_id, similarSource.shot_id, excludedVideos, nextPage, true);
+            } else {
+                await fetchSearchPage(query, nextPage, true);
+            }
         } catch (err) {
             console.error("Load more search results failed:", err);
         } finally {
             setSearchLoadingMore(false);
         }
-    }, [searchHasMore, loading, searchLoadingMore, searchPage, query, fetchSearchPage]);
+    }, [searchHasMore, loading, searchLoadingMore, searchPage, query, similarSource, excludedVideos, fetchSearchPage, fetchSimilarPage]);
 
     useEffect(() => {
         if (!searchSentinel || !resultsPanel || !searchHasMore) return;

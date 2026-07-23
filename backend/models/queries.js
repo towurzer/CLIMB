@@ -193,7 +193,7 @@ module.exports = {
         return {total, shots};
     },
 
-    getSimilarShots: async (videoId, shotId) => {
+    getSimilarShots: async (videoId, shotId, exclude = [], page = 1, perPage = 24) => {
         const getEmbedSql = `SELECT embedding
                              FROM shots
                              WHERE video_id = $1
@@ -205,7 +205,7 @@ module.exports = {
         const targetVectorArray = embedRes.rows[0].embedding;
 
         if (!targetVectorArray) {
-            return [];
+            return {results: [], hasMore: false};
         }
         const formattedVectorString = pgvector.toSql(targetVectorArray);
 
@@ -220,14 +220,20 @@ module.exports = {
             FROM shots s
                      JOIN videos v ON s.video_id = v.video_id
             WHERE s.shot_id != $2
+              AND NOT (s.video_id = ANY ($3::text[]))
               AND s.embedding IS NOT NULL
             ORDER BY s.embedding <=> $1::vector
-                LIMIT 50;
+                LIMIT $4
+            OFFSET $5;
         `;
+        
+        const offset = (page - 1) * perPage;
+        const {rows} = await pool.query(searchSql, [formattedVectorString, shotId, exclude, perPage + 1, offset]);
 
-        const {rows} = await pool.query(searchSql, [formattedVectorString, shotId]);
+        const hasMore = rows.length > perPage;
+        const pageRows = hasMore ? rows.slice(0, perPage) : rows;
 
-        return rows.map(row => ({
+        const results = pageRows.map(row => ({
             video_id: row.video_id,
             shot_id: row.shot_id,
             score: row.score ? parseFloat(row.score.toFixed(4)) : 0,
@@ -238,5 +244,7 @@ module.exports = {
             end_time_ms: Math.floor((row.end_frame / row.fps) * 1000),
             thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
         }));
+
+        return {results, hasMore};
     }
 };

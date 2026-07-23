@@ -85,7 +85,21 @@ exports.getVideoShots = async (req, res) => {
 
 exports.findSimilar = async (req, res) => {
     const {video_id, shot_id} = req.params;
-    console.log(`Searching for similar videos just as ${video_id} and ${shot_id}`)
-    const results = await queries.getSimilarShots(video_id, parseInt(shot_id));
-    res.status(200).json({source_video: video_id, source_shot: parseInt(shot_id), results});
+    const exclude = (req.query.exclude || '').split(',').map(id => id.trim()).filter(id => id);
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const perPage = Math.min(Math.max(parseInt(req.query.per_page || '24', 10), 1), 100);
+
+    console.log(`Searching for similar videos just as ${video_id} and ${shot_id} excluding [${exclude}] page=${page} per_page=${perPage}`)
+    const {results, hasMore} = await queries.getSimilarShots(video_id, parseInt(shot_id), exclude, page, perPage);
+
+    res.status(200).json({
+        source_video: video_id,
+        source_shot: parseInt(shot_id),
+        excluded: exclude,
+        page,
+        per_page: perPage,
+        count: results.length,
+        has_more: hasMore,
+        results
+    });
 };
