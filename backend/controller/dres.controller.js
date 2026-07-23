@@ -14,9 +14,12 @@ let dresState = {
 };
 
 exports.connectDres = async (req, res) => {
-    const { username, password, dres_url } = req.body;
+    const { username, password, dres_url, dres_name } = req.body;
 
     if (dres_url) dresState.dres_url = dres_url;
+
+    // requested evaluation name (frontend defaults to IVADL26)
+    const requestedName = dres_name || "IVADL26";
 
     try {
         console.log(`Connecting to DRES at ${dresState.dres_url}...`);
@@ -36,16 +39,30 @@ exports.connectDres = async (req, res) => {
 
         const evaluations = evalRes.data;
 
-        // get Session
-        const targetEval = evaluations.find(e => e.name === "IVADL2026" || e.id === "IVADL2026");
+        // try to find requested evaluation by name or id
+        const targetEval = evaluations.find(e => e.name === requestedName || e.id === requestedName);
 
         if (targetEval) {
             dresState.evaluationId = targetEval.id;
+            dresState.evaluationName = targetEval.name;
         } else if (evaluations.length > 0) {
+            // default to first available evaluation and inform the client
             dresState.evaluationId = evaluations[0].id;
-            console.log(`IVADL2026 not found. Defaulting to: ${dresState.evaluationId}`);
+            dresState.evaluationName = evaluations[0].name;
+            console.log(`${requestedName} not found. Defaulting to: ${dresState.evaluationName}`);
+            // return with info that we defaulted
+            dresState.connected = true;
+
+            return res.status(200).json({
+                status: "success",
+                evaluation_id: dresState.evaluationId,
+                selected_name: dresState.evaluationName,
+                defaulted: true,
+                message: `Requested evaluation '${requestedName}' not found. Defaulting to first: ${dresState.evaluationName}`
+            });
         } else {
-            throw new Error("No active evaluations found on the DRES server.");
+            dresState.connected = false;
+            return res.status(404).json({ error: "No active evaluations found on the DRES server." });
         }
 
         dresState.connected = true;
@@ -53,13 +70,21 @@ exports.connectDres = async (req, res) => {
         res.status(200).json({
             status: "success",
             evaluation_id: dresState.evaluationId,
+            selected_name: dresState.evaluationName || requestedName,
+            defaulted: false,
             message: `Connected to DRES successfully. Evaluation ID: ${dresState.evaluationId}`
         });
 
     } catch (error) {
-        console.error("DRES Connection Error:", error.response?.data || error.message);
+        // prefer the DRES server response if available
+        const dresErr = error.response?.data;
+        console.error("DRES Connection Error:", dresErr || error.message);
         dresState.connected = false;
-        res.status(500).json({ error: "Failed to connect to DRES.", details: error.message });
+        if (dresErr) {
+            // forward the original DRES response inside our error payload
+            return res.status(500).json({ error: "Failed to connect to DRES.", details: error.message, dres_error: dresErr });
+        }
+        return res.status(500).json({ error: "Failed to connect to DRES.", details: error.message });
     }
 };
 

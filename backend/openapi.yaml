@@ -339,9 +339,19 @@
                     "status": {
                       "type": "string"
                     },
-                    "evaluation_id": {
-                      "type": "string"
-                    }
+                        "evaluation_id": {
+                          "type": "string"
+                        },
+                        "selected_name": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "defaulted": {
+                          "type": "boolean"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
                   }
                 }
               }
@@ -706,6 +716,12 @@
           "dres_url": {
             "type": "string",
             "default": "https://vbs.videobrowsing.org"
+          }
+          ,
+          "dres_name": {
+            "type": "string",
+            "description": "Requested evaluation name (e.g. IVADL26)",
+            "default": "IVADL26"
           }
         },
         "required": [

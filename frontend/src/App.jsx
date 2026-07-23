@@ -26,6 +26,7 @@ function App() {
   const [submitMessage, setSubmitMessage] = useState("");
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [dresUrl, setDresUrl] = useState("https://vbs.videobrowsing.org");
+  const [dresName, setDresName] = useState("IVADL26");
   const [searchPage, setSearchPage] = useState(1);
   const [searchPerPage] = useState(24);
   const [searchHasMore, setSearchHasMore] = useState(false);
@@ -37,6 +38,7 @@ function App() {
   const [dresConnected, setDresConnected] = useState(false);
   const [dresStatus, setDresStatus] = useState("Not connected");
   const [dresLoading, setDresLoading] = useState(false);
+  const [snackbar, setSnackbar] = useState({ visible: false, message: "", type: "info", raw: null });
   const [searchHistory, setSearchHistory] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [excludedVideos, setExcludedVideos] = useState([]);
@@ -192,22 +194,43 @@ function App() {
           username: dresUsername,
           password: dresPassword,
           dres_url: dresUrl,
+          dres_name: dresName,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || data.details || "Failed to connect to DRES");
+        // prefer nested DRES server error if present
+        const dresErr = data?.dres_error || data;
+        const msg = (dresErr && typeof dresErr === "object")
+          ? (dresErr.description || dresErr.message || JSON.stringify(dresErr))
+          : (data?.description || data?.details || data?.error || JSON.stringify(data));
+        setDresConnected(false);
+        setDresStatus(msg);
+        setSnackbar({ visible: true, message: msg, type: "error", raw: dresErr });
+        setTimeout(() => setSnackbar((s) => ({ ...s, visible: false, raw: null })), 7000);
+        return;
       }
       setDresConnected(true);
       setDresStatus(data.message || "Connected to DRES");
+      // update dres name if server selected a different one
+      if (data.selected_name) {
+        setDresName(data.selected_name);
+      }
+      if (data.defaulted) {
+        setSnackbar({ visible: true, message: `Not found, defaulting to first: ${data.selected_name}`, type: "info", raw: null });
+        setTimeout(() => setSnackbar((s) => ({ ...s, visible: false })), 5000);
+      }
     } catch (err) {
       console.error("DRES login failed:", err);
       setDresConnected(false);
-      setDresStatus(err.message || "DRES login failed");
+      const errMsg = err?.message || "DRES login failed";
+      setDresStatus(errMsg);
+      setSnackbar({ visible: true, message: errMsg, type: "error", raw: null });
+      setTimeout(() => setSnackbar((s) => ({ ...s, visible: false })), 7000);
     } finally {
       setDresLoading(false);
     }
-  }, [dresUrl, dresUsername, dresPassword]);
+  }, [dresUrl, dresUsername, dresPassword, dresName]);
 
   // Shot select from filmstrip - the one under video - that is why we can use the same video id 
   const handleShotSelect = useCallback((shot) => {
@@ -365,6 +388,13 @@ function App() {
             />
             <input
               type="text"
+              value={dresName}
+              onChange={(e) => setDresName(e.target.value)}
+              placeholder="DRES name (e.g. IVADL26)"
+              title="DRES evaluation name"
+            />
+            <input
+              type="text"
               value={dresUsername}
               onChange={(e) => setDresUsername(e.target.value)}
               placeholder="Username"
@@ -382,6 +412,15 @@ function App() {
             </button>
             <span className={`dres-status ${dresConnected ? "connected" : ""}`}>{dresStatus}</span>
           </div>
+          {snackbar.visible && (
+            <div className={`snackbar ${snackbar.type || "info"}`}>
+              {snackbar.raw ? (
+                <pre>{JSON.stringify(snackbar.raw, null, 2)}</pre>
+              ) : (
+                <div>{snackbar.message}</div>
+              )}
+            </div>
+          )}
           <div className="mode-toggle">
             <button className={`mode-btn ${mode === "search" ? "active" : ""}`} onClick={() => setMode("search")}>Search</button>
             <button className={`mode-btn ${mode === "browse" ? "active" : ""}`} onClick={() => setMode("browse")}>Browse</button>

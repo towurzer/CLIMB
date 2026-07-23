@@ -440,5 +440,4 @@ TODO: add button opening keyframe browser in sideview
 TODO: add submit all scenes with apples
 TODO: add start end time slider to check submission
 TODO: add submit only text vqa
-TODO: add text field to connect to specific dres competition
 TODO: fix keyframe extraction
