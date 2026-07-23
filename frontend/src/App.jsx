@@ -1,5 +1,5 @@
 // importing stuff - useState etc from react and components
-import {useState, useCallback, useEffect, useRef} from "react";
+import {useState, useCallback, useEffect} from "react";
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
@@ -32,8 +32,8 @@ function App() {
     const [searchPerPage] = useState(24);
     const [searchHasMore, setSearchHasMore] = useState(false);
     const [searchLoadingMore, setSearchLoadingMore] = useState(false);
-    const resultsPanelRef = useRef(null);
-    const searchSentinelRef = useRef(null);
+    const [resultsPanel, setResultsPanel] = useState(null);
+    const [searchSentinel, setSearchSentinel] = useState(null);
     const [dresUsername, setDresUsername] = useState("");
     const [dresPassword, setDresPassword] = useState("");
     const [dresConnected, setDresConnected] = useState(false);
@@ -132,6 +132,7 @@ function App() {
         setConfirmSubmit(false);
         setSearchHasMore(false);
         setSearchPage(1);
+        setExcludedVideos([]);
         setSearchHistory((prev) => {
             const filtered = prev.filter((q) => q !== searchQuery);
             return [searchQuery, ...filtered].slice(0, 10);
@@ -163,12 +164,17 @@ function App() {
 
     // Exclude video from search
     const handleExcludeVideo = useCallback(async (result) => {
+        const baseQuery = query.split(" --exclude:")[0].trim();
+        // nothing has been searched yet, so there is no result set to exclude from - ignore it
+        if (!baseQuery) return;
+
         const updatedExcluded = [...new Set([...excludedVideos, result.video_id])];
         setExcludedVideos(updatedExcluded);
         const excludeStr = updatedExcluded.join(", ");
-        const baseQuery = query.split(" --exclude:")[0];
         const updatedQuery = `${baseQuery} --exclude: ${excludeStr}`;
 
+        // can be triggered from the browse tab, so jump back to the results we just refreshed
+        setMode("search");
         setQuery(updatedQuery);
         setLoading(true);
         setSelectedResult(null);
@@ -346,7 +352,7 @@ function App() {
     }, [searchHasMore, loading, searchLoadingMore, searchPage, query, fetchSearchPage]);
 
     useEffect(() => {
-        if (!searchSentinelRef.current || !resultsPanelRef.current || !searchHasMore) return;
+        if (!searchSentinel || !resultsPanel || !searchHasMore) return;
         const observer = new IntersectionObserver(
             (entries) => {
                 entries.forEach((entry) => {
@@ -355,13 +361,12 @@ function App() {
                     }
                 });
             },
-            {root: resultsPanelRef.current, rootMargin: "300px", threshold: 0.1}
+            {root: resultsPanel, rootMargin: "300px", threshold: 0.1}
         );
 
-        const current = searchSentinelRef.current;
-        observer.observe(current);
+        observer.observe(searchSentinel);
         return () => observer.disconnect();
-    }, [handleLoadMoreSearch, loading, searchLoadingMore, searchHasMore]);
+    }, [searchSentinel, resultsPanel, handleLoadMoreSearch, loading, searchLoadingMore, searchHasMore]);
 
     const handleBrowseSelect = useCallback((result) => {
         setSelectedResult(result);
@@ -390,8 +395,8 @@ function App() {
                     <h1>
                         CLIMB, a Content Localization system and Intelligent Multimedia Browser
                         <br/>
-                        Made with love from the <a href="...">AAU</a> students <a href="...">Wurzer</a> and <a
-                        href="...">Eisner</a>.
+                        Made with love from the <a href="https://www.aau.at">AAU</a> students <a href="https://github.com/towurzer">Wurzer</a> and <a
+                        href="https://github.com/sesnr">Eisner</a>.
                     </h1>
                 </div>
 
@@ -455,7 +460,7 @@ function App() {
             )}
 
             <div className="main-content">
-                <div className="results-panel" ref={resultsPanelRef}>
+                <div className="results-panel" ref={setResultsPanel}>
                     {/* difference between search and browse mode */}
                     {mode === "search" ? (
                             <>
@@ -473,7 +478,7 @@ function App() {
                                     onFindSimilar={handleFindSimilar}
                                     onExcludeVideo={handleExcludeVideo}
                                 />
-                                <div ref={searchSentinelRef} className="search-sentinel"/>
+                                <div ref={setSearchSentinel} className="search-sentinel"/>
                                 {searchLoadingMore && <div className="loading">Loading more results...</div>}
                             </>
                         ) :
