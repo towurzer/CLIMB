@@ -144,23 +144,35 @@ module.exports = {
         };
     },
 
-    getVideoShots: async (videoId) => {
-        const sql = `
-        SELECT shot_id, start_frame, end_frame, middle_frame, image_path
-        FROM shots
-            WHERE video_id = $1
-            ORDER BY start_frame ASC, middle_frame ASC;
-        `;
+    getVideoShots: async (videoId, page = null, perPage = null) => {
+        const usePagination = page !== null && perPage !== null;
+        const offset = usePagination ? (page - 1) * perPage : null;
+
+        const sql = usePagination
+            ? `SELECT shot_id, start_frame, end_frame, middle_frame, image_path
+               FROM shots
+                   WHERE video_id = $1
+                   ORDER BY start_frame ASC, middle_frame ASC
+                   LIMIT $2 OFFSET $3;`
+            : `SELECT shot_id, start_frame, end_frame, middle_frame, image_path
+               FROM shots
+                   WHERE video_id = $1
+                   ORDER BY start_frame ASC, middle_frame ASC;`;
+        const shotsParams = usePagination ? [videoId, perPage, offset] : [videoId];
+
+        const countSql = `SELECT COUNT(*)::int AS total FROM shots WHERE video_id = $1;`;
         const fpsSql = `SELECT fps FROM videos WHERE video_id = $1`;
 
-        const [shotsRes, fpsRes] = await Promise.all([
-            pool.query(sql, [videoId]),
+        const [shotsRes, countRes, fpsRes] = await Promise.all([
+            pool.query(sql, shotsParams),
+            pool.query(countSql, [videoId]),
             pool.query(fpsSql, [videoId])
         ]);
 
         const fps = fpsRes.rows.length > 0 ? fpsRes.rows[0].fps : 25.0;
+        const total = countRes.rows[0].total || 0;
 
-        return shotsRes.rows.map(row => ({
+        const shots = shotsRes.rows.map(row => ({
             shot_id: row.shot_id,
             start_frame: row.start_frame,
             end_frame: row.end_frame,
@@ -168,6 +180,8 @@ module.exports = {
             fps: fps,
             thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
         }));
+
+        return { total, shots };
     },
 
     getSimilarShots: async (videoId, shotId) => {

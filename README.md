@@ -436,7 +436,6 @@ one included, browser based wise I like to use
 
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
   
-TODO: add button opening keyframe browser in sideview
 TODO: add submit all scenes with apples
 TODO: add start end time slider to check submission
 TODO: add submit only text vqa

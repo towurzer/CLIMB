@@ -74,9 +74,13 @@ exports.getVideoInfo = async (req, res) => {
 
 exports.getVideoShots = async (req, res) => {
     const { video_id } = req.params;
-    console.log(`Querying video shots for video ${video_id}`)
-    const shots = await queries.getVideoShots(video_id);
-    res.status(200).json({ video_id, shots });
+    const hasPagination = req.query.page !== undefined || req.query.per_page !== undefined;
+    const page = hasPagination ? Math.max(parseInt(req.query.page || '1'), 1) : null;
+    const perPage = hasPagination ? Math.min(Math.max(parseInt(req.query.per_page || '60'), 1), 200) : null;
+
+    console.log(`Querying video shots for video ${video_id} page=${page} perPage=${perPage}`)
+    const { total, shots } = await queries.getVideoShots(video_id, page, perPage);
+    res.status(200).json({ video_id, shots, total });
 };
 
 exports.findSimilar = async (req, res) => {

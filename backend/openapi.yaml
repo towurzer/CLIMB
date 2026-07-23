@@ -127,7 +127,8 @@
     },
     "/climb/videos/{video_id}/shots": {
       "get": {
-        "summary": "Get all shots for a specific video",
+        "summary": "Get shots for a specific video",
+        "description": "Returns shots ordered by start_frame/middle_frame. If both `page` and `per_page` are omitted, every shot for the video is returned in one response; if either is provided, the results are paginated.",
         "operationId": "getVideoShots",
         "parameters": [
           {
@@ -136,6 +137,29 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-indexed). Enables pagination.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "description": "Number of shots per page (capped at 200). Enables pagination.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 60
             }
           }
         ],
@@ -155,6 +179,10 @@
                       "items": {
                         "$ref": "#/components/schemas/ShotInfo"
                       }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "Total number of shots for this video, regardless of pagination."
                     }
                   }
                 }

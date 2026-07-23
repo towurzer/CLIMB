@@ -1,6 +1,26 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 
-function VideoBrowser({ apiUrl, onSelectShot }) {
+const SHOTS_PER_PAGE = 60;
+
+// Sentinel div for infinite scroll, backed by a state ref so the effect
+// re-attaches whenever the DOM node itself changes (e.g. it gets
+// unmounted/remounted when switching between the video grid and shot view),
+// not just when unrelated state changes.
+function useSentinel(onVisible, enabled) {
+  const [node, setNode] = useState(null);
+  useEffect(() => {
+    if (!node || !enabled) return;
+    const obs = new IntersectionObserver(
+      (entries) => entries.forEach((entry) => entry.isIntersecting && onVisible()),
+      { rootMargin: "400px", threshold: 0.1 }
+    );
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [node, enabled, onVisible]);
+  return setNode;
+}
+
+function VideoBrowser({ apiUrl, onSelectShot, openVideoId, onOpenVideoHandled }) {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -10,6 +30,9 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [shots, setShots] = useState([]);
   const [shotsLoading, setShotsLoading] = useState(false);
+  const [shotsPage, setShotsPage] = useState(1);
+  const [shotsTotal, setShotsTotal] = useState(null);
+  const [shotsLoadingMore, setShotsLoadingMore] = useState(false);
   const [filter, setFilter] = useState("");
 
   // Fetch first page on mount
@@ -30,7 +53,7 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
     load();
   }, [apiUrl, perPage]);
 
-  const loadMore = async () => {
+  const loadMore = useCallback(async () => {
     if (loadingMore || loading) return;
     if (total !== null && videos.length >= total) return;
 
@@ -47,36 +70,26 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
     } finally {
       setLoadingMore(false);
     }
-  };
+  }, [loadingMore, loading, total, videos.length, page, apiUrl, perPage]);
 
-  // Infinite scroll sentinel
-  const sentinelRef = useRef(null);
-  useEffect(() => {
-    if (!sentinelRef.current) return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && !loadingMore && !loading && (total === null || videos.length < total)) {
-            loadMore();
-          }
-        });
-      },
-      { root: null, rootMargin: "400px", threshold: 0.1 }
-    );
+  const videoSentinelRef = useSentinel(
+    loadMore,
+    !loading && !loadingMore && (total === null || videos.length < total)
+  );
 
-    obs.observe(sentinelRef.current);
-    return () => obs.disconnect();
-  }, [loadingMore, loading, videos.length, total]);
-
-  // Fetch shots when a video is selected
+  // Fetch shots (page 1) when a video is selected
   const handleVideoClick = (video) => {
     setSelectedVideo(video);
+    setShots([]);
+    setShotsPage(1);
+    setShotsTotal(null);
     setShotsLoading(true);
 
-    fetch(`${apiUrl}/climb/videos/${video.video_id}/shots`)
+    fetch(`${apiUrl}/climb/videos/${video.video_id}/shots?page=1&per_page=${SHOTS_PER_PAGE}`)
       .then((res) => res.json())
       .then((data) => {
-        setShots(data.shots);
+        setShots(data.shots || []);
+        setShotsTotal(data.total ?? null);
         setShotsLoading(false);
       })
       .catch((err) => {
@@ -85,10 +98,84 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
       });
   };
 
+  const loadMoreShots = useCallback(() => {
+    if (!selectedVideo || shotsLoadingMore || shotsLoading) return;
+    if (shotsTotal !== null && shots.length >= shotsTotal) return;
+
+    const next = shotsPage + 1;
+    setShotsLoadingMore(true);
+    fetch(`${apiUrl}/climb/videos/${selectedVideo.video_id}/shots?page=${next}&per_page=${SHOTS_PER_PAGE}`)
+      .then((res) => res.json())
+      .then((data) => {
+        setShots((prev) => [...prev, ...(data.shots || [])]);
+        setShotsPage(next);
+        setShotsTotal(data.total ?? shotsTotal);
+      })
+      .catch((err) => {
+        console.error("Failed to load more shots:", err);
+      })
+      .finally(() => {
+        setShotsLoadingMore(false);
+      });
+  }, [selectedVideo, shotsLoadingMore, shotsLoading, shotsTotal, shots.length, shotsPage, apiUrl]);
+
+  const shotsSentinelRef = useSentinel(
+    loadMoreShots,
+    !shotsLoading && !shotsLoadingMore && (shotsTotal === null || shots.length < shotsTotal)
+  );
+
+  // Jump straight to a video's shot grid (e.g. requested from the sidebar ShotBrowser)
+  useEffect(() => {
+    if (!openVideoId) return;
+
+    const existing = videos.find((v) => v.video_id === openVideoId);
+    if (existing) {
+      handleVideoClick(existing);
+      onOpenVideoHandled?.();
+      return;
+    }
+
+    let cancelled = false;
+    setSelectedVideo({ video_id: openVideoId, fps: 25, duration_sec: 0 });
+    setShots([]);
+    setShotsPage(1);
+    setShotsTotal(null);
+    setShotsLoading(true);
+
+    fetch(`${apiUrl}/climb/videos/${openVideoId}/shots?page=1&per_page=${SHOTS_PER_PAGE}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        const fetchedShots = data.shots || [];
+        setShots(fetchedShots);
+        setShotsTotal(data.total ?? null);
+        setSelectedVideo({
+          video_id: openVideoId,
+          fps: fetchedShots[0]?.fps || 25,
+          duration_sec: 0,
+        });
+        setShotsLoading(false);
+        onOpenVideoHandled?.();
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Failed to open requested video:", err);
+        setShotsLoading(false);
+        onOpenVideoHandled?.();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openVideoId, apiUrl]);
+
   // Go back to video grid
   const handleBack = () => {
     setSelectedVideo(null);
     setShots([]);
+    setShotsPage(1);
+    setShotsTotal(null);
   };
 
   // When user clicks a shot, convert to result format and pass up
@@ -108,10 +195,6 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
 
   const filtered = filter ? videos.filter((v) => v.video_id.includes(filter)) : videos;
 
-  if (loading) {
-    return <div className="browse-loading">Loading video list...</div>;
-  }
-
   // ── Shot view: showing shots of a selected video ──
   if (selectedVideo) {
     return (
@@ -123,26 +206,34 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
           <span className="browse-video-title">
             {selectedVideo.video_id}
             <span className="browse-video-meta">
-              {shots.length} shots · {Math.round(selectedVideo.duration_sec)}s · {selectedVideo.fps}fps
+              {shotsTotal ?? shots.length} shots · {Math.round(selectedVideo.duration_sec)}s · {selectedVideo.fps}fps
             </span>
           </span>
         </div>
         {shotsLoading ? (
           <div className="browse-loading">Loading shots...</div>
         ) : (
-          <div className="browse-grid">
-            {shots.map((shot) => (
-              <div key={shot.shot_id} className="browse-card" onClick={() => handleShotClick(shot)}>
-                <div className="browse-card-thumb">
-                  <img src={shot.thumbnail_url} alt={`Shot ${shot.shot_id}`} loading="lazy" />
-                  <span className="browse-card-badge">#{shot.shot_id}</span>
+          <>
+            <div className="browse-grid">
+              {shots.map((shot) => (
+                <div key={shot.shot_id} className="browse-card" onClick={() => handleShotClick(shot)}>
+                  <div className="browse-card-thumb">
+                    <img src={shot.thumbnail_url} alt={`Shot ${shot.shot_id}`} loading="lazy" />
+                    <span className="browse-card-badge">#{shot.shot_id}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+            <div ref={shotsSentinelRef} className="browse-sentinel" />
+            {shotsLoadingMore && <div className="browse-load-more">Loading more shots…</div>}
+          </>
         )}
       </div>
     );
+  }
+
+  if (loading) {
+    return <div className="browse-loading">Loading video list...</div>;
   }
 
   // ── Video grid: showing all videos ──
@@ -173,7 +264,7 @@ function VideoBrowser({ apiUrl, onSelectShot }) {
         ))}
       </div>
 
-      <div ref={sentinelRef} className="browse-sentinel" />
+      <div ref={videoSentinelRef} className="browse-sentinel" />
       {loadingMore && <div className="browse-load-more">Loading more videos…</div>}
     </div>
   );

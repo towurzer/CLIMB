@@ -367,6 +367,16 @@ function App() {
     setSubmitMessage("");
   }, []);
 
+  // Jump to browse mode with a specific video's shots open (triggered from the sidebar ShotBrowser)
+  const [browseOpenVideoId, setBrowseOpenVideoId] = useState(null);
+  const handleBrowseAllShots = useCallback((videoId) => {
+    setMode("browse");
+    setBrowseOpenVideoId(videoId);
+  }, []);
+  const handleBrowseOpenVideoHandled = useCallback(() => {
+    setBrowseOpenVideoId(null);
+  }, []);
+
   const isDuplicate = selectedResult ? alreadySubmitted(selectedResult) : false;
 
   return (
@@ -457,7 +467,12 @@ function App() {
           ) :
             (
               /* for browsing - showing everything */
-              <VideoBrowser apiUrl={API_URL} onSelectShot={handleBrowseSelect} />
+              <VideoBrowser
+                apiUrl={API_URL}
+                onSelectShot={handleBrowseSelect}
+                openVideoId={browseOpenVideoId}
+                onOpenVideoHandled={handleBrowseOpenVideoHandled}
+              />
             )}
         </div>
         {/* right pannel , if nothing selected then dyplaying nothing */}
@@ -523,6 +538,7 @@ function App() {
                 currentShotId={selectedResult.shot_id}
                 onSelectShot={handleShotSelect}
                 apiUrl={API_URL}
+                onBrowseAll={handleBrowseAllShots}
               />
             </>
           ) : (

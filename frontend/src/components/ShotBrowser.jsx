@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 
-function ShotBrowser({ videoId, currentShotId, onSelectShot, apiUrl }) {
+function ShotBrowser({ videoId, currentShotId, onSelectShot, apiUrl, onBrowseAll }) {
   const [shots, setShots] = useState([]);
   const [loading, setLoading] = useState(false);
   const activeRef = useRef(null);
@@ -42,6 +42,14 @@ function ShotBrowser({ videoId, currentShotId, onSelectShot, apiUrl }) {
   return (
     <div className="shot-browser">
       <div className="shot-browser-header">
+        {onBrowseAll && (
+          <button
+            className="shot-browser-browse-all-btn"
+            onClick={() => onBrowseAll(videoId)}
+          >
+            Browse in Fullscreen
+          </button>
+        )}
         <span className="shot-browser-title">
           {videoId} – {shots.length} shots
         </span>
