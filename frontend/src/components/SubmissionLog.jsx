@@ -14,14 +14,19 @@ function SubmissionLog({submissions}) {
                     >
                         <span className="log-index">#{submissions.length - i}</span>
                         {sub.type === "vqa" ? (
-                            <span className="log-text">VQA: "{sub.text_answer}"</span>
+                            <span className="log-text">
+                                VQA ({sub.mode === "text" ? "text only" : "text + shot"}): "{sub.text_answer}"
+                            </span>
                         ) : (
                             <span className="log-text">
                                 {sub.video_id} / shot {sub.shot_id} ({(sub.start_time_ms / 1000).toFixed(1)}s)
                             </span>
                         )}
                         <span className={`log-status ${sub.status}`}>
-                            {sub.status === "success" ? "✓" : sub.status === "error" ? "✗" : "..."}
+                            {sub.status === "success" ? "✓"
+                                : sub.status === "error" ? "✗"
+                                    : sub.status === "pending" ? "?"
+                                        : "..."}
                         </span>
                         <span className="log-time">{sub.time}</span>
                     </div>

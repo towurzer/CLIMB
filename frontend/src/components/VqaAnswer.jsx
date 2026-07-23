@@ -1,14 +1,34 @@
 import {useState, useEffect} from "react";
+import {describeDresResult, describeDresError} from "../dresSubmission";
+
+const SUBMIT_MODES = {
+    media: {
+        path: "/climb/dres/submit/vqa",
+        buttonLabel: "Submit image + text",
+        confirmSuffix: "+ shot",
+        confirmFirst: true,
+    },
+    text: {
+        path: "/climb/dres/submit/vqa/text",
+        buttonLabel: "Submit text only",
+        confirmSuffix: "only",
+        confirmFirst: false,
+    },
+};
+
+// [confirm, cancel] in the order that keeps confirm under the submit button that was clicked
+const orderConfirmRow = (mode, [confirmButton, cancelButton]) =>
+    SUBMIT_MODES[mode].confirmFirst ? [confirmButton, cancelButton] : [cancelButton, confirmButton];
 
 function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
     const [answer, setAnswer] = useState("");
-    const [confirmVqa, setConfirmVqa] = useState(false);
+    const [confirmMode, setConfirmMode] = useState(null);
     const [vqaStatus, setVqaStatus] = useState(null);
     const [vqaMessage, setVqaMessage] = useState("");
 
     useEffect(() => {
         setAnswer("");
-        setConfirmVqa(false);
+        setConfirmMode(null);
         setVqaStatus(null);
         setVqaMessage("");
     }, [selectedResult]);
@@ -19,44 +39,70 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
         : "No shot selected";
 
     const submitText = answer.trim();
+    const canSubmit = Boolean(submitText && selectedResult);
 
-    // Submit answer to DRES
-    const handleVqaSubmit = async () => {
-        if (!submitText) return;
+    // Submit answer to DRES, either with or without the selected shot
+    const handleVqaSubmit = async (mode) => {
+        if (!canSubmit) return;
         setVqaStatus("submitting");
-        setConfirmVqa(false);
+        setConfirmMode(null);
         setVqaMessage("");
 
+        const body = mode === "text"
+            ? {text_answer: submitText}
+            : {
+                text_answer: submitText,
+                video_id: selectedResult?.video_id || null,
+                start_time_ms: selectedResult?.start_time_ms || null,
+                end_time_ms: selectedResult?.end_time_ms || null,
+            };
+
         try {
-            const res = await fetch(`${apiUrl}/climb/dres/submit/vqa`, {
+            const res = await fetch(`${apiUrl}${SUBMIT_MODES[mode].path}`, {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({
-                    text_answer: submitText,
-                    video_id: selectedResult?.video_id || null,
-                    start_time_ms: selectedResult?.start_time_ms || null,
-                    end_time_ms: selectedResult?.end_time_ms || null,
-                }),
+                body: JSON.stringify(body),
             });
             const data = await res.json();
 
-            if (!res.ok) {
-                const errorText = data.error || data.message || "DRES VQA Submission failed";
-                const detailsText = data.details ? ` ${data.details}` : "";
-                throw new Error(`${errorText}${detailsText}`);
-            }
+            const {state, text} = res.ok
+                ? describeDresResult(data)
+                : describeDresError(data, "DRES VQA Submission failed");
 
-            const submissionDetails = data.message || "VQA Answer submitted successfully.";
-            setVqaStatus("success");
-            setVqaMessage(submissionDetails);
-            if (onSubmitted) onSubmitted(submitText, "success");
+            setVqaStatus(state);
+            setVqaMessage(text);
+            if (onSubmitted) onSubmitted(submitText, state, mode);
         } catch (err) {
             console.error("VQA submit failed:", err);
-            setVqaStatus("error");
-            setVqaMessage(err.message || "DRES VQA Submission failed.");
-            if (onSubmitted) onSubmitted(submitText, "error");
+            const {state, text} = describeDresError(
+                null,
+                `DRES VQA Submission failed: ${err.message || "Please check DRES connection."}`
+            );
+            setVqaStatus(state);
+            setVqaMessage(text);
+            if (onSubmitted) onSubmitted(submitText, state, mode);
         }
     };
+
+    // A submit button per mode, both need an answer and a selected shot
+    const renderSubmitButton = (mode) => (
+        <button
+            key={mode}
+            className={`vqa-submit-btn ${vqaStatus || ""}`}
+            onClick={() => {
+                if (!vqaStatus || vqaStatus === "error") setConfirmMode(mode);
+            }}
+            disabled={!canSubmit || vqaStatus === "submitting" || vqaStatus === "success"}
+        >
+            {vqaStatus === "submitting"
+                ? "Submitting..."
+                : vqaStatus === "success"
+                    ? "Submitted!"
+                    : vqaStatus === "error"
+                        ? "Error - try again?"
+                        : SUBMIT_MODES[mode].buttonLabel}
+        </button>
+    );
 
     return (
         <div className="vqa-section">
@@ -70,7 +116,7 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
                 </span>
             </div>
 
-            {/* Answer field - the text submitted to DRES alongside the selected scene */}
+            {/* Answer field - the text submitted to DRES */}
             <div className="vqa-field-label">VQA-Answer:</div>
             <div className="vqa-input-row">
                 <input
@@ -80,7 +126,7 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
                     value={answer}
                     onChange={(e) => {
                         setAnswer(e.target.value);
-                        setConfirmVqa(false);
+                        setConfirmMode(null);
                         setVqaStatus(null);
                         setVqaMessage("");
                     }}
@@ -89,31 +135,23 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
             </div>
 
             {/* Submit to DRES */}
-            {!confirmVqa ? (
-                <button
-                    className={`vqa-submit-btn ${vqaStatus || ""}`}
-                    onClick={() => {
-                        if (submitText && !vqaStatus) setConfirmVqa(true);
-                        if (vqaStatus === "error") setConfirmVqa(true);
-                    }}
-                    disabled={!submitText || vqaStatus === "submitting" || vqaStatus === "success"}
-                >
-                    {vqaStatus === "submitting"
-                        ? "Submitting..."
-                        : vqaStatus === "success"
-                            ? "Submitted!"
-                            : vqaStatus === "error"
-                                ? "Error - try again?"
-                                : "Submit answer to DRES"}
-                </button>
+            {!confirmMode ? (
+                <div className="confirm-row">
+                    {renderSubmitButton("media")}
+                    {renderSubmitButton("text")}
+                </div>
             ) : (
                 <div className="confirm-row">
-                    <button className="vqa-submit-btn confirm" onClick={handleVqaSubmit}>
-                        {`Yes, submit "${submitText}"`}
-                    </button>
-                    <button className="vqa-submit-btn cancel" onClick={() => setConfirmVqa(false)}>
-                        Cancel
-                    </button>
+                    {orderConfirmRow(confirmMode, [
+                        <button key="confirm" className="vqa-submit-btn confirm"
+                                onClick={() => handleVqaSubmit(confirmMode)}>
+                            {`Yes, submit "${submitText}" ${SUBMIT_MODES[confirmMode].confirmSuffix}`}
+                        </button>,
+                        <button key="cancel" className="vqa-submit-btn cancel"
+                                onClick={() => setConfirmMode(null)}>
+                            Cancel
+                        </button>,
+                    ])}
                 </div>
             )}
 

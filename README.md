@@ -90,6 +90,12 @@ If you click on a video you can see all the scenes. If you click one it will ope
 Under the main video screen you cann see all keyframes to scroll through and a large submit to DRES button if you want to
 submit the current scene.
 Additionally there is an "VQA-Answer" field where you can enter a textual answer for a Visual Question Answering Task. 
+Two submit buttons let you choose what goes to DRES: "Submit image + text" sends your answer together with the selected scene, 
+"Submit text only" sends just the answer for tasks where DRES expects no media item. Both ask for confirmation first, double-clicking a button confirms it.
+
+Every submission shows a result box with the DRES status code, a plain language summary and the verdict, 
+e.g. 200 · Accepted & graded · CORRECT. Green means a correct verdict, red a wrong or rejected one, and amber 
+(202 · Accepted - awaiting verdict) means DRES took the submission but hasn't judged it yet.
 
 Going back to the search tab, you can search for video scenes including specific content.
 
@@ -158,13 +164,14 @@ frontend/
         App.jsx             # Main application component
         App.css             # Styles
         main.jsx            # React entry point
+        dresSubmission.js   # formatting of DRES submission results
         components/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
             VideoPlayer.jsx # Video player with segment loop
             ShotBrowser.jsx # Filmstrip navigation
             VideoBrowser.jsx# Browse all videos
-            VqaAnswer.jsx   # VQA text answer input
+            VqaAnswer.jsx   # VQA answer input + DRES submit buttons
             SubmissionLog.jsx # Submission history log
 
 video_processing/
@@ -438,7 +445,5 @@ one included, browser based wise I like to use
 TODO: add submit all scenes with apples
 
 TODO: add start end time slider to check submission
-
-TODO: add submit only text vqa
 
 TODO: fix keyframe extraction

@@ -335,19 +335,31 @@
         },
         "responses": {
           "200": {
-            "description": "Submission result",
+            "description": "Submission result, including the verdict reported by DRES",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/DresSubmissionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DRES rejected the submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DresSubmissionError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not connected to DRES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DresSubmissionError"
                 }
               }
             }
@@ -357,7 +369,7 @@
     },
     "/climb/dres/submit/vqa": {
       "post": {
-        "summary": "Submit a VQA text answer to the DRES server",
+        "summary": "Submit a VQA text answer together with the selected media segment to the DRES server",
         "operationId": "submitVqaToDres",
         "requestBody": {
           "required": true,
@@ -371,19 +383,79 @@
         },
         "responses": {
           "200": {
-            "description": "Submission result",
+            "description": "Submission result, including the verdict reported by DRES",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/DresSubmissionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing answer text, or DRES rejected the submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DresSubmissionError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not connected to DRES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DresSubmissionError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/dres/submit/vqa/text": {
+      "post": {
+        "summary": "Submit a VQA text answer to the DRES server without any media item",
+        "operationId": "submitVqaTextOnlyToDres",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VqaTextSubmission"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Submission result, including the verdict reported by DRES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DresSubmissionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing answer text, or DRES rejected the submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DresSubmissionError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not connected to DRES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DresSubmissionError"
                 }
               }
             }
@@ -607,6 +679,85 @@
         },
         "required": [
           "text_answer"
+        ]
+      },
+      "VqaTextSubmission": {
+        "type": "object",
+        "properties": {
+          "text_answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text_answer"
+        ]
+      },
+      "DresSubmissionResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "pending"
+            ],
+            "description": "'pending' when DRES accepted the submission but has not graded it yet (HTTP 202)"
+          },
+          "dres_status": {
+            "type": "integer",
+            "description": "HTTP status code returned by the DRES submission endpoint"
+          },
+          "status_summary": {
+            "type": "string",
+            "description": "Human readable summary of dres_status, e.g. 'Accepted & graded'"
+          },
+          "verdict": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "CORRECT",
+              "WRONG",
+              "INDETERMINATE",
+              "UNDECIDABLE",
+              null
+            ],
+            "description": "The verdict reported by DRES, null while no verdict is available"
+          },
+          "message": {
+            "type": "string"
+          },
+          "dres_response": {
+            "type": "object",
+            "description": "The raw SuccessfulSubmissionsStatus payload returned by DRES"
+          }
+        },
+        "required": [
+          "status",
+          "dres_status",
+          "status_summary",
+          "message"
+        ]
+      },
+      "DresSubmissionError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "dres_status": {
+            "type": "integer",
+            "nullable": true,
+            "description": "HTTP status code returned by DRES, null when DRES could not be reached"
+          },
+          "status_summary": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "DresLoginRequest": {

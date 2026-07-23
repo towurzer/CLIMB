@@ -7,6 +7,7 @@ import ShotBrowser from "./components/ShotBrowser";
 import VideoBrowser from "./components/VideoBrowser";
 import VqaAnswer from "./components/VqaAnswer";
 import SubmissionLog from "./components/SubmissionLog";
+import {describeDresResult, describeDresError} from "./dresSubmission";
 import "./App.css";
 
 const backendHost = import.meta.env.BACKEND_URL || "localhost";
@@ -293,38 +294,31 @@ function App() {
                 }),
             });
             const data = await res.json();
-            if (!res.ok) {
-                const errorText = data.error || data.message || "DRES Submission failed";
-                const detailsText = data.details ? ` ${data.details}` : "";
-                throw new Error(`${errorText}${detailsText}`);
-            }
-            const submissionState = data.dres_response?.submission;
-            const submissionDetails = data.dres_response?.description || data.message || "Submitted successfully.";
-            if (submissionState === "CORRECT") {
-                entry.status = "success";
-                setSubmitStatus("success");
-                setSubmitMessage(submissionDetails);
-            } else {
-                const errorText = submissionState ? `DRES Submission failed: ${submissionDetails}` : (data.message || "DRES Submission failed.");
-                entry.status = "error";
-                setSubmitStatus("error");
-                setSubmitMessage(errorText);
-            }
+            const {state, text} = res.ok
+                ? describeDresResult(data)
+                : describeDresError(data, "DRES Submission failed");
+            entry.status = state;
+            setSubmitStatus(state);
+            setSubmitMessage(text);
         } catch (err) {
             // it did not work
             console.error("DRES submit failed:", err);
-            entry.status = "error";
-            setSubmitStatus("error");
-            setSubmitMessage(`DRES Submission failed: ${err.message || "Please check DRES connection."}`);
+            const {state, text} = describeDresError(
+                null,
+                `DRES Submission failed: ${err.message || "Please check DRES connection."}`
+            );
+            entry.status = state;
+            setSubmitStatus(state);
+            setSubmitMessage(text);
         }
         // for our submitted array
         setSubmissions((prev) => [entry, ...prev]);
     }, []);
 
-    //  VQA submit callback
-    const handleVqaSubmitted = useCallback((answer, status) => {
+    //  VQA submit callback, mode is "media" (text + shot) or "text" (text only)
+    const handleVqaSubmitted = useCallback((answer, status, mode) => {
         setSubmissions((prev) => [
-            {type: "vqa", text_answer: answer, time: timeNow(), status},
+            {type: "vqa", text_answer: answer, time: timeNow(), status, mode},
             ...prev,
         ]);
     }, []);

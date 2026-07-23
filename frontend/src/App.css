@@ -490,6 +490,12 @@ body {
     color: #ff9fb3;
 }
 
+.submit-result-box.pending {
+    border-color: #e0a800;
+    background: rgba(224, 168, 0, 0.12);
+    color: #ffd479;
+}
+
 .submit-btn {
     padding: 12px;
     font-size: 15px;
@@ -519,6 +525,11 @@ body {
     background: #e67;
 }
 
+.submit-btn.pending {
+    background: #e0a800;
+    color: #241c00;
+}
+
 .confirm-row {
     display: flex;
     gap: 8px;
@@ -526,6 +537,11 @@ body {
 
 .confirm-row .submit-btn {
     flex: 1;
+}
+
+.confirm-row .vqa-submit-btn {
+    flex: 1;
+    min-width: 0;
 }
 
 .submit-btn.confirm {
@@ -893,6 +909,11 @@ body {
     color: #fff;
 }
 
+.vqa-submit-btn.pending {
+    background: #e0a800;
+    color: #241c00;
+}
+
 .vqa-shot-info {
     display: flex;
     align-items: center;
@@ -1181,6 +1202,10 @@ body {
 
 .log-status.error {
     color: #d9534f;
+}
+
+.log-status.pending {
+    color: #e0a800;
 }
 
 .log-time {
