@@ -14,7 +14,7 @@ let dresState = {
 };
 
 exports.connectDres = async (req, res) => {
-    const { username, password, dres_url, dres_name } = req.body;
+    const {username, password, dres_url, dres_name} = req.body;
 
     if (dres_url) dresState.dres_url = dres_url;
 
@@ -34,7 +34,7 @@ exports.connectDres = async (req, res) => {
 
         // Active Sessions
         const evalRes = await axios.get(`${dresState.dres_url}/api/v2/client/evaluation/list`, {
-            params: { session: dresState.sessionId }
+            params: {session: dresState.sessionId}
         });
 
         const evaluations = evalRes.data;
@@ -62,7 +62,7 @@ exports.connectDres = async (req, res) => {
             });
         } else {
             dresState.connected = false;
-            return res.status(404).json({ error: "No active evaluations found on the DRES server." });
+            return res.status(404).json({error: "No active evaluations found on the DRES server."});
         }
 
         dresState.connected = true;
@@ -82,9 +82,13 @@ exports.connectDres = async (req, res) => {
         dresState.connected = false;
         if (dresErr) {
             // forward the original DRES response inside our error payload
-            return res.status(500).json({ error: "Failed to connect to DRES.", details: error.message, dres_error: dresErr });
+            return res.status(500).json({
+                error: "Failed to connect to DRES.",
+                details: error.message,
+                dres_error: dresErr
+            });
         }
-        return res.status(500).json({ error: "Failed to connect to DRES.", details: error.message });
+        return res.status(500).json({error: "Failed to connect to DRES.", details: error.message});
     }
 };
 
@@ -97,10 +101,10 @@ exports.dresStatus = async (req, res) => {
 };
 
 exports.submitToDres = async (req, res) => {
-    const { video_id, start_time_ms, end_time_ms } = req.body;
+    const {video_id, start_time_ms, end_time_ms} = req.body;
 
     if (!dresState.connected || !dresState.evaluationId) {
-        return res.status(401).json({ error: "Not connected to DRES. Please login first." });
+        return res.status(401).json({error: "Not connected to DRES. Please login first."});
     }
 
     try {
@@ -119,7 +123,7 @@ exports.submitToDres = async (req, res) => {
         const submitUrl = `${dresState.dres_url}/api/v2/submit/${dresState.evaluationId}`;
 
         const response = await axios.post(submitUrl, payload, {
-            params: { session: dresState.sessionId }
+            params: {session: dresState.sessionId}
         });
 
         res.status(200).json({
@@ -130,20 +134,23 @@ exports.submitToDres = async (req, res) => {
 
     } catch (error) {
         console.error("DRES KIS Submit Error:", error.response?.data || error.message);
-        res.status(400).json({ error: "DRES Submission failed", details: error.response?.data?.description || error.message });
+        res.status(400).json({
+            error: "DRES Submission failed",
+            details: error.response?.data?.description || error.message
+        });
     }
 };
 
 exports.submitVqaToDres = async (req, res) => {
-    const { text_answer, question, video_id, start_time_ms, end_time_ms } = req.body;
+    const {text_answer, question, video_id, start_time_ms, end_time_ms} = req.body;
     const textToSubmit = (text_answer || question || "").trim();
 
     if (!dresState.connected || !dresState.evaluationId) {
-        return res.status(401).json({ error: "Not connected to DRES. Please login first." });
+        return res.status(401).json({error: "Not connected to DRES. Please login first."});
     }
 
     if (!textToSubmit) {
-        return res.status(400).json({ error: "VQA text is required for submission." });
+        return res.status(400).json({error: "VQA text is required for submission."});
     }
 
     try {
@@ -161,10 +168,10 @@ exports.submitVqaToDres = async (req, res) => {
 
         const submitUrl = `${dresState.dres_url}/api/v2/submit/${dresState.evaluationId}`;
 
-        console.log("DRES VQA submit payload:", JSON.stringify({ url: submitUrl, payload }, null, 2));
+        console.log("DRES VQA submit payload:", JSON.stringify({url: submitUrl, payload}, null, 2));
 
         const response = await axios.post(submitUrl, payload, {
-            params: { session: dresState.sessionId }
+            params: {session: dresState.sessionId}
         });
 
         res.status(200).json({
@@ -175,6 +182,9 @@ exports.submitVqaToDres = async (req, res) => {
 
     } catch (error) {
         console.error("DRES VQA Submit Error:", error.response?.data || error.message);
-        res.status(400).json({ error: "DRES VQA Submission failed", details: error.response?.data?.description || error.message });
+        res.status(400).json({
+            error: "DRES VQA Submission failed",
+            details: error.response?.data?.description || error.message
+        });
     }
 };

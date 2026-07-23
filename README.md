@@ -1,6 +1,6 @@
 # CLIMB
 
-A contest winning Content Localization and Intelligent Multimedia Retrieval system.
+A contest winning Content Localization system and Intelligent Multimedia Browser.
 
 <img src="readme_images/competition_scores.png" alt="competition_scores" width="500"/>
 

@@ -1,12 +1,12 @@
 const queries = require('../models/queries');
 const path = require('path');
-const { createClient } = require('redis');
+const {createClient} = require('redis');
 
 // Caching Videos to reduce load time
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const VIDEOS_CACHE_TTL_SECONDS = process.env.VIDEOS_CACHE_TTL_SECONDS ||30;
+const VIDEOS_CACHE_TTL_SECONDS = process.env.VIDEOS_CACHE_TTL_SECONDS || 30;
 
-const redisClient = createClient({ url: REDIS_URL, socket: { connectTimeout: 3000, reconnectStrategy: false } });
+const redisClient = createClient({url: REDIS_URL, socket: {connectTimeout: 3000, reconnectStrategy: false}});
 redisClient.on('error', (err) => {
     // We don't like errors
 });
@@ -41,8 +41,8 @@ exports.listVideos = async (req, res) => {
                     parsed.total = parsed.count;
                     delete parsed.count;
                 }
-                console.log(`Returning cached videos page=${page} perPage=${perPage} videos=${(parsed.videos||[]).length}`);
-                return res.status(200).json({ ...parsed, cached: true });
+                console.log(`Returning cached videos page=${page} perPage=${perPage} videos=${(parsed.videos || []).length}`);
+                return res.status(200).json({...parsed, cached: true});
             }
         }
     } catch (err) {
@@ -60,12 +60,12 @@ exports.listVideos = async (req, res) => {
         console.warn('Redis set failed:', err.message || err);
     }
 
-    console.log(`Returning fresh videos page=${page} perPage=${perPage} videos=${(result.videos||[]).length}`);
+    console.log(`Returning fresh videos page=${page} perPage=${perPage} videos=${(result.videos || []).length}`);
     res.status(200).json(result);
 };
 
 exports.getVideoInfo = async (req, res) => {
-    const { video_id } = req.params;
+    const {video_id} = req.params;
     //TODO check
     console.log(`Querying video details for video ${video_id}`)
     const details = await queries.getVideoDetails(video_id);
@@ -73,41 +73,41 @@ exports.getVideoInfo = async (req, res) => {
 };
 
 exports.getVideoShots = async (req, res) => {
-    const { video_id } = req.params;
+    const {video_id} = req.params;
     const hasPagination = req.query.page !== undefined || req.query.per_page !== undefined;
     const page = hasPagination ? Math.max(parseInt(req.query.page || '1'), 1) : null;
     const perPage = hasPagination ? Math.min(Math.max(parseInt(req.query.per_page || '60'), 1), 200) : null;
 
     console.log(`Querying video shots for video ${video_id} page=${page} perPage=${perPage}`)
-    const { total, shots } = await queries.getVideoShots(video_id, page, perPage);
-    res.status(200).json({ video_id, shots, total });
+    const {total, shots} = await queries.getVideoShots(video_id, page, perPage);
+    res.status(200).json({video_id, shots, total});
 };
 
 exports.findSimilar = async (req, res) => {
-    const { video_id, shot_id } = req.params;
+    const {video_id, shot_id} = req.params;
     console.log(`Searching for similar videos just as ${video_id} and ${shot_id}`)
     const results = await queries.getSimilarShots(video_id, parseInt(shot_id));
-    res.status(200).json({ source_video: video_id, source_shot: parseInt(shot_id), results });
+    res.status(200).json({source_video: video_id, source_shot: parseInt(shot_id), results});
 };
 
 exports.askShotVQA = async (req, res) => {
-    const { video_id, shot_id } = req.params;
-    const { question } = req.body;
+    const {video_id, shot_id} = req.params;
+    const {question} = req.body;
 
-    if (!question) return res.status(400).json({ error: "Question is required in body" });
+    if (!question) return res.status(400).json({error: "Question is required in body"});
     console.log(`Asking the question ${question} (shot based)`)
     const answer = await queries.askVQA(video_id, shot_id, question);
-    res.status(200).json({ question, answer });
+    res.status(200).json({question, answer});
 };
 
 exports.askVideoVQA = async (req, res) => {
-    const { video_id } = req.params;
-    const { question } = req.body;
+    const {video_id} = req.params;
+    const {question} = req.body;
 
 
-    if (!question) return res.status(400).json({ error: "Question is required in body" });
+    if (!question) return res.status(400).json({error: "Question is required in body"});
     //TODO check
     console.log(`Asking the question ${question} (video based)`)
     const answer = await queries.askVQA(video_id, null, question);
-    res.status(200).json({ question, answer });
+    res.status(200).json({question, answer});
 };

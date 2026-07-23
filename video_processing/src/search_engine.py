@@ -14,6 +14,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import os
 
+
 class SearchEngine:
     def __init__(self, config: Config, db_connection):
         self.logger = custom_logger.get_logger("search_engine")
@@ -22,13 +23,12 @@ class SearchEngine:
         self.db_conn = db_connection
         self.fps_cache = {}  # Cache for video FPS values to avoid repeated DB queries
 
-    
         self.logger.info(f"Initializing {config.KIS_MODEL_NAME} on device: {self.device}")
-    
+
         # Attempt to load the model and processor
         try:
             self.processor = AutoProcessor.from_pretrained(config.KIS_MODEL_NAME)
-            self.model = AutoModel.from_pretrained(config.KIS_MODEL_NAME).to(self.   device)
+            self.model = AutoModel.from_pretrained(config.KIS_MODEL_NAME).to(self.device)
             self.model.eval()  # Switch model to evaluation mode (disables dropout/batchnorm training behavior)
 
         except Exception as e:
@@ -49,17 +49,18 @@ class SearchEngine:
 
         except Exception as e:
             self.logger.error(f"Failed to load video metadata: {e}")
-            self.fps_cache = {} # Reset cache on failure
+            self.fps_cache = {}  # Reset cache on failure
 
     def get_text_vector(self, prompt: str) -> list:
         """
         Converts a text string into a 1024-dimensional list.
         """
-        inputs = self.processor(text=[prompt], return_tensors="pt", padding="max_length", truncation=True).to(self.device)
-        
+        inputs = self.processor(text=[prompt], return_tensors="pt", padding="max_length", truncation=True).to(
+            self.device)
+
         with torch.no_grad():
             outputs = self.model.get_text_features(**inputs)
-            
+
             if hasattr(outputs, 'text_embeds'):
                 text_features = outputs.text_embeds
 
@@ -74,7 +75,7 @@ class SearchEngine:
 
             # L2 normalize the 1024-dimensional vector
             text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
-            
+
         # Flatten it to a clean 1-D list of exactly 1024 numbers
         return text_features.cpu().numpy().flatten().tolist()
 
@@ -86,7 +87,7 @@ class SearchEngine:
         """
         text_vector = self.get_text_vector(prompt)
         top_k = top_k or self.config.SEARCH_TOP_K
-        
+
         with self.db_conn.cursor() as cur:
             try:
                 if exclude and len(exclude) > 0:
@@ -136,21 +137,21 @@ class SearchEngine:
         Visualizes the search results in a grid format. 
         Will not be used in the final implementation, but is useful for debugging and development.
         """
-        
+
         # Filter for shots where the image actually exists first
         valid_shots = [shot for shot in search_results if os.path.exists(shot["image_path"])]
-        
+
         if not valid_shots:
             print("No valid images found to display.")
             return
 
         num_images = len(valid_shots)
         # Calculate required rows dynamically based on the number of valid images
-        rows = (num_images + columns - 1) // columns 
+        rows = (num_images + columns - 1) // columns
 
         # Create the matplotlib figure
         fig, axes = plt.subplots(rows, columns, figsize=(16, 3.5 * rows))
-        
+
         # Flatten the axes array to make indexing easy (in case it's 2D)
         axes = axes.flatten()
 
@@ -159,13 +160,16 @@ class SearchEngine:
                 shot = enriched_results[i]
                 img = Image.open(shot["image_path"])
                 axes[i].imshow(img)
-                
-                axes[i].set_title(f"VID: {shot['video_id']} | SHOT: {shot['shot_id']} | SIM: {shot['similarity_score']:.3f}", fontsize=8, fontweight='bold')
-        
+
+                axes[i].set_title(
+                    f"VID: {shot['video_id']} | SHOT: {shot['shot_id']} | SIM: {shot['similarity_score']:.3f}",
+                    fontsize=8, fontweight='bold')
+
             axes[i].axis('off')
 
         plt.tight_layout()
         plt.show()
+
 
 # Example usage:
 if __name__ == "__main__":
@@ -209,4 +213,3 @@ if __name__ == "__main__":
                 break
 
         conn.close()
-    

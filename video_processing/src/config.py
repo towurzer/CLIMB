@@ -6,6 +6,7 @@ from pathlib import Path
 VIDEO_PROCESSING_ROOT = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = VIDEO_PROCESSING_ROOT.parent
 
+
 @dataclass
 class Config:
     # --- KIS Model parameters ---
@@ -17,24 +18,24 @@ class Config:
     VQA_MODEL_NAME: str = "Salesforce/blip2-opt-2.7b"
 
     # --- Video Compression ---
-    WEB_RESOLUTION = 480 # fast to process and loads instantly in web UIs.
-    VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"} # valid video extensions
+    WEB_RESOLUTION = 480  # fast to process and loads instantly in web UIs.
+    VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}  # valid video extensions
     WEB_VIDEO_EXTENSION = ".mp4"
-    COMPRESSION_PARALLEL =  True # whether to use multiprocessing for video compression
+    COMPRESSION_PARALLEL = True  # whether to use multiprocessing for video compression
     # --- Paths ---
     DATA_DIR: str = str(PROJECT_ROOT / "dataset")
     DATASET_FOLDER: str = "V3C1_200"
     SCENES_DIR: str = "scenes_v3c1_204/scenes_v3c1_204"
     WEB_READY_DATASET_FOLDER: str = "web_ready"
     LOG_FOLDER: str = str(VIDEO_PROCESSING_ROOT / "logs")
-    KEYFRAME_FOLDER :str = "keyframes"
+    KEYFRAME_FOLDER: str = "keyframes"
 
     # --- Logging ---
     LOG_FILE: str = "CLIMB.log"
     ERROR_FILE: str = "CLIMB_ERROR.log"
     COMPRESSION_CHECKPOINT_FILE: str = "compression.checkpoint"
     # Log Levels: DEBUG | INFO | WARN | ERROR | CRITICAL
-    LOG_LEVEL_MIN: str = "DEBUG" # logs with a lower level will be ignored before reaching the other loggers (i.e. console / file), DO NOT TOUCH
+    LOG_LEVEL_MIN: str = "DEBUG"  # logs with a lower level will be ignored before reaching the other loggers (i.e. console / file), DO NOT TOUCH
     LOG_LEVEL_CONSOLE: str = "INFO"
     LOG_LEVEL_FILE: str = "DEBUG"
     LOG_LEVEL_ERROR: str = "WARN"
@@ -61,14 +62,16 @@ class Config:
     def db_name(self) -> str:
         value = os.getenv("POSTGRES_DB_NAME")
         if not value:
-            raise ValueError("The property 'POSTGRES_DB_NAME' is required for database operations, please add it to your .env file in the project root directory")
+            raise ValueError(
+                "The property 'POSTGRES_DB_NAME' is required for database operations, please add it to your .env file in the project root directory")
         return value
 
     @property
     def db_password(self) -> str:
         value = os.getenv("POSTGRES_PASSWORD")
         if not value:
-            raise ValueError("The property 'POSTGRES_PASSWORD' is required for database operations, please add it to your .env file in the project root directory")
+            raise ValueError(
+                "The property 'POSTGRES_PASSWORD' is required for database operations, please add it to your .env file in the project root directory")
         return value
 
     # --- Search Engine URL ---
@@ -76,7 +79,8 @@ class Config:
     def search_engine_url(self) -> str:
         value = os.getenv("SEARCH_ENGINE_URL")
         if not value:
-            raise ValueError("The property 'SEARCH_ENGINE_URL' is required to run the search engine, please add it to your .env file in the project root directory")
+            raise ValueError(
+                "The property 'SEARCH_ENGINE_URL' is required to run the search engine, please add it to your .env file in the project root directory")
         return value
 
     @property
@@ -90,7 +94,6 @@ class Config:
         except ValueError as e:
             raise ValueError(
                 "SEARCH_ENGINE_PORT must be an integer in your .env file, e.g. SEARCH_ENGINE_PORT=5000") from e
-
 
 
 @dataclass

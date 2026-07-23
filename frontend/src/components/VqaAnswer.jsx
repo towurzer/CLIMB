@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import {useState, useEffect} from "react";
 
-function VqaAnswer({ apiUrl, selectedResult, onSubmitted }) {
+function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
     const [question, setQuestion] = useState("");
     const [answer, setAnswer] = useState("");
     const [askingStatus, setAskingStatus] = useState(null);
@@ -32,8 +32,8 @@ function VqaAnswer({ apiUrl, selectedResult, onSubmitted }) {
                 `${apiUrl}/climb/videos/${selectedResult.video_id}/${selectedResult.shot_id}/ask`,
                 {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ question: question.trim() }),
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({question: question.trim()}),
                 }
             );
             const data = await res.json();
@@ -62,7 +62,7 @@ function VqaAnswer({ apiUrl, selectedResult, onSubmitted }) {
         try {
             const res = await fetch(`${apiUrl}/climb/dres/submit/vqa`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
                     text_answer: submitText,
                     question: question.trim() || null,

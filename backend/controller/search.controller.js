@@ -2,16 +2,16 @@ const queries = require('../models/queries');
 
 exports.searchVideos = async (req, res) => {
     try {
-        const { q } = req.query;
+        const {q} = req.query;
         const page = Math.max(parseInt(req.query.page || '1', 10), 1);
         const perPage = Math.min(Math.max(parseInt(req.query.per_page || '24', 10), 1), 100);
 
         if (!q) {
-            return res.status(400).json({ error: "Query parameter 'q' is required" });
+            return res.status(400).json({error: "Query parameter 'q' is required"});
         }
 
         console.log(`Searching for ${q} page=${page} per_page=${perPage}`)
-        
+
         // Parse exclude parameter from query
         const excludeMatch = q.match(/--exclude:\s*([^]*?)(?:\s*$)/);
         let exclude = [];
@@ -35,6 +35,6 @@ exports.searchVideos = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: "Internal Server Error" });
+        res.status(500).json({error: "Internal Server Error"});
     }
 };

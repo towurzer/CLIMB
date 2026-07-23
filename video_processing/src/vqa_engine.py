@@ -18,25 +18,26 @@ class VQAEngine:
         if self.device == "cuda":
             torch.cuda.empty_cache()
             gc.collect()
-        
+
         try:
             self.processor = Blip2Processor.from_pretrained(config.VQA_MODEL_NAME)
-            
+
             if self.device == "cuda":
                 self.logger.info("Configuring BLIP model for GPU ...")
-                
+
                 # Limit VRAM for BLIP-2 to 7GB, so SigLIP 2 has space
                 max_memory_mapping = {0: "7GiB"}
                 quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-                
+
                 self.model = Blip2ForConditionalGeneration.from_pretrained(
                     config.VQA_MODEL_NAME,
                     quantization_config=quantization_config,
                     device_map="auto",
                     max_memory=max_memory_mapping,
-                    low_cpu_mem_usage=True  # avoids loading the full model into CPU memory before quantization, which can cause OOM errors
+                    low_cpu_mem_usage=True
+                    # avoids loading the full model into CPU memory before quantization, which can cause OOM errors
                 )
-                
+
             else:
                 self.logger.info("Loading BLIP model on CPU with 32-bit precision ...")
                 # If CUDA is not available, load the model with 32 float precision as standard
@@ -47,7 +48,7 @@ class VQAEngine:
 
         except Exception as e:
             self.logger.error(f"Failed to load model {config.VQA_MODEL_NAME}: {e}")
-            
+
     def answer_question(self, image_path: str, question: str) -> str:
         """
         Answers a question about the content of an image.
@@ -69,7 +70,7 @@ class VQAEngine:
 
             answer = self.processor.decode(output[0], skip_special_tokens=True)
             return answer
-    
+
         except Exception as e:
             self.logger.error(f"Error during VQA processing: {e}")
             return "Error: Failed to process the question."

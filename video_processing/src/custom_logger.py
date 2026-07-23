@@ -30,7 +30,5 @@ def setup_logging():
     root_logger.addHandler(console_handler)
 
 
-
 def get_logger(tag):
     return logging.getLogger(tag.upper())
-

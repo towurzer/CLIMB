@@ -367,19 +367,19 @@
                     "status": {
                       "type": "string"
                     },
-                        "evaluation_id": {
-                          "type": "string"
-                        },
-                        "selected_name": {
-                          "type": "string",
-                          "nullable": true
-                        },
-                        "defaulted": {
-                          "type": "boolean"
-                        },
-                        "message": {
-                          "type": "string"
-                        }
+                    "evaluation_id": {
+                      "type": "string"
+                    },
+                    "selected_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "defaulted": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
                   }
                 }
               }

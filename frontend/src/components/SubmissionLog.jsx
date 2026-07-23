@@ -1,4 +1,4 @@
-function SubmissionLog({ submissions }) {
+function SubmissionLog({submissions}) {
     if (submissions.length === 0) return null;
 
     return (

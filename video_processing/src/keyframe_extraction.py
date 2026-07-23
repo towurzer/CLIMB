@@ -40,7 +40,7 @@ def process_video_and_shots(conn, video_id, video_path, scene_file_path, do_db_p
 
         keyframe_count = 0
         keyframes_dir = os.path.join(conf.DATA_DIR, conf.KEYFRAME_FOLDER)
-        os.makedirs(keyframes_dir, exist_ok=True)   # create keyframes directory if it doesn't exist
+        os.makedirs(keyframes_dir, exist_ok=True)  # create keyframes directory if it doesn't exist
 
         for line_num, line in enumerate(lines):
             clean_line = line.strip().replace(',', ' ')
@@ -64,15 +64,15 @@ def process_video_and_shots(conn, video_id, video_path, scene_file_path, do_db_p
                     # fallback: if the frame is not read correctly, try reading sequentially
                     if not ret:
                         opencv_logger.warn(f"Could not read frame {target} in {video_id}, trying sequential read")
-                        
-                        
+
                         # go back to the start of the shot
                         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-                        for current_frame in range (start_frame, target + 1):
+                        for current_frame in range(start_frame, target + 1):
                             ret, frame = cap.read()
                             if not ret:
                                 # video absolutely broken --> skip
-                                opencv_logger.warn(f"Could not read frame {current_frame} in {video_id} during sequential read")
+                                opencv_logger.warn(
+                                    f"Could not read frame {current_frame} in {video_id} during sequential read")
                                 break
 
                     if ret:
@@ -84,11 +84,12 @@ def process_video_and_shots(conn, video_id, video_path, scene_file_path, do_db_p
                         continue
 
                 if do_db_population:
-                    db_logger.debug(f"Inserting keyframe {target} of shot {line_num} for video {video_id} into database")
+                    db_logger.debug(
+                        f"Inserting keyframe {target} of shot {line_num} for video {video_id} into database")
                     cur.execute(DBQueries.insert_shot_metadata, (video_id, start_frame, end_frame, target, img_path))
 
                 keyframe_count += 1
-            
+
             keyframe_count_total += keyframe_count
 
     conn.commit()

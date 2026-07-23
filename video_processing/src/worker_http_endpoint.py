@@ -67,9 +67,11 @@ def do_vqa(request: VQARequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def start():
     conf = Config()
     uvicorn.run(app, host=conf.search_engine_url, port=conf.search_engine_port)
+
 
 if __name__ == "__main__":
     start()

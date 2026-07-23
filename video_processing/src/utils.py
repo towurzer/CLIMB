@@ -8,5 +8,6 @@ def create_dir(dir_path):
     """
     os.makedirs(dir_path, exist_ok=True)
 
+
 def has_flag(argv, flags):
     return any(flag in argv for flag in flags)

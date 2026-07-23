@@ -1,8 +1,8 @@
-const { Pool } = require('pg');
+const {Pool} = require('pg');
 const pgvector = require('pgvector/pg');
 const axios = require('axios');
 const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
+require('dotenv').config({path: path.resolve(__dirname, '../../.env')});
 
 
 const pool = new Pool({
@@ -30,11 +30,11 @@ async function initDatabase() {
         await pgvector.registerType(client);
         console.log("Successfully registered pgvector type.");
         client.release();
-    }
-    catch (err) {
+    } catch (err) {
         console.error("Failed to connect to PostgreSQL:", err);
     }
 }
+
 initDatabase();
 
 pool.on('connect', async (client) => {
@@ -49,13 +49,13 @@ module.exports = {
     searchByText: async (queryText, exclude = [], topK = 50) => {
         try {
             const cleanPrompt = queryText.split(" --exclude:")[0].trim();
-            
+
             const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
                 prompt: cleanPrompt,
                 exclude: exclude,
                 top_k: topK
             });
-    
+
             return res.data.results.map(shot => ({
                 video_id: shot.video_id,
                 shot_id: shot.shot_id,
@@ -68,7 +68,7 @@ module.exports = {
                 end_time_ms: shot.end_frame_time_ms,
                 thumbnail_url: `${BACKEND_URL}/keyframes/${shot.image_path.split('/').pop()}`
             }));
-    
+
         } catch (error) {
             console.error("Failed to connect to Python Worker");
             throw error;
@@ -79,17 +79,18 @@ module.exports = {
     getAllVideos: async (page = 1, perPage = 20) => {
         const offset = (page - 1) * perPage;
 
-        const countSql = `SELECT COUNT(*)::int AS total FROM videos;`;
+        const countSql = `SELECT COUNT(*) ::int AS total
+                          FROM videos;`;
         const videosSql = `
-            SELECT
-                v.video_id,
-                v.fps,
-                COUNT(s.shot_id)::integer AS num_shots
+            SELECT v.video_id,
+                   v.fps,
+                   COUNT(s.shot_id) ::integer AS num_shots
             FROM videos v
                      LEFT JOIN shots s ON v.video_id = s.video_id
             GROUP BY v.video_id, v.fps
             ORDER BY v.video_id
-            LIMIT $1 OFFSET $2;
+                LIMIT $1
+            OFFSET $2;
         `;
 
         const [countRes, videosRes] = await Promise.all([
@@ -105,9 +106,10 @@ module.exports = {
         let prefMap = new Map();
         if (videoIds.length > 0) {
             const preferredSql = `
-                SELECT DISTINCT ON (video_id) video_id, image_path
+                SELECT DISTINCT
+                ON (video_id) video_id, image_path
                 FROM shots
-                WHERE image_path LIKE '%_kf_00010.jpg' AND video_id = ANY($1)
+                WHERE image_path LIKE '%_kf_00010.jpg' AND video_id = ANY ($1)
                 ORDER BY video_id, start_frame ASC;
             `;
             const prefRes = await pool.query(preferredSql, [videoIds]);
@@ -124,12 +126,14 @@ module.exports = {
                 : `${BACKEND_URL}/keyframes/${row.video_id}_shot_00000_kf_00000.jpg`
         }));
 
-        return { total, videos };
+        return {total, videos};
     },
 
     getVideoDetails: async (videoId) => {
-        const sql = `SELECT video_id, fps FROM videos WHERE video_id = $1`;
-        const { rows } = await pool.query(sql, [videoId]);
+        const sql = `SELECT video_id, fps
+                     FROM videos
+                     WHERE video_id = $1`;
+        const {rows} = await pool.query(sql, [videoId]);
 
         if (rows.length === 0) return null;
 
@@ -151,17 +155,22 @@ module.exports = {
         const sql = usePagination
             ? `SELECT shot_id, start_frame, end_frame, middle_frame, image_path
                FROM shots
-                   WHERE video_id = $1
-                   ORDER BY start_frame ASC, middle_frame ASC
-                   LIMIT $2 OFFSET $3;`
+               WHERE video_id = $1
+               ORDER BY start_frame ASC, middle_frame ASC
+                   LIMIT $2
+               OFFSET $3;`
             : `SELECT shot_id, start_frame, end_frame, middle_frame, image_path
                FROM shots
-                   WHERE video_id = $1
-                   ORDER BY start_frame ASC, middle_frame ASC;`;
+               WHERE video_id = $1
+               ORDER BY start_frame ASC, middle_frame ASC;`;
         const shotsParams = usePagination ? [videoId, perPage, offset] : [videoId];
 
-        const countSql = `SELECT COUNT(*)::int AS total FROM shots WHERE video_id = $1;`;
-        const fpsSql = `SELECT fps FROM videos WHERE video_id = $1`;
+        const countSql = `SELECT COUNT(*) ::int AS total
+                          FROM shots
+                          WHERE video_id = $1;`;
+        const fpsSql = `SELECT fps
+                        FROM videos
+                        WHERE video_id = $1`;
 
         const [shotsRes, countRes, fpsRes] = await Promise.all([
             pool.query(sql, shotsParams),
@@ -181,11 +190,14 @@ module.exports = {
             thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
         }));
 
-        return { total, shots };
+        return {total, shots};
     },
 
     getSimilarShots: async (videoId, shotId) => {
-        const getEmbedSql = `SELECT embedding FROM shots WHERE video_id = $1 AND shot_id = $2`;
+        const getEmbedSql = `SELECT embedding
+                             FROM shots
+                             WHERE video_id = $1
+                               AND shot_id = $2`;
         const embedRes = await pool.query(getEmbedSql, [videoId, shotId]);
 
         if (embedRes.rows.length === 0) throw new Error("Shot not found");
@@ -198,9 +210,13 @@ module.exports = {
         const formattedVectorString = pgvector.toSql(targetVectorArray);
 
         const searchSql = `
-            SELECT
-                s.shot_id, s.video_id, s.start_frame, s.end_frame, s.image_path, v.fps,
-                1 - (s.embedding <=> $1::vector) AS score
+            SELECT s.shot_id,
+                   s.video_id,
+                   s.start_frame,
+                   s.end_frame,
+                   s.image_path,
+                   v.fps,
+                   1 - (s.embedding <=> $1::vector) AS score
             FROM shots s
                      JOIN videos v ON s.video_id = v.video_id
             WHERE s.shot_id != $2
@@ -209,7 +225,7 @@ module.exports = {
                 LIMIT 50;
         `;
 
-        const { rows } = await pool.query(searchSql, [formattedVectorString, shotId]);
+        const {rows} = await pool.query(searchSql, [formattedVectorString, shotId]);
 
         return rows.map(row => ({
             video_id: row.video_id,
@@ -226,11 +242,13 @@ module.exports = {
 
     askVQA: async (videoId, shotId, question) => {
         // Get actual image path from database
-        const pathSql = `SELECT image_path FROM shots WHERE shot_id = $1`;
+        const pathSql = `SELECT image_path
+                         FROM shots
+                         WHERE shot_id = $1`;
         const pathRes = await pool.query(pathSql, [shotId]);
-        
+
         if (pathRes.rows.length === 0) throw new Error("Shot not found");
-        
+
         const imagePath = pathRes.rows[0].image_path;
 
         console.log(`Asking python ${imagePath}, ${question}`);
@@ -238,7 +256,7 @@ module.exports = {
             image_path: imagePath,
             question: question
         });
-    
+
         return res.data.answer;
     }
 };
