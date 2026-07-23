@@ -89,8 +89,7 @@ If you click on a video you can see all the scenes. If you click one it will ope
 
 Under the main video screen you cann see all keyframes to scroll through and a large submit to DRES button if you want to
 submit the current scene.
-Additionally there is an "ask VQA" field where you can ask the backend easy questions like the color of the protagonists
-shirt.
+Additionally there is an "VQA-Answer" field where you can enter a textual answer for a Visual Question Answering Task. 
 
 Going back to the search tab, you can search for video scenes including specific content.
 
@@ -181,7 +180,6 @@ video_processing/
         main.py                # Pipeline entry point
         search_engine.py       # Search and embedding service
         utils.py               # Utility functions
-        vqa_engine.py          # VQA inference engine
         worker_http_endpoint.py # Search Engine HTTP interface 
     logs/                     # Log files (local only)
    
@@ -230,15 +228,15 @@ You can control different stages of CLIMB using the following flags:
 python main.py [OPTIONS]
 ```
 
-| Flag   | Long option                  | Description                                                                     |
-|--------|------------------------------|---------------------------------------------------------------------------------|
+| Flag   | Long option                  | Description                                                                    |
+|--------|------------------------------|--------------------------------------------------------------------------------|
 | -c     | --compress                   | Compress the dataset videos using FFmpeg to allow for efficient video retrieval |
-| -spc   | --showshowPostgresCommand    | Create and show the command to create and start the postgres database           |
-| -ek    | --extractKeyframes           | Extract the Keyframes to store and embed, also updates the Database             |
-| -ekndb | --extractKeyframesNoDatabase | Keyframe extraction without editing the Database                                |
-| -ee    | --extractEmbeddings          | Embed the Images and store the vectors in the Database                          |
-| -start | --startSearchEngine          | Start the Webserver which embeds user Queries and answers VQA Questions.        |
-| -h     | --help                       | Shows how to use the CLIMB-CLI and exits                                        |  
+| -spc   | --showshowPostgresCommand    | Create and show the command to create and start the postgres database          |
+| -ek    | --extractKeyframes           | Extract the Keyframes to store and embed, also updates the Database            |
+| -ekndb | --extractKeyframesNoDatabase | Keyframe extraction without editing the Database                               |
+| -ee    | --extractEmbeddings          | Embed the Images and store the vectors in the Database                         |
+| -start | --startSearchEngine          | Start the Webserver which embeds user Queries.        |
+| -h     | --help                       | Shows how to use the CLIMB-CLI and exits                                       |  
 
 ```bash:
 python main.py --help
@@ -336,7 +334,7 @@ For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 #### 1.5 Start the Search Engine
 
 You are all set, now you can finally start the Search Engine which will open up a connection for the backend to connect
-to, to encode the searches and anser VQA-Questions.
+to, in order to encode the searches.
 Just run
 
 ```bash
@@ -436,7 +434,11 @@ one included, browser based wise I like to use
 
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
   
+
 TODO: add submit all scenes with apples
+
 TODO: add start end time slider to check submission
+
 TODO: add submit only text vqa
+
 TODO: fix keyframe extraction

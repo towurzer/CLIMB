@@ -1,17 +1,13 @@
 import {useState, useEffect} from "react";
 
 function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
-    const [question, setQuestion] = useState("");
     const [answer, setAnswer] = useState("");
-    const [askingStatus, setAskingStatus] = useState(null);
     const [confirmVqa, setConfirmVqa] = useState(false);
     const [vqaStatus, setVqaStatus] = useState(null);
     const [vqaMessage, setVqaMessage] = useState("");
 
     useEffect(() => {
-        setQuestion("");
         setAnswer("");
-        setAskingStatus(null);
         setConfirmVqa(false);
         setVqaStatus(null);
         setVqaMessage("");
@@ -22,35 +18,7 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
         ? `${selectedResult.video_id} / shot ${selectedResult.shot_id}`
         : "No shot selected";
 
-    // Ask VQA question to backend
-    const handleAsk = async () => {
-        if (!question.trim() || !selectedResult) return;
-        setAskingStatus("asking");
-
-        try {
-            const res = await fetch(
-                `${apiUrl}/climb/videos/${selectedResult.video_id}/${selectedResult.shot_id}/ask`,
-                {
-                    method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({question: question.trim()}),
-                }
-            );
-            const data = await res.json();
-            const raw = data.answer || "";
-            const answerOnly = raw.includes("Answer:")
-                ? raw.split("Answer:")[1].trim()
-                : raw.trim();
-            setAnswer(answerOnly);
-            setAskingStatus("done");
-        } catch (err) {
-            console.error("VQA ask failed:", err);
-            setAskingStatus("error");
-            setTimeout(() => setAskingStatus(null), 3000);
-        }
-    };
-
-    const submitText = answer.trim() || question.trim();
+    const submitText = answer.trim();
 
     // Submit answer to DRES
     const handleVqaSubmit = async () => {
@@ -65,7 +33,6 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
                     text_answer: submitText,
-                    question: question.trim() || null,
                     video_id: selectedResult?.video_id || null,
                     start_time_ms: selectedResult?.start_time_ms || null,
                     end_time_ms: selectedResult?.end_time_ms || null,
@@ -103,41 +70,13 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
                 </span>
             </div>
 
-            {/* Question input */}
-            <div className="vqa-field-label">Question:</div>
+            {/* Answer field - the text submitted to DRES alongside the selected scene */}
+            <div className="vqa-field-label">VQA-Answer:</div>
             <div className="vqa-input-row">
                 <input
                     type="text"
                     className="vqa-input"
-                    placeholder="Ask a question about this keyframe..."
-                    value={question}
-                    onChange={(e) => {
-                        setQuestion(e.target.value);
-                        setAskingStatus(null);
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter" && question.trim() && selectedResult) {
-                            handleAsk();
-                        }
-                    }}
-                    disabled={!selectedResult || askingStatus === "asking"}
-                />
-                <button
-                    className="vqa-ask-btn"
-                    onClick={handleAsk}
-                    disabled={!question.trim() || !selectedResult || askingStatus === "asking"}
-                >
-                    {askingStatus === "asking" ? "..." : "Ask"}
-                </button>
-            </div>
-
-            {/* Answer field - editable, auto-filled by VQA response */}
-            <div className="vqa-field-label">Answer / text to submit to DRES:</div>
-            <div className="vqa-input-row">
-                <input
-                    type="text"
-                    className="vqa-input"
-                    placeholder="Enter text to submit with the selected scene..."
+                    placeholder="Enter the answer to submit with the selected scene..."
                     value={answer}
                     onChange={(e) => {
                         setAnswer(e.target.value);
@@ -165,9 +104,7 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
                             ? "Submitted!"
                             : vqaStatus === "error"
                                 ? "Error - try again?"
-                                : answer.trim()
-                                    ? "Submit answer to DRES"
-                                    : "Submit text to DRES"}
+                                : "Submit answer to DRES"}
                 </button>
             ) : (
                 <div className="confirm-row">

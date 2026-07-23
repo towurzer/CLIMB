@@ -238,25 +238,5 @@ module.exports = {
             end_time_ms: Math.floor((row.end_frame / row.fps) * 1000),
             thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
         }));
-    },
-
-    askVQA: async (videoId, shotId, question) => {
-        // Get actual image path from database
-        const pathSql = `SELECT image_path
-                         FROM shots
-                         WHERE shot_id = $1`;
-        const pathRes = await pool.query(pathSql, [shotId]);
-
-        if (pathRes.rows.length === 0) throw new Error("Shot not found");
-
-        const imagePath = pathRes.rows[0].image_path;
-
-        console.log(`Asking python ${imagePath}, ${question}`);
-        const res = await axios.post(`${SEARCH_ENGINE_URL}/api/vqa`, {
-            image_path: imagePath,
-            question: question
-        });
-
-        return res.data.answer;
     }
 };

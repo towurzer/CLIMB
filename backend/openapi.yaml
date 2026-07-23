@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Video Retrieval API",
-    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, Visual Question answering and providing, and DRES integration.",
+    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item and VQA text answer submissions).",
     "version": "1.0.0"
   },
   "servers": [
@@ -183,106 +183,6 @@
                     "total": {
                       "type": "integer",
                       "description": "Total number of shots for this video, regardless of pagination."
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/climb/videos/{video_id}/ask": {
-      "post": {
-        "summary": "Ask the AI model a question about a specific video",
-        "operationId": "askVideoVQA",
-        "parameters": [
-          {
-            "name": "video_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VqaAskRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The AI's answer",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "question": {
-                      "type": "string"
-                    },
-                    "answer": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/climb/videos/{video_id}/{shot_id}/ask": {
-      "post": {
-        "summary": "Ask the AI model a question about a specific shot",
-        "operationId": "askShotVQA",
-        "parameters": [
-          {
-            "name": "video_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "shot_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VqaAskRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The AI's answer",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "question": {
-                      "type": "string"
-                    },
-                    "answer": {
-                      "type": "string"
                     }
                   }
                 }
@@ -692,10 +592,6 @@
           "text_answer": {
             "type": "string"
           },
-          "question": {
-            "type": "string",
-            "nullable": true
-          },
           "video_id": {
             "type": "string",
             "nullable": true
@@ -711,25 +607,6 @@
         },
         "required": [
           "text_answer"
-        ]
-      },
-      "VqaAskRequest": {
-        "type": "object",
-        "properties": {
-          "video_id": {
-            "type": "string"
-          },
-          "shot_id": {
-            "type": "integer"
-          },
-          "question": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "video_id",
-          "shot_id",
-          "question"
         ]
       },
       "DresLoginRequest": {

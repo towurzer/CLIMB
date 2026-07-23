@@ -142,8 +142,8 @@ exports.submitToDres = async (req, res) => {
 };
 
 exports.submitVqaToDres = async (req, res) => {
-    const {text_answer, question, video_id, start_time_ms, end_time_ms} = req.body;
-    const textToSubmit = (text_answer || question || "").trim();
+    const {text_answer, video_id, start_time_ms, end_time_ms} = req.body;
+    const textToSubmit = (text_answer || "").trim();
 
     if (!dresState.connected || !dresState.evaluationId) {
         return res.status(401).json({error: "Not connected to DRES. Please login first."});

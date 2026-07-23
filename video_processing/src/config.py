@@ -14,9 +14,6 @@ class Config:
     EMBEDDING_BATCH_SIZE: int = 16
     SEARCH_TOP_K: int = 48
 
-    # --- VQA Model parameters ---
-    VQA_MODEL_NAME: str = "Salesforce/blip2-opt-2.7b"
-
     # --- Video Compression ---
     WEB_RESOLUTION = 480  # fast to process and loads instantly in web UIs.
     VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}  # valid video extensions
@@ -119,6 +116,6 @@ Options:
 -ek, --extractKeyframes        Extract the Keyframes to store and embed, and update the Database 
 -ekndb, --extractKeyframesNoDatabase    Keyframe extraction without editing the Database
 -ee, --extractEmbeddings       Embed the Images and store the vectors in the Database
--start, --startSearchEngine                     Start the Webserver which embeds user Queries and answers VQA Questions.
+-start, --startSearchEngine                     Start the Webserver which embeds user Queries.
 -h, --help						Show this help message and exit
 """
