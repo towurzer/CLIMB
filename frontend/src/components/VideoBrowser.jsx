@@ -178,17 +178,20 @@ function VideoBrowser({apiUrl, onSelectShot, openVideoId, onOpenVideoHandled}) {
         setShotsTotal(null);
     };
 
-    // When user clicks a shot, convert to result format and pass up
+    // When user clicks a shot, convert to result format and pass up.
+    // middle_frame has to come along, it is the time we submit to DRES
     const handleShotClick = (shot) => {
+        const fps = shot.fps || selectedVideo.fps || 25;
         onSelectShot({
             video_id: selectedVideo.video_id,
             shot_id: shot.shot_id,
             score: 0,
             start_frame: shot.start_frame,
             end_frame: shot.end_frame,
-            fps: shot.fps || selectedVideo.fps || 25,
-            start_time_ms: Math.round((shot.start_frame / (shot.fps || selectedVideo.fps || 25)) * 1000),
-            end_time_ms: Math.round((shot.end_frame / (shot.fps || selectedVideo.fps || 25)) * 1000),
+            middle_frame: shot.middle_frame,
+            fps: fps,
+            start_time_ms: Math.round((shot.start_frame / fps) * 1000),
+            end_time_ms: Math.round((shot.end_frame / fps) * 1000),
             thumbnail_url: shot.thumbnail_url,
         });
     };

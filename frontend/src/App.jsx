@@ -7,7 +7,9 @@ import ShotBrowser from "./components/ShotBrowser";
 import VideoBrowser from "./components/VideoBrowser";
 import VqaAnswer from "./components/VqaAnswer";
 import SubmissionLog from "./components/SubmissionLog";
+import KeyframeTime from "./components/KeyframeTime";
 import {describeDresResult, describeDresError} from "./dresSubmission";
+import {formatTimecode, parseTimecode, snapMsToFrame, keyframeMs} from "./timecode";
 import "./App.css";
 
 const backendHost = import.meta.env.BACKEND_URL || "localhost";
@@ -44,6 +46,32 @@ function App() {
     const [submissions, setSubmissions] = useState([]);
     const [excludedVideos, setExcludedVideos] = useState([]);
     const [similarSource, setSimilarSource] = useState(null);
+    // null means "whatever the selected keyframe says", a string means the user typed over it
+    const [timeOverride, setTimeOverride] = useState({from: null, to: null});
+
+    // The submitted time is the keyframe, not the scene, so both fields start out on the keyframe
+    const selectedKeyframeMs = keyframeMs(selectedResult);
+    const autoTimecode = selectedKeyframeMs != null ? formatTimecode(selectedKeyframeMs) : "";
+    const fromText = timeOverride.from ?? autoTimecode;
+    const toText = timeOverride.to ?? autoTimecode;
+    const fromMs = parseTimecode(fromText);
+    const toMs = parseTimecode(toText);
+    const timesValid = fromMs !== null && toMs !== null;
+    // frame snapped, so DRES never gets a moment sitting between two frames
+    const submitStartMs = timesValid ? snapMsToFrame(fromMs, selectedResult?.fps) : null;
+    const submitEndMs = timesValid ? snapMsToFrame(toMs, selectedResult?.fps) : null;
+
+    // Picking a new keyframe throws away whatever the user typed.
+    // Keyed on the values instead of the object, because every selection path builds a fresh one.
+    useEffect(() => {
+        setTimeOverride({from: null, to: null});
+    }, [selectedResult?.video_id, selectedResult?.shot_id, selectedKeyframeMs]);
+
+    const handleTimeChange = useCallback((field, value) => {
+        setTimeOverride((prev) => ({...prev, [field]: value}));
+        // changing the time mid confirmation means the confirmation was for a different time
+        setConfirmSubmit(false);
+    }, []);
 
     // get current time string
     const timeNow = () => new Date().toLocaleTimeString("cs-CZ", {
@@ -283,27 +311,29 @@ function App() {
         // of something was submitted - reseting it
         setConfirmSubmit(false);
         setSubmitStatus(null);
-        setSelectedResult((prev) => ({
-            video_id: prev?.video_id || shot.video_id,
-            shot_id: shot.shot_id,
-            score: prev?.score || 0,
-            middle_frame: shot.middle_frame,
-            start_frame: shot.start_frame,
-            end_frame: shot.end_frame,
-
+        setSelectedResult((prev) => {
             // 25 is just a backup becuase it is most common
-            fps: shot.fps || prev?.fps || 25,
-            // we need to recalculate, because DRES is usinf ms not frames
-            // use middle frame to set start and end time since start frame and end frame are the starting and end points of the whole scen
-            // we only want the starting frame of the shot currently selected by the user (called middle frame due to legacy code)
-            start_time_ms: shot.middle_frame ? Math.round((shot.middle_frame / (shot.fps || prev?.fps || 25)) * 1000) : 0,
-            end_time_ms: shot.middle_frame ? Math.round((shot.middle_frame / (shot.fps || prev?.fps || 25)) * 1000) : 0,
-            thumbnail_url: shot.thumbnail_url,
-        }));
+            const fps = shot.fps || prev?.fps || 25;
+            return {
+                video_id: prev?.video_id || shot.video_id,
+                shot_id: shot.shot_id,
+                score: prev?.score || 0,
+                middle_frame: shot.middle_frame,
+                start_frame: shot.start_frame,
+                end_frame: shot.end_frame,
+                fps: fps,
+                // we need to recalculate, because DRES is usinf ms not frames.
+                // these are the bounds of the whole scene, what we submit comes from the keyframe time fields
+                start_time_ms: Math.round((shot.start_frame / fps) * 1000),
+                end_time_ms: Math.round((shot.end_frame / fps) * 1000),
+                thumbnail_url: shot.thumbnail_url,
+            };
+        });
     }, []);
 
     //Submit to DRES  - calles after clicking on submit button
-    const handleSubmit = useCallback(async (result) => {
+    // the times come from the keyframe time fields, not from the result itself
+    const handleSubmit = useCallback(async (result, startTimeMs, endTimeMs) => {
         setSubmitStatus("submitting");
         setSubmitMessage("Submitting to DRES...");
         setConfirmSubmit(false);
@@ -312,8 +342,8 @@ function App() {
             type: "segment",
             video_id: result.video_id,
             shot_id: result.shot_id,
-            start_time_ms: result.start_time_ms,
-            end_time_ms: result.end_time_ms,
+            start_time_ms: startTimeMs,
+            end_time_ms: endTimeMs,
             time: timeNow(),
             status: "submitting",
         };
@@ -325,8 +355,8 @@ function App() {
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
                     video_id: result.video_id,
-                    start_time_ms: result.start_time_ms,
-                    end_time_ms: result.end_time_ms,
+                    start_time_ms: startTimeMs,
+                    end_time_ms: endTimeMs,
                 }),
             });
             const data = await res.json();
@@ -533,6 +563,15 @@ function App() {
                         <>
                             <VideoPlayer result={selectedResult} apiUrl={API_URL}/>
                             <div className="actions">
+                                {/* what actually gets submitted - auto filled from the keyframe, editable */}
+                                <KeyframeTime
+                                    from={fromText}
+                                    to={toText}
+                                    fromValid={fromMs !== null}
+                                    toValid={toMs !== null}
+                                    onChange={handleTimeChange}
+                                    disabled={submitStatus === "submitting"}
+                                />
                                 {/* if already submitted, we can see it */}
                                 {isDuplicate && (
                                     <div className="duplicate-warning">Already submitted this shot!</div>
@@ -542,20 +581,23 @@ function App() {
                                     <button
                                         className={`submit-btn ${submitStatus || ""} ${isDuplicate ? "duplicate" : ""}`}
                                         onClick={() => {
+                                            // a time we cannot parse must never reach DRES
+                                            if (!timesValid) return;
                                             if (!submitStatus) setConfirmSubmit(true);
                                             if (submitStatus === "error") setConfirmSubmit(true);
                                         }}
-                                        disabled={submitStatus === "submitting" || submitStatus === "success"}
+                                        disabled={submitStatus === "submitting" || submitStatus === "success" || !timesValid}
                                     >
                                         {submitStatus === "submitting" ? "Submitting..."
                                             : submitStatus === "success" ? "Submitted!"
                                                 : submitStatus === "error" ? "Error - try again?"
-                                                    : "Submit to DRES"}
+                                                    : !timesValid ? "Fix the time to submit"
+                                                        : "Submit to DRES"}
                                     </button>
                                 ) : (
                                     <div className="confirm-row">
                                         <button className="submit-btn confirm"
-                                                onClick={() => handleSubmit(selectedResult)}>
+                                                onClick={() => handleSubmit(selectedResult, submitStartMs, submitEndMs)}>
                                             Yes, submit!
                                         </button>
                                         <button className="submit-btn cancel" onClick={() => setConfirmSubmit(false)}>
@@ -582,7 +624,8 @@ function App() {
                                     <span>Video: {selectedResult.video_id}</span>
                                     <span>Shot: {selectedResult.shot_id}</span>
                                     <span>Score: {(selectedResult.score * 100).toFixed(1)}%</span>
-                                    <span>Time: {(selectedResult.start_time_ms / 1000).toFixed(1)}s – {(selectedResult.end_time_ms / 1000).toFixed(1)}s</span>
+                                    <span>Scene: {(selectedResult.start_time_ms / 1000).toFixed(1)}s – {(selectedResult.end_time_ms / 1000).toFixed(1)}s</span>
+                                    <span>Keyframe: {autoTimecode || "unknown"}</span>
                                 </div>
                             </div>
                             {/*  film tape under the video */}
@@ -598,7 +641,13 @@ function App() {
                         <div className="no-selection">Select a result to preview the video segment</div>
                     )}
                     {/* always visible - vqa and submissions*/}
-                    <VqaAnswer apiUrl={API_URL} selectedResult={selectedResult} onSubmitted={handleVqaSubmitted}/>
+                    <VqaAnswer
+                        apiUrl={API_URL}
+                        selectedResult={selectedResult}
+                        startTimeMs={submitStartMs}
+                        endTimeMs={submitEndMs}
+                        onSubmitted={handleVqaSubmitted}
+                    />
                     <SubmissionLog submissions={submissions}/>
                 </div>
             </div>

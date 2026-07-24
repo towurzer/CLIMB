@@ -214,6 +214,7 @@ module.exports = {
                    s.video_id,
                    s.start_frame,
                    s.end_frame,
+                   s.middle_frame,
                    s.image_path,
                    v.fps,
                    1 - (s.embedding <=> $1::vector) AS score
@@ -239,6 +240,7 @@ module.exports = {
             score: row.score ? parseFloat(row.score.toFixed(4)) : 0,
             start_frame: row.start_frame,
             end_frame: row.end_frame,
+            middle_frame: row.middle_frame,
             fps: row.fps,
             start_time_ms: Math.floor((row.start_frame / row.fps) * 1000),
             end_time_ms: Math.floor((row.end_frame / row.fps) * 1000),

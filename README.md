@@ -165,11 +165,13 @@ frontend/
         App.css             # Styles
         main.jsx            # React entry point
         dresSubmission.js   # formatting of DRES submission results
+        timecode.js         # timecode <-> ms <-> frame conversion
         components/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
             VideoPlayer.jsx # Video player with segment loop
             ShotBrowser.jsx # Filmstrip navigation
+            KeyframeTime.jsx # editable keyframe time fields
             VideoBrowser.jsx# Browse all videos
             VqaAnswer.jsx   # VQA answer input + DRES submit buttons
             SubmissionLog.jsx # Submission history log
@@ -443,7 +445,5 @@ one included, browser based wise I like to use
   
 
 TODO: add submit all scenes with apples
-
-TODO: add start end time slider to check submission
 
 TODO: fix keyframe extraction

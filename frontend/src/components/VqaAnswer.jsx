@@ -20,7 +20,9 @@ const SUBMIT_MODES = {
 const orderConfirmRow = (mode, [confirmButton, cancelButton]) =>
     SUBMIT_MODES[mode].confirmFirst ? [confirmButton, cancelButton] : [cancelButton, confirmButton];
 
-function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
+// startTimeMs/endTimeMs come from the keyframe time fields above the submit button,
+// so a media submission carries exactly the time the user sees there (null while it does not parse)
+function VqaAnswer({apiUrl, selectedResult, startTimeMs, endTimeMs, onSubmitted}) {
     const [answer, setAnswer] = useState("");
     const [confirmMode, setConfirmMode] = useState(null);
     const [vqaStatus, setVqaStatus] = useState(null);
@@ -40,10 +42,13 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
 
     const submitText = answer.trim();
     const canSubmit = Boolean(submitText && selectedResult);
+    // text only never carries a time, so only the media submission cares about a broken timecode
+    const canSubmitMedia = canSubmit && startTimeMs != null && endTimeMs != null;
 
     // Submit answer to DRES, either with or without the selected shot
     const handleVqaSubmit = async (mode) => {
         if (!canSubmit) return;
+        if (mode === "media" && !canSubmitMedia) return;
         setVqaStatus("submitting");
         setConfirmMode(null);
         setVqaMessage("");
@@ -53,8 +58,8 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
             : {
                 text_answer: submitText,
                 video_id: selectedResult?.video_id || null,
-                start_time_ms: selectedResult?.start_time_ms || null,
-                end_time_ms: selectedResult?.end_time_ms || null,
+                start_time_ms: startTimeMs ?? null,
+                end_time_ms: endTimeMs ?? null,
             };
 
         try {
@@ -90,9 +95,10 @@ function VqaAnswer({apiUrl, selectedResult, onSubmitted}) {
             key={mode}
             className={`vqa-submit-btn ${vqaStatus || ""}`}
             onClick={() => {
+                if (mode === "media" && !canSubmitMedia) return;
                 if (!vqaStatus || vqaStatus === "error") setConfirmMode(mode);
             }}
-            disabled={!canSubmit || vqaStatus === "submitting" || vqaStatus === "success"}
+            disabled={(mode === "media" ? !canSubmitMedia : !canSubmit) || vqaStatus === "submitting" || vqaStatus === "success"}
         >
             {vqaStatus === "submitting"
                 ? "Submitting..."
