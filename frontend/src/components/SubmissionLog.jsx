@@ -1,3 +1,5 @@
+import {formatTimecode} from "../timecode";
+
 function SubmissionLog({submissions}) {
     if (submissions.length === 0) return null;
 
@@ -19,7 +21,7 @@ function SubmissionLog({submissions}) {
                             </span>
                         ) : (
                             <span className="log-text">
-                                {sub.video_id} / shot {sub.shot_id} ({(sub.start_time_ms / 1000).toFixed(1)}s)
+                                {sub.video_id} / shot {sub.shot_id} ({formatTimecode(sub.start_time_ms)})
                             </span>
                         )}
                         <span className={`log-status ${sub.status}`}>

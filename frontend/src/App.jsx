@@ -561,6 +561,13 @@ function App() {
                 <div className="player-panel">
                     {selectedResult ? (
                         <>
+                            <div className="result-details">
+                                <span>Video: {selectedResult.video_id}</span>
+                                <span>Shot: {selectedResult.shot_id}</span>
+                                <span>Score: {(selectedResult.score * 100).toFixed(1)}%</span>
+                                <span>Scene: {formatTimecode(selectedResult.start_time_ms)} – {formatTimecode(selectedResult.end_time_ms)}</span>
+                                <span>Keyframe: {autoTimecode || "unknown"}</span>
+                            </div>
                             <VideoPlayer result={selectedResult} apiUrl={API_URL}/>
                             <div className="actions">
                                 {/* what actually gets submitted - auto filled from the keyframe, editable */}
@@ -619,14 +626,6 @@ function App() {
                                         {submitMessage}
                                     </div>
                                 )}
-
-                                <div className="result-details">
-                                    <span>Video: {selectedResult.video_id}</span>
-                                    <span>Shot: {selectedResult.shot_id}</span>
-                                    <span>Score: {(selectedResult.score * 100).toFixed(1)}%</span>
-                                    <span>Scene: {(selectedResult.start_time_ms / 1000).toFixed(1)}s – {(selectedResult.end_time_ms / 1000).toFixed(1)}s</span>
-                                    <span>Keyframe: {autoTimecode || "unknown"}</span>
-                                </div>
                             </div>
                             {/*  film tape under the video */}
                             <ShotBrowser

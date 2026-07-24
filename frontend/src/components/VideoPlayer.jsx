@@ -1,4 +1,5 @@
 import {useRef, useEffect, useState} from "react";
+import {formatTimecode} from "../timecode";
 
 function VideoPlayer({result, apiUrl}) {
     const videoRef = useRef(null);
@@ -61,7 +62,7 @@ function VideoPlayer({result, apiUrl}) {
 
             <div className="player-controls">
                 <div className="time-info">
-                    Segment: {startSec.toFixed(1)}s – {endSec.toFixed(1)}s
+                    Preview: {formatTimecode(startSec * 1000)} – {formatTimecode(endSec * 1000)}
                     {result.fps && <span> ({result.fps} fps)</span>}
                 </div>
                 <label className="loop-toggle">
