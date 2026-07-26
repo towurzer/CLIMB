@@ -75,7 +75,15 @@ If you are in a competition I can recommend 2 things:
 
 - sabotage your opponents
 - connect to DRES in order to be able to submit frames to the server.
-  In order to connect to dres, fill out the login field in the header.
+  In order to connect to dres, click the "Login to DRES" button in the top right of the header. A popup opens where you
+  fill in the server URL, the evaluation name (e.g. IVADL26), your username and your password. Enter submits the form,
+  Esc or a click outside closes it, and the popup closes by itself once you are connected.
+
+Once connected the popup shows which evaluation you actually landed on, with its name on top and its id underneath. That
+matters because DRES falls back to the first available evaluation if the name you asked for does not exist, so the name
+alone does not tell you where your submissions are going. The header button is your status light: a grey dot and "Login
+to DRES" while disconnected, a green dot and "DRES · &lt;evaluation name&gt;" once you are in. Click it again any time to
+reopen the popup and reconnect.
 
 If you don't want to search for something specific, but want to just browse through all the videos select the browsing
 tab on the top right.
@@ -184,6 +192,7 @@ frontend/
             VqaAnswer.jsx   # VQA answer input + DRES submit buttons
             SubmissionLog.jsx # Submission history log
             AvsSessionBar.jsx # AVS session create/join controls
+            DresLoginModal.jsx # DRES login popup
 
 video_processing/
     requirements.txt           # python dependencies        
@@ -452,8 +461,4 @@ one included, browser based wise I like to use
 
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
 
-TODO: fix keyframe extraction
-
-TODO: Move dres login to popup
-
-TODO: show dres is alive circle
+TODO: fix keyframe extraction, database architecture etc. to handle the large dataset

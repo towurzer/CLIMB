@@ -24,6 +24,7 @@ import VqaAnswer from "./components/VqaAnswer";
 import SubmissionLog from "./components/SubmissionLog";
 import KeyframeTime from "./components/KeyframeTime";
 import AvsSessionBar from "./components/AvsSessionBar";
+import DresLoginModal from "./components/DresLoginModal";
 import {describeDresResult, describeDresError} from "./dresSubmission";
 import {formatTimecode, parseTimecode, snapMsToFrame, keyframeMs} from "./timecode";
 import "./App.css";
@@ -57,6 +58,9 @@ function App() {
     const [dresConnected, setDresConnected] = useState(false);
     const [dresStatus, setDresStatus] = useState("Not connected");
     const [dresLoading, setDresLoading] = useState(false);
+    const [dresLoginOpen, setDresLoginOpen] = useState(false);
+    // what DRES actually connected us to - the name we asked for is not always the one we got
+    const [dresEvaluation, setDresEvaluation] = useState(null); // {id, name} | null
     const [snackbar, setSnackbar] = useState({visible: false, message: "", type: "info", raw: null});
     const [searchHistory, setSearchHistory] = useState([]);
     const [submissions, setSubmissions] = useState([]);
@@ -307,6 +311,7 @@ function App() {
                     ? (dresErr.description || dresErr.message || JSON.stringify(dresErr))
                     : (data?.description || data?.details || data?.error || JSON.stringify(data));
                 setDresConnected(false);
+                setDresEvaluation(null);
                 setDresStatus(msg);
                 setSnackbar({visible: true, message: msg, type: "error", raw: dresErr});
                 setTimeout(() => setSnackbar((s) => ({...s, visible: false, raw: null})), 7000);
@@ -314,6 +319,9 @@ function App() {
             }
             setDresConnected(true);
             setDresStatus(data.message || "Connected to DRES");
+            setDresEvaluation({id: data.evaluation_id || null, name: data.selected_name || dresName});
+            // nothing left to do in the popup once we are in
+            setDresLoginOpen(false);
             // update dres name if server selected a different one
             if (data.selected_name) {
                 setDresName(data.selected_name);
@@ -330,6 +338,7 @@ function App() {
         } catch (err) {
             console.error("DRES login failed:", err);
             setDresConnected(false);
+            setDresEvaluation(null);
             const errMsg = err?.message || "DRES login failed";
             setDresStatus(errMsg);
             setSnackbar({visible: true, message: errMsg, type: "error", raw: null});
@@ -607,40 +616,17 @@ function App() {
                 </div>
 
                 <div className="app-header-right">
-                    <div className="dres-login-panel">
-                        <input
-                            type="text"
-                            value={dresUrl}
-                            onChange={(e) => setDresUrl(e.target.value)}
-                            placeholder="DRES URL"
-                            title="DRES server URL"
-                        />
-                        <input
-                            type="text"
-                            value={dresName}
-                            onChange={(e) => setDresName(e.target.value)}
-                            placeholder="DRES name (e.g. IVADL26)"
-                            title="DRES evaluation name"
-                        />
-                        <input
-                            type="text"
-                            value={dresUsername}
-                            onChange={(e) => setDresUsername(e.target.value)}
-                            placeholder="Username"
-                            title="DRES username"
-                        />
-                        <input
-                            type="password"
-                            value={dresPassword}
-                            onChange={(e) => setDresPassword(e.target.value)}
-                            placeholder="Password"
-                            title="DRES password"
-                        />
-                        <button className="dres-login-btn" onClick={handleDresLogin} disabled={dresLoading}>
-                            {dresLoading ? "Connecting..." : dresConnected ? "Reconnect DRES" : "DRES Login"}
-                        </button>
-                        <span className={`dres-status ${dresConnected ? "connected" : ""}`}>{dresStatus}</span>
-                    </div>
+                    {/* the form itself lives in a popup, the header only shows where we stand */}
+                    <button
+                        className={`dres-login-btn ${dresConnected ? "connected" : ""}`}
+                        onClick={() => setDresLoginOpen(true)}
+                        title={dresStatus}
+                    >
+                        <span className="dres-login-dot"/>
+                        {dresLoading ? "Connecting..."
+                            : dresConnected ? `DRES · ${dresName}`
+                                : "Login to DRES"}
+                    </button>
                     {snackbar.visible && (
                         <div className={`snackbar ${snackbar.type || "info"}`}>
                             {snackbar.raw ? (
@@ -671,6 +657,23 @@ function App() {
                     </div>
                 </div>
             </header>
+            <DresLoginModal
+                open={dresLoginOpen}
+                onClose={() => setDresLoginOpen(false)}
+                url={dresUrl}
+                name={dresName}
+                username={dresUsername}
+                password={dresPassword}
+                onUrlChange={setDresUrl}
+                onNameChange={setDresName}
+                onUsernameChange={setDresUsername}
+                onPasswordChange={setDresPassword}
+                onSubmit={handleDresLogin}
+                loading={dresLoading}
+                connected={dresConnected}
+                status={dresStatus}
+                evaluation={dresEvaluation}
+            />
             {/* AVS collaborative session controls, only in AVS mode */}
             {isAvs && (
                 <AvsSessionBar

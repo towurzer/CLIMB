@@ -131,7 +131,7 @@ exports.connectDres = async (req, res) => {
             evaluation_id: dresState.evaluationId,
             selected_name: dresState.evaluationName || requestedName,
             defaulted: false,
-            message: `Connected to DRES successfully. Evaluation ID: ${dresState.evaluationId}`
+            message: `Connected to DRES successfully. Evaluation: ${dresState.evaluationName || requestedName} (${dresState.evaluationId})`
         });
 
     } catch (error) {
