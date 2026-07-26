@@ -1,6 +1,16 @@
 import {useEffect, useRef} from "react";
 
-function ResultsGrid({results, selectedResult, onSelect, onFindSimilar, onExcludeVideo}) {
+const EMPTY_SET = new Set();
+
+function ResultsGrid({
+    results,
+    selectedResult,
+    onSelect,
+    onFindSimilar,
+    onExcludeVideo,
+    hiddenScenes = EMPTY_SET,
+    coveredVideos = EMPTY_SET,
+}) {
     const selectedRef = useRef(null);
 
     // Scroll selected card into view when it changes
@@ -13,23 +23,31 @@ function ResultsGrid({results, selectedResult, onSelect, onFindSimilar, onExclud
         }
     }, [selectedResult]);
 
-    if (results.length === 0) {
+    // Hide scenes already submitted in the AVS session (client-side safety net on
+    // top of the server filter; also covers scenes just submitted this session).
+    // Scenes are keyed by frame range, so every keyframe of a submitted scene hides.
+    const visible = hiddenScenes.size
+        ? results.filter((r) => !hiddenScenes.has(`${r.video_id}_${r.start_frame}_${r.end_frame}`))
+        : results;
+
+    if (visible.length === 0) {
         return null;
     }
 
     return (
         <div className="results-grid">
-            {results.map((result, index) => {
+            {visible.map((result, index) => {
                 const isSelected =
                     selectedResult &&
                     selectedResult.video_id === result.video_id &&
                     selectedResult.shot_id === result.shot_id;
+                const isCovered = coveredVideos.has(result.video_id); // a keyframe from the same scene has already been submitted
 
                 return (
                     <div
                         key={`${result.video_id}_${result.shot_id}`}
                         ref={isSelected ? selectedRef : null}
-                        className={`result-card ${isSelected ? "selected" : ""}`}
+                        className={`result-card ${isSelected ? "selected" : ""} ${isCovered ? "covered" : ""}`}
                         onClick={() => onSelect(result)}
                     >
                         <div className="thumbnail-wrapper">
@@ -42,6 +60,7 @@ function ResultsGrid({results, selectedResult, onSelect, onFindSimilar, onExclud
                 {(result.score * 100).toFixed(0)}%
               </span>
                             <span className="rank-badge">{index + 1}</span>
+                            {isCovered && <span className="covered-badge" title="Video already has a correct hit">covered</span>}
                             {onFindSimilar && (
                                 <button
                                     className="similar-icon"

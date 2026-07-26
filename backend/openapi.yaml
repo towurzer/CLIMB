@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Video Retrieval API",
-    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item and VQA text answer submissions).",
-    "version": "1.0.0"
+    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).",
+    "version": "1.1.0"
   },
   "servers": [
     {
@@ -51,6 +51,15 @@
               "default": 24,
               "minimum": 1,
               "maximum": 100
+            }
+          },
+          {
+            "name": "avs_session",
+            "in": "query",
+            "required": false,
+            "description": "Active AVS session code. When provided, scenes already submitted in that collaborative session are removed from the results, and the session's idle timer is refreshed.",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -516,6 +525,147 @@
           }
         }
       }
+    },
+    "/climb/avs/session": {
+      "post": {
+        "summary": "Create a new collaborative AVS session",
+        "description": "Creates a fresh session with a random 4-letter (consonant-only) code and returns its snapshot. Sessions are shared by every client of this backend and are deleted after 5 minutes with no interaction (submit, in-session search, or GET poll).",
+        "operationId": "createAvsSession",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional human-readable label for the session"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsSession"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/avs/sessions": {
+      "get": {
+        "summary": "List active AVS sessions",
+        "description": "Lightweight listing for a 'join one of these' UI.",
+        "operationId": "listAvsSessions",
+        "responses": {
+          "200": {
+            "description": "Active sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AvsSessionSummary"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/avs/session/{code}/join": {
+      "post": {
+        "summary": "Join an existing AVS session by code",
+        "description": "Returns the session snapshot (case-insensitive code) and refreshes its idle timer. 404 means the session does not exist or has expired.",
+        "operationId": "joinAvsSession",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Joined; session snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsSession"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsSessionError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/avs/session/{code}": {
+      "get": {
+        "summary": "Fetch an AVS session snapshot (also the poll/heartbeat)",
+        "description": "Returns the current scenes, covered videos, and counts for the session, and refreshes its idle timer. Clients poll this endpoint to stay in sync and to keep the session alive; a 404 tells a client its session has expired.",
+        "operationId": "getAvsSession",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsSession"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsSessionError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -695,6 +845,7 @@
       },
       "DresSubmission": {
         "type": "object",
+        "description": "Shared by KIS and AVS. The video_id + time range are what DRES scores. For AVS, additionally pass avs_session plus the scene's start_frame/end_frame so the delivered scene is recorded into the shared session and hidden from teammates.",
         "properties": {
           "video_id": {
             "type": "string"
@@ -704,6 +855,21 @@
           },
           "end_time_ms": {
             "type": "integer"
+          },
+          "avs_session": {
+            "type": "string",
+            "nullable": true,
+            "description": "AVS session code to record this scene into. Omit for KIS submissions."
+          },
+          "start_frame": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Scene start frame; identifies the scene (with end_frame) for AVS session recording. A scene spans many keyframes, so recording by frame range hides the whole scene, not just the submitted keyframe."
+          },
+          "end_frame": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Scene end frame; see start_frame."
           }
         },
         "required": [
@@ -838,6 +1004,123 @@
           "username",
           "password",
           "dres_url"
+        ]
+      },
+      "AvsScene": {
+        "type": "object",
+        "description": "A scene submitted within an AVS session, keyed by its frame range.",
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "start_frame": {
+            "type": "integer"
+          },
+          "end_frame": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "CORRECT",
+              "WRONG",
+              "INDETERMINATE",
+              "UNDECIDABLE"
+            ],
+            "description": "DRES verdict at the time the scene was submitted (INDETERMINATE while a live judgement is pending). A CORRECT scene's video is reported in coveredVideos."
+          }
+        },
+        "required": [
+          "video_id",
+          "start_frame",
+          "end_frame",
+          "status"
+        ]
+      },
+      "AvsSession": {
+        "type": "object",
+        "description": "Snapshot of a collaborative AVS session.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "4-letter session code"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "scenes": {
+            "type": "array",
+            "description": "Scenes already submitted in this session (hide these from search / mark them in browse).",
+            "items": {
+              "$ref": "#/components/schemas/AvsScene"
+            }
+          },
+          "coveredVideos": {
+            "type": "array",
+            "description": "Video ids with at least one CORRECT hit; dim their remaining shots.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "instances": {
+                "type": "integer",
+                "description": "Number of distinct scenes submitted"
+              },
+              "distinctVideos": {
+                "type": "integer",
+                "description": "Number of distinct videos those scenes span"
+              }
+            }
+          },
+          "expiresInMs": {
+            "type": "integer",
+            "description": "Milliseconds until this session idles out, unless an interaction refreshes it"
+          }
+        },
+        "required": [
+          "code",
+          "scenes",
+          "coveredVideos",
+          "counts",
+          "expiresInMs"
+        ]
+      },
+      "AvsSessionSummary": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "instances": {
+            "type": "integer"
+          },
+          "expiresInMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "instances",
+          "expiresInMs"
+        ]
+      },
+      "AvsSessionError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
         ]
       }
     }

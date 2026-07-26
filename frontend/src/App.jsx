@@ -1,5 +1,20 @@
-// importing stuff - useState etc from react and components
-import {useState, useCallback, useEffect} from "react";
+import {useState, useCallback, useEffect, useRef} from "react";
+
+const EMPTY_SET = new Set();
+
+// Identifies a scene (shot) by its frame range, not by shot_id, which in this
+// dataset is a per-keyframe id (many keyframes share one scene). Keying on the
+// range means submitting one keyframe hides/marks the whole scene.
+const sceneKey = (videoId, startFrame, endFrame) => `${videoId}_${startFrame}_${endFrame}`;
+
+const avsHolds = (status) => status === "CORRECT" || status === "INDETERMINATE";
+
+// Scene keys to hide, from a session snapshot's scene list.
+const heldSceneKeys = (scenes) => new Set(
+    (scenes || [])
+        .filter((s) => avsHolds(s.status))
+        .map((s) => sceneKey(s.video_id, s.start_frame, s.end_frame))
+);
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
@@ -8,6 +23,7 @@ import VideoBrowser from "./components/VideoBrowser";
 import VqaAnswer from "./components/VqaAnswer";
 import SubmissionLog from "./components/SubmissionLog";
 import KeyframeTime from "./components/KeyframeTime";
+import AvsSessionBar from "./components/AvsSessionBar";
 import {describeDresResult, describeDresError} from "./dresSubmission";
 import {formatTimecode, parseTimecode, snapMsToFrame, keyframeMs} from "./timecode";
 import "./App.css";
@@ -48,6 +64,20 @@ function App() {
     const [similarSource, setSimilarSource] = useState(null);
     // null means "whatever the selected keyframe says", a string means the user typed over it
     const [timeOverride, setTimeOverride] = useState({from: null, to: null});
+
+    // AVS: task-type toggle (independent of the search/browse `mode`) and the collaborative session state that hides/marks scenes submitted.
+    const [taskMode, setTaskMode] = useState("kis"); // "kis" | "avs"
+    const [avsSession, setAvsSession] = useState(null); // {code, name, expiresInMs, counts} | null
+    const [avsSubmittedScenes, setAvsSubmittedScenes] = useState(EMPTY_SET); // Set<"videoId_shotId">
+    const [avsCoveredVideos, setAvsCoveredVideos] = useState(EMPTY_SET);      // Set<videoId>
+    const [avsExpiredCode, setAvsExpiredCode] = useState(null); // last session that idled out
+
+    const avsFilterRef = useRef({mode: "kis", code: null});
+    useEffect(() => {
+        avsFilterRef.current = {mode: taskMode, code: avsSession?.code || null};
+    }, [taskMode, avsSession]);
+
+    const isAvs = taskMode === "avs";
 
     // The submitted time is the keyframe, not the scene, so both fields start out on the keyframe
     const selectedKeyframeMs = keyframeMs(selectedResult);
@@ -136,8 +166,11 @@ function App() {
     // searchiing - asynchornous - waiting for the response from the server
     const fetchSearchPage = useCallback(async (searchQuery, page = 1, append = false) => {
         try {
+            // In AVS mode the backend hides scenes already submitted in our session
+            const {mode, code} = avsFilterRef.current;
+            const avsParam = mode === "avs" && code ? `&avs_session=${code}` : "";
             const res = await fetch(
-                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}`
+                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}`
             );
             const data = await res.json();
             const pageResults = data.results || [];
@@ -306,6 +339,86 @@ function App() {
         }
     }, [dresUrl, dresUsername, dresPassword, dresName]);
 
+    // Fold a session snapshot from the backend into local hide/mark state
+    const applyAvsSession = useCallback((data) => {
+        setAvsExpiredCode(null);
+        setAvsSession({code: data.code, name: data.name, expiresInMs: data.expiresInMs, counts: data.counts});
+        setAvsSubmittedScenes(heldSceneKeys(data.scenes));
+        setAvsCoveredVideos(new Set(data.coveredVideos || []));
+    }, []);
+
+    const createAvsSession = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_URL}/climb/avs/session`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({name: dresName || null}),
+            });
+            applyAvsSession(await res.json());
+        } catch (err) {
+            console.error("Create AVS session failed:", err);
+        }
+    }, [dresName, applyAvsSession]);
+
+    // Returns true on success so the join UI can surface "not found" itself
+    const joinAvsSession = useCallback(async (code) => {
+        const clean = (code || "").trim().toUpperCase();
+        if (!clean) return false;
+        try {
+            const res = await fetch(`${API_URL}/climb/avs/session/${clean}/join`, {method: "POST"});
+            if (!res.ok) return false;
+            applyAvsSession(await res.json());
+            return true;
+        } catch (err) {
+            console.error("Join AVS session failed:", err);
+            return false;
+        }
+    }, [applyAvsSession]);
+
+    // Leaving is local only, the session lives on until it idles out
+    const leaveAvsSession = useCallback(() => {
+        setAvsSession(null);
+        setAvsSubmittedScenes(EMPTY_SET);
+        setAvsCoveredVideos(EMPTY_SET);
+    }, []);
+
+    // Poll the session while in AVS mode: refreshes the shared hide/mark sets and doubles as the keep-alive heartbeat. A 404
+    // means the server deleted it for inactivity.
+    useEffect(() => {
+        if (!isAvs || !avsSession?.code) return;
+        const code = avsSession.code;
+        let cancelled = false;
+
+        const poll = async () => {
+            try {
+                const res = await fetch(`${API_URL}/climb/avs/session/${code}`);
+                if (res.status === 404) {
+                    if (cancelled) return;
+                    setAvsExpiredCode(code);
+                    setAvsSession(null);
+                    setAvsSubmittedScenes(EMPTY_SET);
+                    setAvsCoveredVideos(EMPTY_SET);
+                    return;
+                }
+                if (!res.ok) return;
+                const data = await res.json();
+                if (cancelled) return;
+                setAvsSubmittedScenes(heldSceneKeys(data.scenes));
+                setAvsCoveredVideos(new Set(data.coveredVideos || []));
+                setAvsSession((prev) => prev ? {...prev, name: data.name, expiresInMs: data.expiresInMs, counts: data.counts} : prev);
+            } catch (err) {
+                // network issue - next tick retries
+            }
+        };
+
+        poll();
+        const id = setInterval(poll, 4000);
+        return () => {
+            cancelled = true;
+            clearInterval(id);
+        };
+    }, [isAvs, avsSession?.code]);
+
     // Shot select from filmstrip - the one under video - that is why we can use the same video id
     const handleShotSelect = useCallback((shot) => {
         // of something was submitted - reseting it
@@ -340,6 +453,7 @@ function App() {
         // what is submitted
         const entry = {
             type: "segment",
+            task: taskMode,
             video_id: result.video_id,
             shot_id: result.shot_id,
             start_time_ms: startTimeMs,
@@ -357,6 +471,11 @@ function App() {
                     video_id: result.video_id,
                     start_time_ms: startTimeMs,
                     end_time_ms: endTimeMs,
+                    // scene frame range + session let the backend record the whole
+                    // scene (all its keyframes) into our shared AVS session
+                    start_frame: result.start_frame,
+                    end_frame: result.end_frame,
+                    avs_session: isAvs && avsSession?.code ? avsSession.code : undefined,
                 }),
             });
             const data = await res.json();
@@ -366,6 +485,14 @@ function App() {
             entry.status = state;
             setSubmitStatus(state);
             setSubmitMessage(text);
+            // AVS: a correct / awaiting-verdict scene is hidden from search for
+            // everyone (poll confirms). Mark it locally now, but KEEP it selected so
+            // the preview and filmstrip stay put and show a persistent "submitted"
+            // state. A WRONG scene is left visible so its keyframes can still be tried.
+            if (isAvs && res.ok && avsHolds(data.verdict)) {
+                const key = sceneKey(result.video_id, result.start_frame, result.end_frame);
+                setAvsSubmittedScenes((prev) => new Set(prev).add(key));
+            }
         } catch (err) {
             // it did not work
             console.error("DRES submit failed:", err);
@@ -379,7 +506,7 @@ function App() {
         }
         // for our submitted array
         setSubmissions((prev) => [entry, ...prev]);
-    }, []);
+    }, [taskMode, isAvs, avsSession]);
 
     //  VQA submit callback, mode is "media" (text + shot) or "text" (text only)
     const handleVqaSubmitted = useCallback((answer, status, mode) => {
@@ -452,6 +579,20 @@ function App() {
 
     const isDuplicate = selectedResult ? alreadySubmitted(selectedResult) : false;
 
+    // AVS: is the currently previewed scene already submitted in this session?
+    // Drives the "submitted" preview overlay and disables re-submitting it.
+    const selectedSubmitted = Boolean(
+        isAvs && selectedResult &&
+        avsSubmittedScenes.has(sceneKey(selectedResult.video_id, selectedResult.start_frame, selectedResult.end_frame))
+    );
+
+    // Results actually shown (submitted scenes are hidden in AVS), so the counter
+    // matches the grid instead of counting scenes that have been filtered out.
+    const visibleResultCount = (isAvs && avsSubmittedScenes.size)
+        ? results.filter((r) => !avsSubmittedScenes.has(sceneKey(r.video_id, r.start_frame, r.end_frame))).length
+        : results.length;
+    const hiddenResultCount = results.length - visibleResultCount;
+
     return (
         <div className="app">
             {/* for the top top bar */}
@@ -517,8 +658,30 @@ function App() {
                                 onClick={() => setMode("browse")}>Browse
                         </button>
                     </div>
+                    {/* task type: KIS (single shot) vs AVS (many collaborative instances) */}
+                    <div className="mode-toggle task-toggle">
+                        <button className={`mode-btn ${taskMode === "kis" ? "active" : ""}`}
+                                onClick={() => setTaskMode("kis")}
+                                title="Known-Item Search: submit one shot">KIS
+                        </button>
+                        <button className={`mode-btn ${taskMode === "avs" ? "active" : ""}`}
+                                onClick={() => setTaskMode("avs")}
+                                title="Ad-hoc Video Search: submit many instances, collaboratively">AVS
+                        </button>
+                    </div>
                 </div>
             </header>
+            {/* AVS collaborative session controls, only in AVS mode */}
+            {isAvs && (
+                <AvsSessionBar
+                    apiUrl={API_URL}
+                    session={avsSession}
+                    expiredCode={avsExpiredCode}
+                    onCreate={createAvsSession}
+                    onJoin={joinAvsSession}
+                    onLeave={leaveAvsSession}
+                />
+            )}
             {/* if statement, because for browsing we dont need it */}
             {mode === "search" && (
                 <SearchBar onSearch={handleSearch} loading={loading} history={searchHistory}/>
@@ -532,7 +695,10 @@ function App() {
                                 {loading && <div className="loading">Searching...</div>}
                                 {!loading && results.length > 0 && (
                                     <div className="results-info">
-                                        {results.length}{searchHasMore ? "+" : ""} results for "{query}"
+                                        {visibleResultCount}{searchHasMore ? "+" : ""} results for "{query}"
+                                        {hiddenResultCount > 0 && (
+                                            <span className="results-hidden-note"> · {hiddenResultCount} submitted hidden</span>
+                                        )}
                                         <span className="shortcuts-hint">← → navigate · Esc deselect · Ctrl+K search</span>
                                     </div>
                                 )}
@@ -542,6 +708,8 @@ function App() {
                                     onSelect={handleSelect}
                                     onFindSimilar={handleFindSimilar}
                                     onExcludeVideo={handleExcludeVideo}
+                                    hiddenScenes={isAvs ? avsSubmittedScenes : EMPTY_SET}
+                                    coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}
                                 />
                                 <div ref={setSearchSentinel} className="search-sentinel"/>
                                 {searchLoadingMore && <div className="loading">Loading more results...</div>}
@@ -554,6 +722,8 @@ function App() {
                                 onSelectShot={handleBrowseSelect}
                                 openVideoId={browseOpenVideoId}
                                 onOpenVideoHandled={handleBrowseOpenVideoHandled}
+                                submittedScenes={isAvs ? avsSubmittedScenes : EMPTY_SET}
+                                coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}
                             />
                         )}
                 </div>
@@ -568,7 +738,19 @@ function App() {
                                 <span>Scene: {formatTimecode(selectedResult.start_time_ms)} – {formatTimecode(selectedResult.end_time_ms)}</span>
                                 <span>Keyframe: {autoTimecode || "unknown"}</span>
                             </div>
-                            <VideoPlayer result={selectedResult} apiUrl={API_URL}/>
+                            {/* Once submitted in an AVS session, replace the player with a
+                                blurred still + green check */}
+                            {selectedSubmitted ? (
+                                <div className="submitted-preview">
+                                    <img className="submitted-preview-bg" src={selectedResult.thumbnail_url} alt=""/>
+                                    <div className="submitted-preview-overlay">
+                                        <div className="submitted-preview-check">✓</div>
+                                        <div className="submitted-preview-label">Already submitted</div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <VideoPlayer result={selectedResult} apiUrl={API_URL}/>
+                            )}
                             <div className="actions">
                                 {/* what actually gets submitted - auto filled from the keyframe, editable */}
                                 <KeyframeTime
@@ -584,7 +766,11 @@ function App() {
                                     <div className="duplicate-warning">Already submitted this shot!</div>
                                 )}
                                 {/* double verification, that we actually want to submit that */}
-                                {!confirmSubmit ? (
+                                {selectedSubmitted ? (
+                                    <button className="submit-btn success" disabled>
+                                        Submitted ✓
+                                    </button>
+                                ) : !confirmSubmit ? (
                                     <button
                                         className={`submit-btn ${submitStatus || ""} ${isDuplicate ? "duplicate" : ""}`}
                                         onClick={() => {
@@ -634,6 +820,8 @@ function App() {
                                 onSelectShot={handleShotSelect}
                                 apiUrl={API_URL}
                                 onBrowseAll={handleBrowseAllShots}
+                                submittedScenes={isAvs ? avsSubmittedScenes : EMPTY_SET}
+                                coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}
                             />
                         </>
                     ) : (

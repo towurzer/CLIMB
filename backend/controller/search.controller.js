@@ -1,8 +1,9 @@
 const queries = require('../models/queries');
+const avsStore = require('../avsSessionStore');
 
 exports.searchVideos = async (req, res) => {
     try {
-        const {q} = req.query;
+        const {q, avs_session} = req.query;
         const page = Math.max(parseInt(req.query.page || '1', 10), 1);
         const perPage = Math.min(Math.max(parseInt(req.query.per_page || '24', 10), 1), 100);
 
@@ -20,10 +21,20 @@ exports.searchVideos = async (req, res) => {
         }
 
         const topK = page * perPage;
-        const allResults = await queries.searchByText(q, exclude, topK);
+        const rawResults = await queries.searchByText(q, exclude, topK);
+        const hasMore = rawResults.length === topK;
+
+        // Hide scenes already submitted in the caller's AVS session. getSession also refreshes the session's idle timer.
+        const session = avs_session ? avsStore.getSession(String(avs_session).toUpperCase()) : null;
+        const allResults = session
+            ? rawResults.filter(r => {
+                const scene = session.scenes.get(avsStore.sceneKey(r.video_id, r.start_frame, r.end_frame));
+                return !(scene && avsStore.holdsVideo(scene.status));
+            })
+            : rawResults;
+
         const startIndex = (page - 1) * perPage;
         const pageResults = allResults.slice(startIndex, startIndex + perPage);
-        const hasMore = allResults.length === topK;
 
         res.status(200).json({
             query: q,

@@ -1323,3 +1323,224 @@ body {
 .loop-toggle input {
     cursor: pointer;
 }
+
+/* AVS (Ad-hoc Video Search) */
+
+/* Collaborative session bar under the header */
+.avs-session-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 16px;
+    background: #161616;
+    border-bottom: 1px solid #2a2a2a;
+    font-size: 12px;
+    color: #aaa;
+}
+
+.avs-session-code strong {
+    color: #5b8def;
+    letter-spacing: 1px;
+    font-size: 14px;
+}
+
+.avs-session-stats,
+.avs-session-expiry,
+.avs-session-hint {
+    color: #888;
+}
+
+.avs-session-expiry {
+    color: #777;
+}
+
+.avs-session-expired {
+    color: #e05252;
+    font-weight: 700;
+}
+
+.avs-session-error {
+    color: #e05252;
+}
+
+.avs-session-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    border-radius: 4px;
+    background: #333;
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.avs-session-btn:hover {
+    background: #3d3d3d;
+}
+
+.avs-session-btn.ghost {
+    background: transparent;
+    color: #888;
+}
+
+.avs-session-btn.ghost:hover {
+    color: #bbb;
+}
+
+.avs-session-join-input {
+    width: 64px;
+    padding: 4px 8px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    text-align: center;
+    border: 1px solid #333;
+    border-radius: 4px;
+    background: #0d0d0d;
+    color: #fff;
+}
+
+.avs-session-list {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    color: #777;
+}
+
+.avs-session-chip {
+    padding: 3px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    border: 1px solid #333;
+    border-radius: 4px;
+    background: #0d0d0d;
+    color: #5b8def;
+    cursor: pointer;
+}
+
+.avs-session-chip:hover {
+    border-color: #5b8def;
+}
+
+/* "covered" = a video that already has a correct hit; dim it and badge it */
+.result-card.covered,
+.browse-card.covered,
+.shot-thumb.covered {
+    opacity: 0.45;
+}
+
+.covered-badge {
+    position: absolute;
+    bottom: 4px;
+    left: 4px;
+    background: rgba(0, 0, 0, 0.8);
+    color: #e8a035;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* "submitted" = a scene already sent this session. Blur the still and stamp a
+   centered green check so it's unmistakable and never confused with un-submitted. */
+.browse-card.submitted,
+.shot-thumb.submitted {
+    outline: 2px solid #3fa45b;
+    outline-offset: -2px;
+}
+
+.shot-thumb.submitted img,
+.browse-card.submitted .browse-card-thumb img {
+    filter: blur(2px) brightness(0.5);
+}
+
+.submitted-badge {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #3fa45b;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+
+/* Big preview replacement once the selected scene is submitted */
+.submitted-preview {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #000;
+}
+
+.submitted-preview-bg {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(12px) brightness(0.45);
+    transform: scale(1.1); /* hide the blurred edges */
+}
+
+.submitted-preview-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.submitted-preview-check {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: #3fa45b;
+    color: #fff;
+    font-size: 44px;
+    font-weight: 800;
+    line-height: 1;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.25);
+}
+
+.submitted-preview-label {
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.results-hidden-note {
+    color: #3fa45b;
+}
+
+.log-tag {
+    display: inline-block;
+    margin-right: 5px;
+    padding: 0 5px;
+    font-size: 9px;
+    font-weight: 700;
+    border-radius: 3px;
+    background: #5b8def;
+    color: #0d0d0d;
+    vertical-align: middle;
+}

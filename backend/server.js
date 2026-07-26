@@ -5,6 +5,7 @@ require('dotenv').config();
 const searchRoutes = require('./routes/search.routes');
 const videoRoutes = require('./routes/video.routes');
 const dresRoutes = require('./routes/dres.routes');
+const avsRoutes = require('./routes/avs.routes');
 
 const app = express();
 const PORT = process.env.BACKEND_PORT || 8000;
@@ -33,6 +34,7 @@ app.use(express.json());
 app.use('/climb/search', searchRoutes);
 app.use('/climb/videos', videoRoutes);
 app.use('/climb/dres', dresRoutes);
+app.use('/climb/avs', avsRoutes);
 
 app.use('/keyframes', express.static('../dataset/keyframes'));
 app.use('/videos', express.static('../dataset/web_ready'));

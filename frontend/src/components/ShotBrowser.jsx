@@ -1,6 +1,16 @@
 import {useState, useEffect, useRef} from "react";
 
-function ShotBrowser({videoId, currentShotId, onSelectShot, apiUrl, onBrowseAll}) {
+const EMPTY_SET = new Set();
+
+function ShotBrowser({
+    videoId,
+    currentShotId,
+    onSelectShot,
+    apiUrl,
+    onBrowseAll,
+    submittedScenes = EMPTY_SET,
+    coveredVideos = EMPTY_SET,
+}) {
     const [shots, setShots] = useState([]);
     const [loading, setLoading] = useState(false);
     const activeRef = useRef(null);
@@ -57,11 +67,15 @@ function ShotBrowser({videoId, currentShotId, onSelectShot, apiUrl, onBrowseAll}
             <div className="shot-strip">
                 {shots.map((shot) => {
                     const isActive = shot.shot_id === currentShotId;
+                    // Mark scenes already submitted in the AVS session so nobody resubmits.
+                    // Keyed by frame range (all keyframes of a submitted scene get the mark).
+                    const submitted = submittedScenes.has(`${videoId}_${shot.start_frame}_${shot.end_frame}`);
+                    const covered = coveredVideos.has(videoId);
                     return (
                         <div
                             key={shot.shot_id}
                             ref={isActive ? activeRef : null}
-                            className={`shot-thumb ${isActive ? "active" : ""}`}
+                            className={`shot-thumb ${isActive ? "active" : ""} ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
                             onClick={() => onSelectShot(shot)}
                         >
                             <img
@@ -70,6 +84,7 @@ function ShotBrowser({videoId, currentShotId, onSelectShot, apiUrl, onBrowseAll}
                                 loading="lazy"
                             />
                             <span className="shot-label">{shot.shot_id}</span>
+                            {submitted && <span className="submitted-badge">✓</span>}
                         </div>
                     );
                 })}

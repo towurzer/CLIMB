@@ -1,4 +1,5 @@
 const axios = require('axios')
+const avsStore = require('../avsSessionStore');
 
 let dresState = {
     connected: false,
@@ -22,7 +23,7 @@ const summarizeDresStatus = (code) => {
     return DRES_STATUS_SUMMARY[code] || `DRES responded with HTTP ${code}`;
 };
 
-const submitAnswerSet = async (res, answer, {successMessage, errorLabel}) => {
+const submitAnswerSet = async (res, answer, {successMessage, errorLabel, record = null}) => {
     if (!dresState.connected || !dresState.evaluationId) {
         return res.status(401).json({error: "Not connected to DRES. Please login first."});
     }
@@ -37,6 +38,17 @@ const submitAnswerSet = async (res, answer, {successMessage, errorLabel}) => {
         const response = await axios.post(submitUrl, payload, {
             params: {session: dresState.sessionId}
         });
+
+        // The DRES answer is what scores; recording the delivered scene into the AVS session  is a best-effort overlay that must never block or alter this response.
+        if (record) {
+            avsStore.recordSceneSafe(record.avs_session, {
+                video_id: record.video_id,
+                start_frame: record.start_frame,
+                end_frame: record.end_frame,
+                // null falls back to INDETERMINATE inside the store
+                status: response.data?.submission || (response.status === 202 ? "INDETERMINATE" : null)
+            });
+        }
 
         return res.status(200).json({
             status: response.status === 202 ? "pending" : "success",
@@ -147,9 +159,9 @@ exports.dresStatus = async (req, res) => {
     });
 };
 
-// Kis answer submitted (shot)
+// Kis answer submitted (shot), also records it for avs sessions.
 exports.submitToDres = async (req, res) => {
-    const {video_id, start_time_ms, end_time_ms} = req.body;
+    const {video_id, start_frame, end_frame, start_time_ms, end_time_ms, avs_session} = req.body;
 
     return submitAnswerSet(res, {
         text: null,
@@ -159,7 +171,8 @@ exports.submitToDres = async (req, res) => {
         end: end_time_ms
     }, {
         successMessage: "Submitted successfully!",
-        errorLabel: "DRES Submission failed"
+        errorLabel: "DRES Submission failed",
+        record: avs_session ? {avs_session, video_id, start_frame, end_frame} : null
     });
 };
 

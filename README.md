@@ -9,7 +9,7 @@ A contest winning Content Localization system and Intelligent Multimedia Browser
 ---
 
 A content-based video retrieval system designed for searching short video segments, focusing on Known-Item Search (KIS)
-and Visual Question Answering (VQA) tasks inspired by the Video Browser Showdown (VBS).
+and Visual Question Answering (VQA) tasks, as well as Ad-Hoc Video search (AVS), inspired by the Video Browser Showdown (VBS).
 The system provides an intuitive graphical user interface for interactive video exploration and integrates with the
 Distributed Retrieval Evaluation Server (DRES) through its REST API, enabling seamless submission of retrieved video
 segments.
@@ -97,6 +97,13 @@ Every submission shows a result box with the DRES status code, a plain language 
 e.g. 200 · Accepted & graded · CORRECT. Green means a correct verdict, red a wrong or rejected one, and amber 
 (202 · Accepted - awaiting verdict) means DRES took the submission but hasn't judged it yet.
 
+For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (next to Search/Browse) to AVS. 
+AVS is collaborative: click New session to get a random 4-letter code, or Join a teammate's code to work together. 
+Each shot you submit is sent as its own submission and is then hidden from everyone in the session's search results, 
+so no one on the team submits the same scene twice. Videos where you already got a correct hit are dimmed and marked 
+"covered", since extra shots from the same video barely raise the AVS score. Sessions are shared across everyone on the 
+same CLIMB server and are automatically deleted after 5 minutes of inactivity.
+
 Going back to the search tab, you can search for video scenes including specific content.
 
 <img src="readme_images/search.png" alt="search.png" width="500"/>
@@ -144,6 +151,7 @@ backend/
     openapi.yaml            # API specification
     package.json            # Backend dependencies
     server.js               # Express API server
+    avsSessionStore.js      # shared in-memory collaborative AVS sessions
     controller/             # Route handlers
     models/                 # Database models and queries
     routes/                 # Express routes
@@ -175,6 +183,7 @@ frontend/
             VideoBrowser.jsx# Browse all videos
             VqaAnswer.jsx   # VQA answer input + DRES submit buttons
             SubmissionLog.jsx # Submission history log
+            AvsSessionBar.jsx # AVS session create/join controls
 
 video_processing/
     requirements.txt           # python dependencies        
@@ -442,8 +451,9 @@ one included, browser based wise I like to use
 "https://editor.swagger.io/", but that's completely up to you.
 
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
-  
-
-TODO: add submit all scenes with apples
 
 TODO: fix keyframe extraction
+
+TODO: Move dres login to popup
+
+TODO: show dres is alive circle

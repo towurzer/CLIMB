@@ -20,7 +20,16 @@ function useSentinel(onVisible, enabled) {
     return setNode;
 }
 
-function VideoBrowser({apiUrl, onSelectShot, openVideoId, onOpenVideoHandled}) {
+const EMPTY_SET = new Set();
+
+function VideoBrowser({
+    apiUrl,
+    onSelectShot,
+    openVideoId,
+    onOpenVideoHandled,
+    submittedScenes = EMPTY_SET,
+    coveredVideos = EMPTY_SET,
+}) {
     const [videos, setVideos] = useState([]);
     const [loading, setLoading] = useState(true);
     const [page, setPage] = useState(1);
@@ -218,14 +227,23 @@ function VideoBrowser({apiUrl, onSelectShot, openVideoId, onOpenVideoHandled}) {
                 ) : (
                     <>
                         <div className="browse-grid">
-                            {shots.map((shot) => (
-                                <div key={shot.shot_id} className="browse-card" onClick={() => handleShotClick(shot)}>
-                                    <div className="browse-card-thumb">
-                                        <img src={shot.thumbnail_url} alt={`Shot ${shot.shot_id}`} loading="lazy"/>
-                                        <span className="browse-card-badge">#{shot.shot_id}</span>
+                            {shots.map((shot) => {
+                                const submitted = submittedScenes.has(`${selectedVideo.video_id}_${shot.start_frame}_${shot.end_frame}`);
+                                const covered = coveredVideos.has(selectedVideo.video_id);
+                                return (
+                                    <div
+                                        key={shot.shot_id}
+                                        className={`browse-card ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
+                                        onClick={() => handleShotClick(shot)}
+                                    >
+                                        <div className="browse-card-thumb">
+                                            <img src={shot.thumbnail_url} alt={`Shot ${shot.shot_id}`} loading="lazy"/>
+                                            <span className="browse-card-badge">#{shot.shot_id}</span>
+                                            {submitted && <span className="submitted-badge">✓</span>}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                         <div ref={shotsSentinelRef} className="browse-sentinel"/>
                         {shotsLoadingMore && <div className="browse-load-more">Loading more shots…</div>}
@@ -253,18 +271,22 @@ function VideoBrowser({apiUrl, onSelectShot, openVideoId, onOpenVideoHandled}) {
                 <span className="browse-count">{filtered.length} videos</span>
             </div>
             <div className="browse-grid">
-                {filtered.map((video) => (
-                    <div key={video.video_id} className="browse-card" onClick={() => handleVideoClick(video)}>
+                {filtered.map((video) => {
+                    const covered = coveredVideos.has(video.video_id);
+                    return (
+                    <div key={video.video_id} className={`browse-card ${covered ? "covered" : ""}`} onClick={() => handleVideoClick(video)}>
                         <div className="browse-card-thumb">
                             <img src={video.thumbnail_url} alt={video.video_id} loading="lazy"/>
                             <span className="browse-card-badge">{video.num_shots} shots</span>
+                            {covered && <span className="covered-badge" title="Already has a correct hit">covered</span>}
                         </div>
                         <div className="browse-card-label">
                             <span className="browse-card-id">{video.video_id}</span>
                             <span className="browse-card-meta">{Math.round(video.duration_sec)}s</span>
                         </div>
                     </div>
-                ))}
+                    );
+                })}
             </div>
 
             <div ref={videoSentinelRef} className="browse-sentinel"/>
