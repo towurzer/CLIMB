@@ -83,7 +83,7 @@ fi
 
 # Launch Backend
 if [ -d "backend" ]; then
-    backend_cmd="if [ ! -d node_modules ]; then npm install; fi; npm start"
+    backend_cmd="if [ ! -d node_modules ]; then npm install; fi; npm run dev"
     run_in_new_terminal "CLIMB Backend" "backend" "$backend_cmd"
 else
     echo "Error: Directory 'backend' not found."
