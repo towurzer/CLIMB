@@ -78,6 +78,32 @@ body {
     gap: 10px;
 }
 
+/* backend liveness circle, top left */
+.backend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: #555;
+    transition: background 0.2s, box-shadow 0.2s;
+}
+
+.backend-dot.ok {
+    background: #7ade7a;
+    box-shadow: 0 0 7px rgba(122, 222, 122, 0.8);
+}
+
+/* backend up, embedding service not - search is dead, browsing still works */
+.backend-dot.degraded {
+    background: #e8a33d;
+    box-shadow: 0 0 7px rgba(232, 163, 61, 0.8);
+}
+
+.backend-dot.down {
+    background: #e67;
+    box-shadow: 0 0 7px rgba(230, 103, 119, 0.8);
+}
+
 .app-header-left h1 a {
     color: inherit;
     text-decoration: underline;

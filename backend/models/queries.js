@@ -12,17 +12,7 @@ const pool = new Pool({
     port: process.env.DB_PORT || 5432,
     database: process.env.POSTGRES_DB_NAME || 'climb_db'
 });
-const backendHost = process.env.BACKEND_URL || 'localhost';
-const backendPort = process.env.BACKEND_PORT || 8000;
-const BACKEND_URL = backendHost.startsWith('http://') || backendHost.startsWith('https://')
-    ? backendHost
-    : `http://${backendHost}:${backendPort}`;
-
-const searchEngineHost = process.env.SEARCH_ENGINE_URL || 'localhost';
-const searchEnginePort = process.env.SEARCH_ENGINE_PORT || 5000;
-const SEARCH_ENGINE_URL = searchEngineHost.startsWith('http://') || searchEngineHost.startsWith('https://')
-    ? searchEngineHost
-    : `http://${searchEngineHost}:${searchEnginePort}`;
+const {BACKEND_URL, SEARCH_ENGINE_URL} = require('../serviceUrls');
 
 async function initDatabase() {
     try {

@@ -16,6 +16,99 @@
     }
   ],
   "paths": {
+    "/climb/health": {
+      "get": {
+        "summary": "Liveness probe for the backend and the embedding service",
+        "description": "Answers as long as the backend process is running. Reaching it requires no database or cache, so a response always means the API itself is up. It additionally probes the Python embedding worker at SEARCH_ENGINE_URL/api/health with a 2 second timeout and reports the outcome, but never fails because of it: the status code stays 200 whenever the backend lives, and callers read the body to tell a healthy system from a degraded one. The frontend polls this every 5 seconds to drive the coloured indicator in the header - green for status 'ok', orange for 'degraded', red when this endpoint cannot be reached at all.",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "Backend is alive. 'status' is 'ok' only when the embedding service is ready too, otherwise 'degraded'.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "'ok' when every component answered, 'degraded' when the backend is up but the embedding service is not usable",
+                      "enum": [
+                        "ok",
+                        "degraded"
+                      ]
+                    },
+                    "backend": {
+                      "type": "string",
+                      "description": "Always 'ok' - if the backend were not, this response would not exist",
+                      "enum": [
+                        "ok"
+                      ]
+                    },
+                    "embedding_service": {
+                      "type": "object",
+                      "description": "Outcome of the probe against the Python embedding worker",
+                      "properties": {
+                        "reachable": {
+                          "type": "boolean",
+                          "description": "Whether the worker answered the probe at all"
+                        },
+                        "ready": {
+                          "type": "boolean",
+                          "description": "Whether the worker answered and has an initialized search engine. Text search only works when this is true."
+                        },
+                        "detail": {
+                          "type": "string",
+                          "description": "Human readable reason, surfaced as the tooltip of the header indicator"
+                        }
+                      }
+                    },
+                    "uptime_seconds": {
+                      "type": "integer",
+                      "description": "Whole seconds since the backend process started"
+                    },
+                    "time": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Server clock at the time of the response, ISO 8601"
+                    }
+                  }
+                },
+                "examples": {
+                  "healthy": {
+                    "summary": "Backend and embedding service both up",
+                    "value": {
+                      "status": "ok",
+                      "backend": "ok",
+                      "embedding_service": {
+                        "reachable": true,
+                        "ready": true,
+                        "detail": "Embedding service ready"
+                      },
+                      "uptime_seconds": 4213,
+                      "time": "2026-07-26T12:34:56.789Z"
+                    }
+                  },
+                  "degraded": {
+                    "summary": "Backend up, embedding worker not running",
+                    "value": {
+                      "status": "degraded",
+                      "backend": "ok",
+                      "embedding_service": {
+                        "reachable": false,
+                        "ready": false,
+                        "detail": "Embedding service unreachable: connect ECONNREFUSED 127.0.0.1:5000"
+                      },
+                      "uptime_seconds": 12,
+                      "time": "2026-07-26T12:34:56.789Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/climb/search": {
       "get": {
         "summary": "Search for video segments matching the text query",

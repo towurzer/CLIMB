@@ -71,6 +71,17 @@ When opening up the climb website, you will see a pretty empty screen. Don't be 
 
 <img src="readme_images/bootup.png" alt="bootup.png" width="500"/>
 
+At the very right end of the header, past the "Login to DRES" button, there is a small circle telling you whether CLIMB's
+own services are up. The frontend re-checks every 5 seconds and the colour means:
+
+- green: backend and embedding service both answer, everything works
+- orange: the backend is up but the embedding service is not, so browsing, playback and submitting still work while text
+  search does not. Usually you forgot to start the search engine (`python main.py --startSearchEngine`) or it could not
+  reach the database
+- red: the backend cannot be reached at all, nothing will work until it is back
+
+Hovering the circle tells you which of the two is missing and why.
+
 If you are in a competition I can recommend 2 things:
 
 - sabotage your opponents
@@ -160,6 +171,7 @@ backend/
     package.json            # Backend dependencies
     server.js               # Express API server
     avsSessionStore.js      # shared in-memory collaborative AVS sessions
+    serviceUrls.js          # resolves the backend / search engine base urls from env
     controller/             # Route handlers
     models/                 # Database models and queries
     routes/                 # Express routes
@@ -193,6 +205,7 @@ frontend/
             SubmissionLog.jsx # Submission history log
             AvsSessionBar.jsx # AVS session create/join controls
             DresLoginModal.jsx # DRES login popup
+            BackendStatusDot.jsx # backend liveness circle in the header
 
 video_processing/
     requirements.txt           # python dependencies        

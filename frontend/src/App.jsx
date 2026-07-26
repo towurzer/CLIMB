@@ -25,6 +25,7 @@ import SubmissionLog from "./components/SubmissionLog";
 import KeyframeTime from "./components/KeyframeTime";
 import AvsSessionBar from "./components/AvsSessionBar";
 import DresLoginModal from "./components/DresLoginModal";
+import BackendStatusDot from "./components/BackendStatusDot";
 import {describeDresResult, describeDresError} from "./dresSubmission";
 import {formatTimecode, parseTimecode, snapMsToFrame, keyframeMs} from "./timecode";
 import "./App.css";
@@ -616,17 +617,6 @@ function App() {
                 </div>
 
                 <div className="app-header-right">
-                    {/* the form itself lives in a popup, the header only shows where we stand */}
-                    <button
-                        className={`dres-login-btn ${dresConnected ? "connected" : ""}`}
-                        onClick={() => setDresLoginOpen(true)}
-                        title={dresStatus}
-                    >
-                        <span className="dres-login-dot"/>
-                        {dresLoading ? "Connecting..."
-                            : dresConnected ? `DRES · ${dresName}`
-                                : "Login to DRES"}
-                    </button>
                     {snackbar.visible && (
                         <div className={`snackbar ${snackbar.type || "info"}`}>
                             {snackbar.raw ? (
@@ -655,6 +645,18 @@ function App() {
                                 title="Ad-hoc Video Search: submit many instances, collaboratively">AVS
                         </button>
                     </div>
+                    {/* the form itself lives in a popup, the header only shows where we stand */}
+                    <button
+                        className={`dres-login-btn ${dresConnected ? "connected" : ""}`}
+                        onClick={() => setDresLoginOpen(true)}
+                        title={dresStatus}
+                    >
+                        <span className="dres-login-dot"/>
+                        {dresLoading ? "Connecting..."
+                            : dresConnected ? `DRES · ${dresName}`
+                                : "Login to DRES"}
+                    </button>
+                    <BackendStatusDot apiUrl={API_URL}/>
                 </div>
             </header>
             <DresLoginModal

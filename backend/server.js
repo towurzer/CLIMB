@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
 require('dotenv').config();
+
+const {SEARCH_ENGINE_URL} = require('./serviceUrls');
 
 const searchRoutes = require('./routes/search.routes');
 const videoRoutes = require('./routes/video.routes');
@@ -30,6 +33,39 @@ app.use(cors({
     credentials: true
 }));
 app.use(express.json());
+
+const EMBEDDING_PROBE_TIMEOUT_MS = 2000;
+
+const probeEmbeddingService = async () => {
+    try {
+        const res = await axios.get(`${SEARCH_ENGINE_URL}/api/health`, {timeout: EMBEDDING_PROBE_TIMEOUT_MS});
+        return {
+            reachable: true,
+            ready: Boolean(res.data?.search_engine_ready),
+            detail: res.data?.search_engine_ready
+                ? "Embedding service ready"
+                : "Embedding service running but its search engine failed to initialize"
+        };
+    } catch (err) {
+        const reason = err.code || err.message || (err.response && `HTTP ${err.response.status}`) || "no response";
+        return {
+            reachable: false,
+            ready: false,
+            detail: `Embedding service unreachable: ${reason}`
+        };
+    }
+};
+
+app.get('/climb/health', async (req, res) => {
+    const embedding = await probeEmbeddingService();
+    res.status(200).json({
+        status: embedding.ready ? "ok" : "degraded",
+        backend: "ok",
+        embedding_service: embedding,
+        uptime_seconds: Math.floor(process.uptime()),
+        time: new Date().toISOString()
+    });
+});
 
 app.use('/climb/search', searchRoutes);
 app.use('/climb/videos', videoRoutes);

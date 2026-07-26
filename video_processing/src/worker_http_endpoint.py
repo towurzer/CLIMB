@@ -32,6 +32,17 @@ class SearchRequest(BaseModel):
     top_k: int = 48
 
 
+@app.get("/api/health")
+def health():
+    # "reachable" is answered by this response existing at all. "ready" is the
+    # part that matters: the worker starts and serves even when the DB handshake
+    # failed, and in that state every search would 500.
+    return {
+        "status": "ok" if search_engine else "degraded",
+        "search_engine_ready": search_engine is not None
+    }
+
+
 @app.post("/api/search")
 def do_search(request: SearchRequest):
     if not search_engine:
