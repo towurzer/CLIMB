@@ -3,13 +3,18 @@ import sys
 
 from dotenv import load_dotenv
 
-import db_setup, embeddings_extraction, utils, worker_http_endpoint
+import db_setup, utils, worker_http_endpoint
 from config import CLIConfig, Config
 from custom_logger import setup_logging
 from db.connection import connection_scope
 from db.index_ops import build_indexes
 from db.migrate import run_migrations
 from pipeline.decode import decode_from_database
+from pipeline.asr import asr_pending
+from pipeline.caption import caption_pending
+from pipeline.embed import embed_pending
+from pipeline.ocr import ocr_pending
+from pipeline.text_embed import embed_text_pending
 from pipeline.keyframe_selection import select_from_database
 from pipeline.shot_boundaries import ingest_directory
 
@@ -28,9 +33,17 @@ if __name__ == '__main__':
     ingest_shots = utils.has_flag(argv, cli_config.ingest_shots)
     decode = utils.has_flag(argv, cli_config.decode)
     select_keyframes = utils.has_flag(argv, cli_config.select_keyframes)
+    run_ocr = utils.has_flag(argv, cli_config.run_ocr)
+    run_caption = utils.has_flag(argv, cli_config.run_caption)
+    run_asr = utils.has_flag(argv, cli_config.run_asr)
+    embed_text = utils.has_flag(argv, cli_config.embed_text)
+    scope = 'all' if utils.has_flag(argv, cli_config.all_keyframes) else None
+    shard = utils.int_arg(argv, "--shard", 0)
+    shards = utils.int_arg(argv, "--shards", 1)
 
     anyFlag = (show_database_creation_message or extract_embeddings or start_embedding_worker
-               or migrate or build_search_indexes or ingest_shots or decode or select_keyframes)
+               or migrate or build_search_indexes or ingest_shots or decode or select_keyframes
+               or run_ocr or run_caption or run_asr or embed_text)
 
     if show_info_message or not anyFlag:
         print(cli_config.help_string)
@@ -66,6 +79,24 @@ if __name__ == '__main__':
         with connection_scope() as conn:
             select_from_database(conn, collection=conf.COLLECTION)
     elif extract_embeddings:
-        embeddings_extraction.extract_and_store_embeddings()
+        conf = Config()
+        with connection_scope() as conn:
+            embed_pending(conn, collection=conf.COLLECTION, shard=shard, shards=shards)
+    elif run_ocr:
+        conf = Config()
+        with connection_scope() as conn:
+            ocr_pending(conn, collection=conf.COLLECTION, shard=shard, shards=shards, scope=scope)
+    elif run_caption:
+        conf = Config()
+        with connection_scope() as conn:
+            caption_pending(conn, collection=conf.COLLECTION, shard=shard, shards=shards, scope=scope)
+    elif run_asr:
+        conf = Config()
+        with connection_scope() as conn:
+            asr_pending(conn, collection=conf.COLLECTION, shard=shard, shards=shards)
+    elif embed_text:
+        conf = Config()
+        with connection_scope() as conn:
+            embed_text_pending(conn, collection=conf.COLLECTION, shard=shard, shards=shards)
     elif start_embedding_worker:
         worker_http_endpoint.start()

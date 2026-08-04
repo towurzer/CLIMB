@@ -222,7 +222,6 @@ video_processing/
         custom_logger.py       # Logging utilities
         db_queries.py          # Database queries
         db_setup.py            # Prints the podman command, nothing more
-        embeddings_extraction.py # Feature extraction
         main.py                # Pipeline entry point
         search_engine.py       # Search and embedding service
         utils.py               # Utility functions
@@ -233,6 +232,11 @@ video_processing/
             index_ops.py       # builds/drops the expensive ANN + GIN indexes
         pipeline/
             probe.py           # ffprobe metadata (fps, duration, dimensions, audio)
+            device.py          # picks cuda / mps / cpu
+            embed.py           # SigLIP2 vectors
+            ocr.py             # on-screen text
+            caption.py         # VLM shot descriptions
+            asr.py             # Whisper transcripts
             shot_boundaries.py # parses master shot boundary files -> scenes
             decode.py          # the one-pass FFmpeg stage
             keyframe_selection.py # thins candidate frames down to 2-32 per shot
@@ -469,21 +473,74 @@ WebP, roughly 12 KB and 6 KB. For the 200-video set that is **35,558 keyframes i
 the 14,345 scenes has at least one, and no scene has more than its share, fewer files, better coverage, and no more
 scrolling past twenty identical pictures of the same shot.
 
-#### 1.7 Video Embedding
+#### 1.7 The four GPU stages
 
-In order to later to semantic video retrieval, we will need to encode the Videos (Keyframes to be more specific) into a
-high Dimensional
-Vector Space (1024dim). By doing so, we can later encode your searches into the same space, and do semantic retrieval by
-performing nearest neighbour searches
-in this space. The setup is pretty easy. Just run
+Four stages read the keyframes and audio and turn them into something searchable. All four want a GPU, all four can be
+stopped and restarted at any point, and all four figure out what is left to do by asking the database rather than by
+keeping a list.
 
 ```bash 
-python main.py --extractEmbeddings
+python main.py --extractEmbeddings   # SigLIP2 vectors, the backbone of semantic search
+python main.py --extractText         # OCR: signs, chyrons, scoreboards, title cards
+python main.py --generateCaptions    # a sentence describing each shot
+python main.py --transcribeAudio     # Whisper transcripts of the speech
 ```
 
-This will scan your climb database for video shots missing embeddings, extract the their features using SigLIP2, and
-store the vectors in the db.
+**Embeddings** encode each keyframe into a 1024-dimensional vector, so a search query can be encoded into the same space
+and answered with a nearest-neighbour lookup. This is the one that matters most.
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
+
+**OCR, captions and transcripts** exist because embeddings are vague where text is exact. If a hint says the shop sign
+reads "BOULANGERIE", no amount of vector similarity will beat simply having read the sign. Transcripts run per video and
+are matched to scenes by overlapping timestamps.
+
+OCR reads **every** keyframe, captions only the **first of each shot**. That asymmetry is deliberate. Keyframes are
+picked for how different they look, so skipping all but the first throws away exactly the frames where the text is most
+likely to have changed — rolling credits, a news banner swapping mid-shot, a scoreboard ticking over, subtitles, a pan
+along a row of shopfronts. Miss those and nothing later can recover them; no clever ranking reads a sign nobody looked
+at. Captions do not have that problem — a sentence describing a shot reads much the same whichever frame of it you
+pick — and they are the pricier stage, so they stay at one per shot.
+
+**Text embeddings** are the fourth-and-a-half stage:
+
+```bash 
+python main.py --embedText
+```
+
+Run it after transcription and captioning. Word matching alone does not get you far on either: people rarely phrase a
+search the way somebody happened to say it out loud, and they certainly do not phrase it the way a model happened to
+describe a picture. Encoding both with a multilingual text model fixes that — on paraphrased speech it finds the right
+segment first 5 times out of 6, and an English query will happily land on a German sentence.
+
+Captions need this even more than transcripts do. Out of five test searches, four shared **not a single content word**
+with the caption that described exactly what they were looking for: search "a cyclist standing outside a shop", and the
+caption says "A man in a red jacket stands beside a bicycle outside a bakery". Match those by keyword and you get
+nothing; match them by meaning and it comes first every time. It is also the only way captions earn their keep — ask for
+"a man carrying bread walks past a parked bicycle" and it correctly prefers the man carrying bread over the man merely
+standing next to a bicycle, which is the sort of distinction the image embeddings cheerfully ignore.
+
+The OCR text is deliberately **not** encoded this way. We tried it and measured it, and on short shop signs it could not
+tell a bakery from a pharmacy — with two words to go on, the model has nothing to work with. OCR is better served by
+plain word matching, because what OCR is uniquely good at is exact strings: if you typed "Dupont" and a sign says
+"Dupont", that is not a hint, that is an answer. Trigram matching covers the misreadings ("B0ULANGERIE" still scores
+0.73 against the right sign), and searching for text you have actually seen is what the `text:"..."` prefix is for.
+
+If you find yourself with time to burn before the competition, you can go back and fill in the rest:
+
+```bash 
+python main.py --generateCaptions --allKeyframes
+```
+
+Every stage only ever does work that is still outstanding, so this picks up exactly the keyframes the narrower run
+skipped and leaves the existing captions alone. Same flag works for `--extractText`, though that one already covers
+everything by default. The permanent equivalents are `CLIMB_OCR_SCOPE` and `CLIMB_CAPTION_SCOPE`, either `all` or
+`shot`.
+
+##### Running them on more than one machine
+
+Each stage takes `--shard N --shards M`, which partitions the work by row id. Point four GPUs at the same
+database with `--shard 0..3 --shards 4` and they will divide the work exactly and never collide, no locking, no
+coordination, no queue server. Verified: four shards over 1,149 pending keyframes split 287/288/287/287.
 
 #### 1.8 Build the search indexes
 

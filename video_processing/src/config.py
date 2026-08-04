@@ -11,7 +11,7 @@ PROJECT_ROOT = VIDEO_PROCESSING_ROOT.parent
 class Config:
     # --- KIS Model parameters ---
     KIS_MODEL_NAME: str = "google/siglip2-large-patch16-384"
-    EMBEDDING_BATCH_SIZE: int = 16
+    EMBEDDING_BATCH_SIZE: int = int(os.getenv("CLIMB_EMBED_BATCH") or 16)
     SEARCH_TOP_K: int = 48
 
     # --- Decode stage ---
@@ -49,6 +49,28 @@ class Config:
     # Escape hatch so title cards and credits are not mistaken for fades
     DEGENERATE_EDGE_MAX: float = 0.002
     SELECTION_WORKERS: int = int(os.getenv("CLIMB_SELECTION_WORKERS") or 6)
+
+    # --- GPU stages  ---
+    # Drop batch sizes via env
+    OCR_BATCH_SIZE: int = int(os.getenv("CLIMB_OCR_BATCH") or 32)
+    OCR_MIN_CONFIDENCE: float = 0.5
+    # 'all' = every keyframe, 'shot' = only kf_index 0.
+    # OCR defaults to 'all': WP4 picks keyframes *by visual difference*, so the frames skipped by
+    # 'shot' are exactly the ones most likely to show different text
+    OCR_SCOPE: str = os.getenv("CLIMB_OCR_SCOPE") or "all"
+    CAPTION_SCOPE: str = os.getenv("CLIMB_CAPTION_SCOPE") or "shot"
+    CAPTION_MODEL: str = os.getenv("CLIMB_CAPTION_MODEL") or "Qwen/Qwen2-VL-2B-Instruct"
+    CAPTION_BATCH_SIZE: int = int(os.getenv("CLIMB_CAPTION_BATCH") or 8)
+    CAPTION_MAX_TOKENS: int = 64
+    CAPTION_PROMPT: str = ("Describe this video frame in one sentence. Name the objects, people "
+                           "and setting, and how they relate to each other.")
+    ASR_MODEL: str = os.getenv("CLIMB_ASR_MODEL") or "large-v3-turbo"
+    ASR_BEAM_SIZE: int = 1
+    # Cross-lingual text encoder for OCR strings and transcripts. V3C signage and speech are
+    # multilingual while the queries are English, so this has to be a multilingual model.
+    TEXT_MODEL: str = os.getenv("CLIMB_TEXT_MODEL") or "intfloat/multilingual-e5-base"
+    TEXT_BATCH_SIZE: int = int(os.getenv("CLIMB_TEXT_BATCH") or 128)
+    TEXT_MAX_TOKENS: int = 256
 
     DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)
     FFMPEG_THREADS: int = int(os.getenv("CLIMB_FFMPEG_THREADS") or 2)
@@ -165,6 +187,11 @@ class CLIConfig:
     decode: List[str] = field(default_factory=lambda: ["-d", "--decode"])
     select_keyframes: List[str] = field(default_factory=lambda: ["-sk", "--selectKeyframes"])
     extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
+    run_ocr: List[str] = field(default_factory=lambda: ["-ocr", "--extractText"])
+    run_caption: List[str] = field(default_factory=lambda: ["-cap", "--generateCaptions"])
+    run_asr: List[str] = field(default_factory=lambda: ["-asr", "--transcribeAudio"])
+    all_keyframes: List[str] = field(default_factory=lambda: ["-ak", "--allKeyframes"])
+    embed_text: List[str] = field(default_factory=lambda: ["-et", "--embedText"])
     start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startSearchEngine"])
     migrate: List[str] = field(default_factory=lambda: ["-m", "--migrate"])
     build_indexes: List[str] = field(default_factory=lambda: ["-bi", "--buildIndexes"])
@@ -185,6 +212,21 @@ Options:
 -sk, --selectKeyframes         Pick 2-32 visually distinct keyframes per master shot and write the
                                keyframe + thumbnail images
 -ee, --extractEmbeddings       Embed the Images and store the vectors in the Database
+-ocr, --extractText            Read on-screen text off the keyframes (GPU)
+-cap, --generateCaptions       Write a one-sentence description of each shot (GPU)
+-asr, --transcribeAudio        Transcribe the audio track with Whisper (GPU)
+-et, --embedText               Embed the OCR strings and transcripts so they can be searched by
+                               meaning as well as by exact wording (GPU). Run after --extractText
+                               and --transcribeAudio.
+
+  The four stages above accept --shard N --shards M, so several machines can work through the
+  same database at once without tripping over each other.
+
+-ak, --allKeyframes            Widen --extractText / --generateCaptions to every keyframe instead
+                               of one per shot. Both stages only ever do outstanding work, so this
+                               tops up what a narrower earlier run left behind. Captions default to
+                               one per shot; run them again with this flag if there is time to
+                               spare before the competition.
 -start, --startSearchEngine                     Start the Webserver which embeds user Queries.
 -m, --migrate                  Apply any pending schema migrations from video_processing/migrations/
 -isb, --ingestShotBoundaries   Probe the videos and load one scene per master shot from the
