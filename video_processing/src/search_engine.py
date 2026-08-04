@@ -3,8 +3,8 @@ from transformers import AutoProcessor, AutoModel
 import psycopg2
 
 import custom_logger
+from db.connection import connect_to_database
 from db_queries import DBQueries
-from db_setup import connect_to_database
 
 from config import Config
 

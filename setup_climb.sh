@@ -45,7 +45,7 @@ else
         -e POSTGRES_DB="$POSTGRES_DB_NAME" \
         -v postgres_data:/var/lib/postgresql/data \
         -p "$DB_PORT":5432 \
-        -d docker.io/ankane/pgvector:latest
+        -d docker.io/pgvector/pgvector:pg17
 fi
 
 # Connect to DB
@@ -69,13 +69,9 @@ else
     podman exec -i climb_db psql -U postgres -d "$POSTGRES_DB_NAME" < "$DUMP_FILE"
 fi
 
-# Update image paths
-TARGET_PATH="${PROJECT_DIR}/dataset/keyframes/"
-echo "Updating file paths in 'shots' table to: $TARGET_PATH"
-
-# Replaces the path prefix leading up to 'dataset/keyframes/' with the current absolute path
-podman exec -i climb_db psql -U postgres -d "$POSTGRES_DB_NAME" -c \
-    "UPDATE shots SET image_path = REGEXP_REPLACE(image_path, '^.*/dataset/keyframes/', '${TARGET_PATH}');"
+# Keyframe paths used to be stored as absolute paths on every row, so restoring a dump on a
+# different machine needed an UPDATE to rewrite all ~100k of them. Paths are now derived from
+# (video_id, shot_index, kf_index), so a dump is portable as-is and there is nothing to rewrite.
 
 # Install Python dependencies
 echo "Installing Python dependencies..."

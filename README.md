@@ -20,10 +20,9 @@ segments.
 
 In order to run CLIMB, you will need to make sure that the following things are fulfilled:
 
-- You will need to store all the Videos in `dataset/web_ready/`
-- There will need to be all the keyframes in `dataset/keyframes/` with a naming scheme of
-  `<video_id>_shot_<shot_num>_kf_<shot_num>.jpg`
-- (To see how to do extract the keyframes see the "Keyframe extraction" section under  "Getting Started - Developer")
+- You will need the processed media in `dataset/media/` — the 360p videos under `media/video/`, the keyframes under
+  `media/kf/` and `media/thumbs/`. Set `CLIMB_MEDIA_DIR` if you keep them on an external drive instead
+- (To see how to produce all of that, see the "Decoding" section under "Getting Started - Developer")
 - Make sure there is a Database Dump with the embeddings stored under `/dataset/climb_db.dump`
 - (If you don't have a db-dump you will need to embed everything yourself, for that follow the "Getting Started -
   Developer" Section)
@@ -178,10 +177,15 @@ backend/
 
 dataset/                    # local folder only
     climb_db_backup.dump    # Database dump
-    compression.checkpoint  # Compression checkpoint metadata
-    keyframes/              # Extracted keyframes
     V3C1_200/               # Source video dataset
-    web_ready/              # Compressed videos for web playback
+    media/                  # everything we keep (point CLIMB_MEDIA_DIR at your SSD instead)
+        video/              # 360p web-playable copies
+        kf/                 # 384px keyframes
+        thumbs/             # 160px keyframes for the result grid
+    work/                   # everything we throw away again (CLIMB_WORK_DIR)
+        raw/                # downloaded source videos
+        cand/               # candidate frames, before selection picks from them
+        audio/              # extracted audio, waiting for Whisper
 
 frontend/
     index.html              # Application shell
@@ -209,18 +213,29 @@ frontend/
 
 video_processing/
     requirements.txt           # python dependencies        
+    migrations/                # numbered .sql schema migrations, applied in order
+        001_core_schema.sql    # videos / scenes / keyframes / text tables / ingest_jobs
+        002_vector_function_costs.sql # teaches the query planner that vector math isn't free
+        003_videos_damaged_flag.sql   # marks videos whose bitstream only partly decodes
     src/
         config.py              # Settings
         custom_logger.py       # Logging utilities
-        dataset_compression.py # Dataset compression helpers
         db_queries.py          # Database queries
-        db_setup.py            # Database setup
+        db_setup.py            # Prints the podman command, nothing more
         embeddings_extraction.py # Feature extraction
-        keyframe_extraction.py  # Keyframe extraction
         main.py                # Pipeline entry point
         search_engine.py       # Search and embedding service
         utils.py               # Utility functions
         worker_http_endpoint.py # Search Engine HTTP interface 
+        db/
+            connection.py      # DB connections + a commit/rollback context manager
+            migrate.py         # migration runner (with checksums, so nobody edits history)
+            index_ops.py       # builds/drops the expensive ANN + GIN indexes
+        pipeline/
+            probe.py           # ffprobe metadata (fps, duration, dimensions, audio)
+            shot_boundaries.py # parses master shot boundary files -> scenes
+            decode.py          # the one-pass FFmpeg stage
+            paths.py           # where everything lives on disk, derived not stored
     logs/                     # Log files (local only)
    
 readme_images/              # Images displayed in readme
@@ -268,15 +283,16 @@ You can control different stages of CLIMB using the following flags:
 python main.py [OPTIONS]
 ```
 
-| Flag   | Long option                  | Description                                                                    |
-|--------|------------------------------|--------------------------------------------------------------------------------|
-| -c     | --compress                   | Compress the dataset videos using FFmpeg to allow for efficient video retrieval |
-| -spc   | --showshowPostgresCommand    | Create and show the command to create and start the postgres database          |
-| -ek    | --extractKeyframes           | Extract the Keyframes to store and embed, also updates the Database            |
-| -ekndb | --extractKeyframesNoDatabase | Keyframe extraction without editing the Database                               |
-| -ee    | --extractEmbeddings          | Embed the Images and store the vectors in the Database                         |
+| Flag   | Long option                  | Description                                                                     |
+|--------|------------------------------|---------------------------------------------------------------------------------|
+| -spc   | --showshowPostgresCommand    | Create and show the command to create and start the postgres database           |
+| -m     | --migrate                    | Apply any pending schema migrations. Run this first, always                     |
+| -isb   | --ingestShotBoundaries       | Probe the videos and load one scene per master shot from the boundary files     |
+| -d     | --decode                     | One FFmpeg pass per video: 360p copy + candidate frames + audio, all at once    |
+| -ee    | --extractEmbeddings          | Embed the Images and store the vectors in the Database                          |
+| -bi    | --buildIndexes               | Build the ANN + full-text indexes. Do this **after** loading, on a beefy machine |
 | -start | --startSearchEngine          | Start the Webserver which embeds user Queries.        |
-| -h     | --help                       | Shows how to use the CLIMB-CLI and exits                                       |  
+| -h     | --help                       | Shows how to use the CLIMB-CLI and exits                                        |  
 
 ```bash:
 python main.py --help
@@ -289,22 +305,17 @@ Save it to ```/dataset/V3C1_200``` also extract the scenes and put them under ``
 If you would like to choose a different Dataset / Folder structure edit the respective parameters in
 ```/video_processing/src/config.py```
 
-In order to allow for efficient browser based retrieval the vide sizes must be small. To compress the videos run
+Please be sure that you have FFmpeg installed under your system as CLIMB will spawn a whole lot of child-processes
+executing FFmpeg. To download FFmpeg visit: https://ffmpeg.org/download.html
 
-```bash:
-python main.py --compress
-```
+Video compression used to live here as its own step. It has moved into the decode stage (section 1.5), which does the
+compressing, the frame extracting and the audio ripping in a single pass, because decoding the same video three times
+was a bit silly.
 
-This will initiate a FFmpeg based compression of all the videos which will by default be stored under
-```/dataset/web_ready```.
-Please be sure that you have FFmpeg installed under your system as CLIMB will spawn a child-process executing FFmpeg.
-To download FFmpeg visit: https://ffmpeg.org/download.html
+#### 1.3 The Database
 
-#### 1.3 Keyframe extraction
-
-Next you will need to extract the keyframes from the dataset. Additionally you will need to save the frame rate of every
-video to later be able to build the millisecond payload for the dres server. For that we will need to create simple
-postgres-database.
+Everything downstream needs a database: the frame rate of every video (so we can build the millisecond payload for the
+DRES server), the master shots, the keyframes and eventually a couple of million embeddings.
 Because every sane people hates it when postgres runs locally on your machine we will spin up a podman container for
 that. The parameters
 for the database can be found and edited in ```/video_processing/src/config.py```. Sensitive information should be  
@@ -337,25 +348,94 @@ properly.
 the logs if you stumble upon undesired behaviour. For more details however I will recommend their excellent
 documentation found under https://docs.podman.io/en/latest/)
 
-Now that you set up the Database, you can populate it. In order to do so, run
+**A word of warning if you have been here before:** we moved from ```ankane/pgvector``` (Postgres 16, pgvector 0.5.1) to
+```pgvector/pgvector:pg17``` (Postgres 17, pgvector 0.8.x), because 0.5.1 has neither ```halfvec``` nor binary
+quantization and we need both to survive the full V3C dataset. Postgres does not do major version upgrades by politely
+reading the old files, so an existing ```postgres_data``` volume and the old ```climb_db.dump``` are **not** reusable.
+Use a fresh volume name and rebuild. Sorry.
+
+##### 1.3.1 Create the schema
+
+The tables live in ```/video_processing/migrations/``` as numbered ```.sql``` files, and get applied in order by
 
 ```bash 
-python main.py --extractKeyframes
+python main.py --migrate
 ```
 
-This will extract the keyframes out of the videos, save the Screenshots locally to later calculate the embeddings and
-will also insert them into the postgres climb Database.
-If you already got your Database set up (i.e. through a provided) dumb, but deleted the keyframes folder (I don't know
-why you would do that but still) you can run
+This is safe to run as often as you like, it only applies what is missing. It also refuses to run if somebody edited a
+migration that was already applied, because two machines quietly disagreeing about what the schema is, is a fun
+afternoon nobody asked for. Need to change something? Add a new migration.
+
+You no longer need to create the ```vector``` extension by hand, migration 001 does it for you (along with ```pg_trgm```
+and ```unaccent```).
+
+#### 1.4 Master shot boundaries
+
+V3C ships with predefined *master shot boundaries*: the official list of where each shot starts and ends. That list is
+the backbone of the whole index, so it goes in before anything else touches a video.
 
 ```bash 
-python main.py --extractKeyframesNoDatabase
+python main.py --ingestShotBoundaries
 ```
 
-to still extract the keyframes, without updating the Database. (Please note you will still need an active database
-connection to do so)
+This walks the dataset, runs ```ffprobe``` on every video (frame rate, duration, dimensions, whether there is an audio
+track at all) and writes one ```scenes``` row per master shot. Frame rates come from ffprobe rather than OpenCV, because
+OpenCV cheerfully returns 0 or NaN for a decent number of V3C files and the old code's answer to that was "eh, must be 30
+fps" — which then quietly poisons every timestamp we ever send to DRES for that video. The 200-video set alone has ten
+different frame rates in it, including such beauties as 23.000689 and 29.97003.
 
-#### 1.4 Video Embedding
+The parser handles both the course's ```<video_id>.mp4.scenes.txt``` files and the official V3C boundary TSVs. It works
+out which columns hold the frame numbers by looking at what is actually in them instead of trusting a fixed column
+order, so it does not care whether NIST puts the frames before or after the timecodes, and it falls back to converting
+timecodes with the probed frame rate if a file has no frame columns at all. One corrupt line gets skipped with a warning
+rather than taking the whole video down with it.
+
+#### 1.5 Decoding
+
+Now the actual work. Run
+
+```bash 
+python main.py --decode
+```
+
+and go do something else for a while. For each video this spawns exactly **one** FFmpeg process which decodes it once
+and produces three things at the same time:
+
+- a 360p H.264 copy under ```media/video/``` — this is what the frontend plays, and at full V3C scale it is the only
+  copy of the video we keep once the original goes back to the server
+- candidate frames under ```work/cand/``` — one every half second, which keyframe selection will later thin down
+- a 16 kHz mono Opus track under ```work/audio/``` — food for Whisper
+
+The old code did this in two passes: ```--compress``` decoded the whole video to transcode it, then
+```--extractKeyframes``` decoded it *again*, seeking to each keyframe individually with OpenCV. Seeking to an arbitrary
+frame in H.264 means decoding forward from the previous I-frame, so sampling once a second re-decodes most of the video
+over and over — and when OpenCV's seek missed (which on V3C it does), the fallback rewound to the start of the shot and
+walked forward frame by frame. On the 39-minute shot in video 00191 that is about 56,000 sequential reads to get one
+picture. It worked. It just did not need to.
+
+A few things worth knowing:
+
+- **It will not upscale.** The web copy is capped at 360 lines, so the already-small 480x270 course videos are left at
+  their own size instead of being blown up for no reason.
+- **Candidate frames are JPEG, not WebP.** They get deleted the moment selection has run, so WebP's nicer compression
+  buys nothing, and it is not free: 3.1s per video versus 0.1s. The keyframes we actually *keep* are WebP.
+- **Tuning knobs**, all environment variables: ```CLIMB_DECODE_WORKERS``` (default 6), ```CLIMB_FFMPEG_THREADS```
+  (default 2) and ```CLIMB_X264_PRESET``` (default ```veryfast```). Set ```CLIMB_MEDIA_DIR``` and ```CLIMB_WORK_DIR``` to
+  put the output on your external SSD rather than filling up your laptop.
+- **NVENC is used automatically if your GPU can actually do it.** Note the "actually": the old check just asked FFmpeg
+  whether it knew what NVENC *was*, which every distro build cheerfully says yes to, GPU or no GPU. It now tries to
+  encode a single tiny frame and believes the result. If a GPU encode fails mid-run (consumer cards limit how many
+  NVENC sessions you can have at once) that video quietly falls back to the CPU.
+
+- **Broken videos get indexed anyway.** V3C1_200 contains two videos (00016 and 00024) whose H.264 streams are damaged
+  — the container promises 23,120 and 47,289 frames, the bitstream delivers about 84% of that and a great deal of
+  shouting about NAL units. Throwing away five sixths of a video because the last sixth is rubbish would be a shame, so
+  those get indexed from whatever decodes and flagged as ```damaged``` in the database, which is why their keyframe
+  coverage looks thin later.
+- **A short extraction that is *not* explained by a broken file fails the video instead.** That combination means
+  something went wrong outside the video — a full disk, most likely — and is worth retrying. Ask me how I know.
+
+#### 1.6 Video Embedding
 
 In order to later to semantic video retrieval, we will need to encode the Videos (Keyframes to be more specific) into a
 high Dimensional
@@ -371,7 +451,28 @@ This will scan your climb database for video shots missing embeddings, extract t
 store the vectors in the db.
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
-#### 1.5 Start the Search Engine
+#### 1.7 Build the search indexes
+
+Embeddings in a table are not a search engine, they are a very expensive list. To make them findable in single-digit
+milliseconds instead of "go get a coffee" run
+
+```bash 
+python main.py --buildIndexes
+```
+
+This builds the HNSW vector index and the full-text indexes. Two things worth knowing:
+
+- Do it **after** loading, not before. Maintaining an HNSW index while you shovel millions of rows into it is several
+  times slower than building it once at the end.
+- Do it on a machine with some RAM to spare (we ask for 8GB of ```maintenance_work_mem```). Building the index and
+  *reading* the index are very different appetites — the plan is that whoever has the beefy machine builds it, and the
+  competition laptop just gets handed the finished database.
+
+The vector index is built over *binary quantized* embeddings and then reranks the top candidates against the full
+precision vectors. Roughly: 1024 dimensions squashed to 1024 bits is about 5 GB of index instead of 28 GB, which is the
+difference between fitting in a laptop's RAM and very much not.
+
+#### 1.8 Start the Search Engine
 
 You are all set, now you can finally start the Search Engine which will open up a connection for the backend to connect
 to, in order to encode the searches.
@@ -474,4 +575,31 @@ one included, browser based wise I like to use
 
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
 
-TODO: fix keyframe extraction, database architecture etc. to handle the large dataset
+---
+
+## Scaling up to the full V3C dataset
+
+The version of CLIMB that won the course competition indexed 200 videos and 25 hours. VBS 2027 runs against all of V3C:
+**28,450 videos, 3,800 hours, 4.14 million master shots and about 4.7 TB of video**, plus the marine (MVK) and GynSurg
+datasets. That is roughly 150x more video, which is the kind of number where "it works, just slowly" stops being true
+and things simply fall over instead.
+
+So the offline pipeline is being rebuilt. The shape of it:
+
+- **Videos are never all local.** They live on a server (thanks Mr. Schöffmann), get pulled down in batches, processed, and
+  deleted again. A Postgres job table (```ingest_jobs```) tracks where every video is in the pipeline, and workers claim
+  batches with ```FOR UPDATE SKIP LOCKED```, meaning the decode stage on one machine and an embedding stage on a
+  GPU somewhere else can chew through the same queue without knowing about each other.
+- **```scenes``` is a real table now.** The old ```shots``` table was a *keyframes* table, named shots due to **legacy code :sparkles:** it sampled one frame
+  per second and copied the scene's frame range onto each row, so "which scene is this" had to be rebuilt by gluing
+  strings together in two different codebases. Now a master shot is a row with an id, and keyframes point at it.
+- **Two to thirty-two keyframes per shot, chosen by how different they look**, instead of one per second come what may.
+  The old scheme gave a 39-minute scene 2,329 keyframes, which is both a lot of disk and not actually helpful.
+- **More than one signal.** SigLIP2 embeddings, OCR over the keyframes, Whisper transcripts of the audio and VLM
+  captions, all fused by reciprocal rank fusion. Text search is exact where embeddings are vague, and it turns out V3C
+  is absolutely full of readable signs, chyrons and scoreboards.
+- **Thumbnails that are actually thumbnails.** Serving 40 KB full-resolution JPEGs as 200px grid tiles was fine for
+  3.9 GB. It is not fine for several million of them.
+
+Progress so far: the database foundation and the master shot ingest are done. The single-pass decode, keyframe
+selection, the GPU stages and the retrieval layer are next.

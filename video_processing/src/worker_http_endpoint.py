@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from search_engine import SearchEngine
-from db_setup import connect_to_database
+from db.connection import connect_to_database
 from config import Config
 from dotenv import load_dotenv
 

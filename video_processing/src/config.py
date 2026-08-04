@@ -14,23 +14,41 @@ class Config:
     EMBEDDING_BATCH_SIZE: int = 16
     SEARCH_TOP_K: int = 48
 
-    # --- Video Compression ---
-    WEB_RESOLUTION = 480  # fast to process and loads instantly in web UIs.
+    # --- Decode stage ---
     VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}  # valid video extensions
     WEB_VIDEO_EXTENSION = ".mp4"
-    COMPRESSION_PARALLEL = True  # whether to use multiprocessing for video compression
+    WEB_VIDEO_HEIGHT: int = 360  # never upscales; a source shorter than this is left alone
+    WEB_VIDEO_CRF: int = 32
+    WEB_AUDIO_BITRATE: str = "48k"
+    # set CLIMB_X264_PRESET=superfast to trade ~23% more disk for ~1.5x faster encoding.
+    WEB_VIDEO_PRESET: str = os.getenv("CLIMB_X264_PRESET") or "veryfast"
+    CANDIDATE_FPS: int = 2
+    CANDIDATE_HEIGHT: int = 384  # matches SigLIP2's 384px input
+    CANDIDATE_JPEG_QUALITY: int = 3  # ffmpeg -q:v scale, 2 (best) to 31 (worst)
+    # Audio exists only to be fed to Whisper, which resamples to 16 kHz mono anyway.
+    AUDIO_SAMPLE_RATE: int = 16000
+    AUDIO_BITRATE: str = "16k"
+
+    DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)
+    FFMPEG_THREADS: int = int(os.getenv("CLIMB_FFMPEG_THREADS") or 2)
+
     # --- Paths ---
     DATA_DIR: str = str(PROJECT_ROOT / "dataset")
     DATASET_FOLDER: str = "V3C1_200"
     SCENES_DIR: str = "scenes_v3c1_204/scenes_v3c1_204"
-    WEB_READY_DATASET_FOLDER: str = "web_ready"
+    # Which shard the videos in DATASET_FOLDER belong to.
+    COLLECTION: str = "V3C1"
     LOG_FOLDER: str = str(VIDEO_PROCESSING_ROOT / "logs")
-    KEYFRAME_FOLDER: str = "keyframes"
+    MIGRATIONS_DIR: str = str(VIDEO_PROCESSING_ROOT / "migrations")
+
+    #   CLIMB_MEDIA_DIR  ~510 GB, persistent -- 360p video, keyframes, thumbnails
+    #   CLIMB_WORK_DIR   transient -- raw downloads, candidate frames, extracted audio
+    MEDIA_DIR: str = os.getenv("CLIMB_MEDIA_DIR") or str(PROJECT_ROOT / "dataset" / "media")
+    WORK_DIR: str = os.getenv("CLIMB_WORK_DIR") or str(PROJECT_ROOT / "dataset" / "work")
 
     # --- Logging ---
     LOG_FILE: str = "CLIMB.log"
     ERROR_FILE: str = "CLIMB_ERROR.log"
-    COMPRESSION_CHECKPOINT_FILE: str = "compression.checkpoint"
     # Log Levels: DEBUG | INFO | WARN | ERROR | CRITICAL
     LOG_LEVEL_MIN: str = "DEBUG"  # logs with a lower level will be ignored before reaching the other loggers (i.e. console / file), DO NOT TOUCH
     LOG_LEVEL_CONSOLE: str = "INFO"
@@ -39,7 +57,34 @@ class Config:
 
     # --- Database ---
     DB_CONTAINER_NAME: str = "climb"
-    DB_CONTAINER_MOUNT_PATH: str = "/var/lib/postgresql/"
+    # The official postgres image (which pgvector/pgvector is built on) puts PGDATA at
+    # /var/lib/postgresql/data. Mounting the parent instead leaves the cluster inside the
+    # container's own filesystem, so the volume holds nothing and the data dies with the container.
+    DB_CONTAINER_MOUNT_PATH: str = "/var/lib/postgresql/data"
+    DB_IMAGE: str = "docker.io/pgvector/pgvector:pg17"
+
+    # --- Vector index ---
+    # m=16 / ef_construction=64 are pgvector's defaults and are adequate for binary vectors.
+    HNSW_M: int = 16
+    HNSW_EF_CONSTRUCTION: int = 64
+    ANN_OVERSAMPLE: int = 1000
+
+    # --- Postgres tuning: build profile ---
+    PG_BUILD_MAINTENANCE_WORK_MEM: str = "8GB"
+    PG_BUILD_PARALLEL_WORKERS: int = 7
+
+    # --- Postgres tuning: serve profile ---
+    PG_SERVE_SHARED_BUFFERS: str = "4GB"
+    PG_SERVE_WORK_MEM: str = "64MB"
+    PG_SERVE_EFFECTIVE_CACHE_SIZE: str = "8GB"
+    PG_SERVE_HNSW_EF_SEARCH: int = 1000 # hnsw.ef_search must be >= the oversample LIMIT or pgvector silently returns fewer rows.
+
+    @property
+    def db_user(self) -> str:
+        value = os.getenv("POSTGRES_USER")
+        if not value:
+            return "postgres"
+        return value
 
     @property
     def db_host(self) -> str:
@@ -95,12 +140,13 @@ class Config:
 
 @dataclass
 class CLIConfig:
-    compression_flags: List[str] = field(default_factory=lambda: ["-c", "--compress"])
     database_container_creation_flag: List[str] = field(default_factory=lambda: ["-spc", "--showPostgresCommand"])
-    extract_keyframes: List[str] = field(default_factory=lambda: ["-ek", "--extractKeyframes"])
-    extract_keyframes_no_db: List[str] = field(default_factory=lambda: ["-ekndb", "--extractKeyframesNoDatabase"])
+    decode: List[str] = field(default_factory=lambda: ["-d", "--decode"])
     extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
     start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startSearchEngine"])
+    migrate: List[str] = field(default_factory=lambda: ["-m", "--migrate"])
+    build_indexes: List[str] = field(default_factory=lambda: ["-bi", "--buildIndexes"])
+    ingest_shots: List[str] = field(default_factory=lambda: ["-isb", "--ingestShotBoundaries"])
     help_flags: List[str] = field(default_factory=lambda: ["-h", "--help"])
 
     help_string = """
@@ -111,11 +157,15 @@ Description:
   TODO
 
 Options:
--c, --compress					Compress the dataset videos (to 480p) using FFmpeg to allow for efficient video retrieval
--spc, --showPostgresCommand     Create and show the commands to create a podman container housing the postgres database and activate the vector addition for postgres 
--ek, --extractKeyframes        Extract the Keyframes to store and embed, and update the Database 
--ekndb, --extractKeyframesNoDatabase    Keyframe extraction without editing the Database
+-spc, --showPostgresCommand     Create and show the commands to create a podman container housing the postgres database and activate the vector addition for postgres
+-d, --decode                   Decode the videos: one FFmpeg pass per video emitting the 360p web
+                               copy, the candidate frames and the audio track all at once
 -ee, --extractEmbeddings       Embed the Images and store the vectors in the Database
 -start, --startSearchEngine                     Start the Webserver which embeds user Queries.
+-m, --migrate                  Apply any pending schema migrations from video_processing/migrations/
+-isb, --ingestShotBoundaries   Probe the videos and load one scene per master shot from the
+                               boundary files. Run this before any decoding.
+-bi, --buildIndexes            Build the ANN and full-text indexes. Run this AFTER a bulk load,
+                               on a machine with enough maintenance_work_mem (~8GB).
 -h, --help						Show this help message and exit
 """
