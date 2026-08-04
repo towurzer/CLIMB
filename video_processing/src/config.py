@@ -29,6 +29,27 @@ class Config:
     AUDIO_SAMPLE_RATE: int = 16000
     AUDIO_BITRATE: str = "16k"
 
+    # --- Keyframe selection (see pipeline/keyframe_selection.py) ---
+    # k = clamp(ceil(shot_seconds / KEYFRAME_SECONDS_PER), MIN, MAX).
+    KEYFRAME_SECONDS_PER: int = 4
+    KEYFRAME_MIN_K: int = 2
+    KEYFRAME_MAX_K: int = 32
+    KEYFRAME_HEIGHT: int = 384   # detail panel + model input
+    THUMBNAIL_HEIGHT: int = 160  # result grid
+    WEBP_QUALITY: int = 80
+    # libwebp encoder effort. OpenCV hardcodes 4; measured on 384px frames, method=2 is 2.4x
+    # faster for 4% more bytes (12.9ms/11.9KB vs 30.7ms/11.4KB), (the testing took ages, but
+    # running the whole thing would have taken longer) which is why these are written
+    # through PIL. Encoding dominates this stage, so it is worth the 4%.
+    WEBP_METHOD: int = 2
+    # Fades and black frames are everywhere in V3C and make useless keyframes.
+    DEGENERATE_LUMA_MIN: int = 16
+    DEGENERATE_LUMA_MAX: int = 240
+    DEGENERATE_STDDEV_MIN: int = 8
+    # Escape hatch so title cards and credits are not mistaken for fades
+    DEGENERATE_EDGE_MAX: float = 0.002
+    SELECTION_WORKERS: int = int(os.getenv("CLIMB_SELECTION_WORKERS") or 6)
+
     DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)
     FFMPEG_THREADS: int = int(os.getenv("CLIMB_FFMPEG_THREADS") or 2)
 
@@ -142,6 +163,7 @@ class Config:
 class CLIConfig:
     database_container_creation_flag: List[str] = field(default_factory=lambda: ["-spc", "--showPostgresCommand"])
     decode: List[str] = field(default_factory=lambda: ["-d", "--decode"])
+    select_keyframes: List[str] = field(default_factory=lambda: ["-sk", "--selectKeyframes"])
     extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
     start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startSearchEngine"])
     migrate: List[str] = field(default_factory=lambda: ["-m", "--migrate"])
@@ -160,6 +182,8 @@ Options:
 -spc, --showPostgresCommand     Create and show the commands to create a podman container housing the postgres database and activate the vector addition for postgres
 -d, --decode                   Decode the videos: one FFmpeg pass per video emitting the 360p web
                                copy, the candidate frames and the audio track all at once
+-sk, --selectKeyframes         Pick 2-32 visually distinct keyframes per master shot and write the
+                               keyframe + thumbnail images
 -ee, --extractEmbeddings       Embed the Images and store the vectors in the Database
 -start, --startSearchEngine                     Start the Webserver which embeds user Queries.
 -m, --migrate                  Apply any pending schema migrations from video_processing/migrations/

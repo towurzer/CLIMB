@@ -235,6 +235,7 @@ video_processing/
             probe.py           # ffprobe metadata (fps, duration, dimensions, audio)
             shot_boundaries.py # parses master shot boundary files -> scenes
             decode.py          # the one-pass FFmpeg stage
+            keyframe_selection.py # thins candidate frames down to 2-32 per shot
             paths.py           # where everything lives on disk, derived not stored
     logs/                     # Log files (local only)
    
@@ -435,7 +436,40 @@ A few things worth knowing:
 - **A short extraction that is *not* explained by a broken file fails the video instead.** That combination means
   something went wrong outside the video — a full disk, most likely — and is worth retrying. Ask me how I know.
 
-#### 1.6 Video Embedding
+#### 1.6 Keyframe selection
+
+The decode step left a pile of candidate frames, two per second, which is far more than anyone needs. Thinning them down
+is its own step:
+
+```bash 
+python main.py --selectKeyframes
+```
+
+Each master shot gets **2 to 32 keyframes, picked for how different they look from each other** rather than by the
+clock. The rule:
+
+1. **How many.** `k = ceil(shot_seconds / 4)`, clamped to between 2 and 32. A 3-second shot gets 2, a two-minute one
+   gets 32. The old pipeline took one frame per second no matter what, which is how a single 39-minute shot ended up
+   with 2,329 keyframes that all look the same.
+2. **Throw out the rubbish, but not the title cards.** Frames that are nearly black, nearly white, or nearly flat are
+   dropped. A frame only counts as rubbish if it *also* has basically no edges in it, 
+   because white-on-black credits score exactly like a fade on brightness alone, and those are
+   some of the most useful frames we have (dense readable text is a gift for OCR and for text-based tasks). If *every*
+   frame in a shot is genuinely blank, the least boring one is kept anyway, because a scene with no keyframe at all is
+   worse.
+3. **Describe each frame cheaply.** A colour histogram, a coarse structural hash and an edge-density number.
+4. **Pick the spread.** Start from the most typical frame of the shot, then repeatedly add whichever remaining frame is
+   least like everything picked so far. You end up covering the shot instead of collecting near-duplicates of its first
+   second.
+5. **Very short shots** (under half a second — about 5% of them, and no candidate frame happens to land inside) simply
+   get their middle frame pulled straight out of the video.
+
+Each chosen frame is written twice: 384px for the detail panel and as model input, 160px for the results grid. Both
+WebP, roughly 12 KB and 6 KB. For the 200-video set that is **35,558 keyframes instead of the old 99,661**, every one of
+the 14,345 scenes has at least one, and no scene has more than its share, fewer files, better coverage, and no more
+scrolling past twenty identical pictures of the same shot.
+
+#### 1.7 Video Embedding
 
 In order to later to semantic video retrieval, we will need to encode the Videos (Keyframes to be more specific) into a
 high Dimensional
@@ -451,7 +485,7 @@ This will scan your climb database for video shots missing embeddings, extract t
 store the vectors in the db.
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
-#### 1.7 Build the search indexes
+#### 1.8 Build the search indexes
 
 Embeddings in a table are not a search engine, they are a very expensive list. To make them findable in single-digit
 milliseconds instead of "go get a coffee" run
@@ -472,7 +506,7 @@ The vector index is built over *binary quantized* embeddings and then reranks th
 precision vectors. Roughly: 1024 dimensions squashed to 1024 bits is about 5 GB of index instead of 28 GB, which is the
 difference between fitting in a laptop's RAM and very much not.
 
-#### 1.8 Start the Search Engine
+#### 1.9 Start the Search Engine
 
 You are all set, now you can finally start the Search Engine which will open up a connection for the backend to connect
 to, in order to encode the searches.

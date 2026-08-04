@@ -306,7 +306,8 @@ def decode_batch(jobs, use_gpu=None, force=False, workers=None):
                for vid, path, fps, dur, has_audio, dmg in jobs]
     results = []
 
-    with ProcessPoolExecutor(max_workers=workers) as executor:
+    with ProcessPoolExecutor(max_workers=workers,
+                             initializer=custom_logger.setup_worker_logging) as executor:
         futures = {executor.submit(_decode_worker, item): item[0] for item in payload}
         for future in as_completed(futures):
             video_id = futures[future]

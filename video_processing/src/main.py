@@ -10,6 +10,7 @@ from db.connection import connection_scope
 from db.index_ops import build_indexes
 from db.migrate import run_migrations
 from pipeline.decode import decode_from_database
+from pipeline.keyframe_selection import select_from_database
 from pipeline.shot_boundaries import ingest_directory
 
 if __name__ == '__main__':
@@ -26,9 +27,10 @@ if __name__ == '__main__':
     build_search_indexes = utils.has_flag(argv, cli_config.build_indexes)
     ingest_shots = utils.has_flag(argv, cli_config.ingest_shots)
     decode = utils.has_flag(argv, cli_config.decode)
+    select_keyframes = utils.has_flag(argv, cli_config.select_keyframes)
 
     anyFlag = (show_database_creation_message or extract_embeddings or start_embedding_worker
-               or migrate or build_search_indexes or ingest_shots or decode)
+               or migrate or build_search_indexes or ingest_shots or decode or select_keyframes)
 
     if show_info_message or not anyFlag:
         print(cli_config.help_string)
@@ -59,6 +61,10 @@ if __name__ == '__main__':
                 source_dir=os.path.join(conf.DATA_DIR, conf.DATASET_FOLDER),
                 collection=conf.COLLECTION,
             )
+    elif select_keyframes:
+        conf = Config()
+        with connection_scope() as conn:
+            select_from_database(conn, collection=conf.COLLECTION)
     elif extract_embeddings:
         embeddings_extraction.extract_and_store_embeddings()
     elif start_embedding_worker:
