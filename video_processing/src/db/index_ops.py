@@ -11,21 +11,34 @@ Typical order of operations for a bulk load:
 import custom_logger
 from config import Config
 
-# Binary-quantized HNSW.
+# Binary-quantized HNSW, one partial index per embedding model.
 #
-# Two reasons this is quantized rather than a plain halfvec index. First, size: at 12.4M
-# keyframes a halfvec HNSW is ~28 GB, dangerosly close to a standard 32GB and way to much for a more compact
-# 16GB device of usable RAM, while the bit(1024) version is ~4 GB and does. Second, the partial predicate
-# does structural duty -- a search query that forgets `WHERE embedding IS NOT NULL` cannot use
-# this index, so it announces itself as a seq scan instead of silently ranking un-embedded
-# rows first the way `ORDER BY similarity DESC` used to.
-KEYFRAMES_ANN_INDEX = "keyframes_bq_hnsw"
-CREATE_KEYFRAMES_ANN_INDEX = """
-    CREATE INDEX IF NOT EXISTS {name} ON keyframes
-    USING hnsw ((binary_quantize(embedding)::bit(1024)) bit_hamming_ops)
+# Quantized rather than a plain halfvec index because of size: at 12.4M keyframes a halfvec HNSW
+# is ~28 GB, dangerously close to a standard 32GB and far too much for a 16GB machine, while the
+# bit(1024) version is ~5.3 GB. The oversample-then-rerank query recovers the precision.
+#
+# One index per model, because models differ in dimension (1024 for SigLIP2, 512 for the domain
+# models earmarked for MVK and GynSurg) and occupy different vector spaces. The cast in the
+# expression is what lets a single dimensionless column carry all of them.
+ANN_INDEX_PREFIX = "keyframe_embedding_m"
+
+CREATE_ANN_INDEX = """
+    CREATE INDEX IF NOT EXISTS {name} ON keyframe_embedding
+    USING hnsw ((binary_quantize(embedding::halfvec({dims}))::bit({dims})) bit_hamming_ops)
     WITH (m = {m}, ef_construction = {ef_construction})
-    WHERE embedding IS NOT NULL;
+    WHERE model_id = {model_id};
 """
+
+SELECT_MODELS_WITH_ROWS = """
+    SELECT m.model_id, m.name, m.dims
+    FROM embedding_model m
+    WHERE EXISTS (SELECT 1 FROM keyframe_embedding e WHERE e.model_id = m.model_id)
+    ORDER BY m.model_id;
+"""
+
+
+def ann_index_name(model_id: int) -> str:
+    return f"{ANN_INDEX_PREFIX}{model_id}_bq_hnsw"
 
 TEXT_INDEXES = [
     ("keyframe_text_tsv_idx",
@@ -41,7 +54,7 @@ TEXT_INDEXES = [
      "CREATE INDEX IF NOT EXISTS transcript_segment_tsv_idx ON transcript_segment USING gin (tsv);"),
 ]
 
-ANALYZE_TABLES = ["keyframes", "keyframe_text", "keyframe_caption", "transcript_segment"]
+ANALYZE_TABLES = ["keyframe_embedding", "keyframe_text", "keyframe_caption", "transcript_segment"]
 
 
 def apply_build_tuning(conn):
@@ -100,15 +113,16 @@ def build_indexes(conn, ann=True, text=True, analyze=True):
     apply_build_tuning(conn)
 
     if ann:
-        logger.info(f"Building {KEYFRAMES_ANN_INDEX} (this is the long one)...")
-        with conn.cursor() as cur:
-            cur.execute(CREATE_KEYFRAMES_ANN_INDEX.format(
-                name=KEYFRAMES_ANN_INDEX,
-                m=conf.HNSW_M,
-                ef_construction=conf.HNSW_EF_CONSTRUCTION,
-            ))
-        conn.commit()
-        logger.info(f"Built {KEYFRAMES_ANN_INDEX}.")
+        for model_id, name, dims in embedded_models(conn):
+            index = ann_index_name(model_id)
+            logger.info(f"Building {index} for {name} ({dims}d) -- this is the long one...")
+            with conn.cursor() as cur:
+                cur.execute(CREATE_ANN_INDEX.format(
+                    name=index, dims=dims, model_id=model_id,
+                    m=conf.HNSW_M, ef_construction=conf.HNSW_EF_CONSTRUCTION,
+                ))
+            conn.commit()
+            logger.info(f"Built {index}.")
 
     if text:
         for name, sql in TEXT_INDEXES:
@@ -133,7 +147,7 @@ def drop_indexes(conn, ann=True, text=True):
 
     targets = []
     if ann:
-        targets.append(KEYFRAMES_ANN_INDEX)
+        targets.extend(ann_index_name(m[0]) for m in embedded_models(conn))
     if text:
         targets.extend(name for name, _ in TEXT_INDEXES)
 
@@ -144,9 +158,17 @@ def drop_indexes(conn, ann=True, text=True):
         logger.info(f"Dropped {name}.")
 
 
+def embedded_models(conn):
+    """Returns [(model_id, name, dims)] for models that actually have embeddings stored."""
+    with conn.cursor() as cur:
+        cur.execute(SELECT_MODELS_WITH_ROWS)
+        return cur.fetchall()
+
+
 def index_status(conn):
     """Returns [(index_name, exists, size_pretty)] for reporting."""
-    expected = [KEYFRAMES_ANN_INDEX] + [name for name, _ in TEXT_INDEXES]
+    expected = ([ann_index_name(m[0]) for m in embedded_models(conn)]
+                + [name for name, _ in TEXT_INDEXES])
 
     with conn.cursor() as cur:
         cur.execute(
