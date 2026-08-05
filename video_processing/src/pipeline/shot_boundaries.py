@@ -290,7 +290,8 @@ def _index_by_video_id(directory, patterns):
     return found
 
 
-def ingest_directory(conn, video_dir, boundary_dir, collection, replace=False, limit=None):
+def ingest_directory(conn, video_dir, boundary_dir, collection, replace=False, limit=None,
+                     video_ids=None, extra_video_dirs=()):
     """
     Ingests every video in a directory that has a matching boundary file.
 
@@ -299,10 +300,20 @@ def ingest_directory(conn, video_dir, boundary_dir, collection, replace=False, l
     """
     logger = custom_logger.get_logger("shot_boundaries")
 
-    videos = _index_by_video_id(video_dir, ("*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov"))
+    patterns = ("*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov")
+    videos = {}
+    for directory in (video_dir, *extra_video_dirs):
+        if directory and Path(directory).is_dir():
+            # First directory wins, so freshly fetched files take precedence over a local dataset.
+            videos = {**_index_by_video_id(directory, patterns), **videos}
     boundaries = _index_by_video_id(boundary_dir, ("*.txt", "*.tsv", "*.csv"))
 
     paired = sorted(set(videos) & set(boundaries))
+    if video_ids is not None:
+        # Restricted to the queued batch. Without this, a purge that empties the download
+        # directory makes the next run fall back to scanning the whole local dataset and quietly
+        # ingest every video in it rather than the handful actually being processed.
+        paired = [v for v in paired if v in set(video_ids)]
     if limit:
         paired = paired[:limit]
 

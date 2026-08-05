@@ -23,7 +23,7 @@ else
 fi
 
 # Pane 1 (Left): AI Pipeline
-tmux send-keys -t vbs "conda activate climb && cd video_processing/src && python main.py -start" C-m
+tmux send-keys -t vbs "conda activate climb && cd video_processing/src && python main.py serve" C-m
 
 # Pane 2 (Middle): Split horizontally to create the middle pane for Backend
 tmux split-window -h -t vbs

@@ -75,7 +75,7 @@ own services are up. The frontend re-checks every 5 seconds and the colour means
 
 - green: backend and embedding service both answer, everything works
 - orange: the backend is up but the embedding service is not, so browsing, playback and submitting still work while text
-  search does not. Usually you forgot to start the search engine (`python main.py --startSearchEngine`) or it could not
+  search does not. Usually you forgot to start the search engine (`python main.py serve`) or it could not
   reach the database
 - red: the backend cannot be reached at all, nothing will work until it is back
 
@@ -222,7 +222,7 @@ video_processing/
         custom_logger.py       # Logging utilities
         db_queries.py          # Database queries
         db_setup.py            # Prints the podman command, nothing more
-        main.py                # Pipeline entry point
+        main.py                # CLI entry point (subcommands)
         search_engine.py       # Search and embedding service
         utils.py               # Utility functions
         worker_http_endpoint.py # Search Engine HTTP interface 
@@ -231,12 +231,14 @@ video_processing/
             migrate.py         # migration runner (with checksums, so nobody edits history)
             index_ops.py       # builds/drops the expensive ANN + GIN indexes
         pipeline/
+            runner.py          # enqueue / fetch / purge / status -- the batch lifecycle
             probe.py           # ffprobe metadata (fps, duration, dimensions, audio)
             device.py          # picks cuda / mps / cpu
             embed.py           # SigLIP2 vectors
             ocr.py             # on-screen text
             caption.py         # VLM shot descriptions
             asr.py             # Whisper transcripts
+            text_embed.py      # transcript + caption embeddings
             shot_boundaries.py # parses master shot boundary files -> scenes
             decode.py          # the one-pass FFmpeg stage
             keyframe_selection.py # thins candidate frames down to 2-32 per shot
@@ -280,24 +282,49 @@ cd src
 
 to step into the src folder.
 
-#### Available arguments
+#### Available commands
 
-You can control different stages of CLIMB using the following flags:
+CLIMB's pipeline is driven by subcommands:
 
 ```bash
-python main.py [OPTIONS]
+python main.py <command> [options]
 ```
 
-| Flag   | Long option                  | Description                                                                     |
-|--------|------------------------------|---------------------------------------------------------------------------------|
-| -spc   | --showshowPostgresCommand    | Create and show the command to create and start the postgres database           |
-| -m     | --migrate                    | Apply any pending schema migrations. Run this first, always                     |
-| -isb   | --ingestShotBoundaries       | Probe the videos and load one scene per master shot from the boundary files     |
-| -d     | --decode                     | One FFmpeg pass per video: 360p copy + candidate frames + audio, all at once    |
-| -ee    | --extractEmbeddings          | Embed the Images and store the vectors in the Database                          |
-| -bi    | --buildIndexes               | Build the ANN + full-text indexes. Do this **after** loading, on a beefy machine |
-| -start | --startSearchEngine          | Start the Webserver which embeds user Queries.        |
-| -h     | --help                       | Shows how to use the CLIMB-CLI and exits                                        |  
+| Command        | What it does                                                                    |
+|----------------|---------------------------------------------------------------------------------|
+| `schema`       | Print the podman command for the database                                       |
+| `migrate`      | Apply pending schema migrations. Run this first, always                         |
+| `enqueue`      | Load a manifest of videos into the job queue                                    |
+| `fetch`        | Download queued videos                                                          |
+| `ingest-shots` | Probe the videos and load one scene per master shot                             |
+| `decode`       | One FFmpeg pass: 360p copy + candidate frames + audio                           |
+| `select`       | Pick 2-32 keyframes per shot and write the images                               |
+| `purge`        | Delete transient files whose stage has finished                                 |
+| `embed`        | SigLIP2 vectors (GPU)                                                           |
+| `ocr`          | Read on-screen text (GPU)                                                       |
+| `caption`      | Describe each shot (GPU)                                                        |
+| `asr`          | Transcribe the audio with Whisper (GPU)                                         |
+| `embed-text`   | Encode transcripts and captions for meaning-based search (GPU)                  |
+| `index`        | `build`, `drop` or `status` for the search indexes                              |
+| `run`          | Several stages in one go, always in pipeline order                              |
+| `status`       | What is done and what is left                                                   |
+| `serve`        | Start the search engine the backend talks to                                    |
+
+Every command takes `--collection` and `--limit`. The GPU ones also take `--shard N --shards M`.
+`python main.py <command> --help` explains any of them.
+
+The whole batch in one line:
+
+```bash
+python main.py run
+```
+
+which is `fetch,ingest-shots,decode,select,purge` — pick your own with `--stages`. Order does not matter,
+they get sorted into pipeline order regardless, so you cannot accidentally ask it to select keyframes from a
+video it has not decoded yet.
+
+Everything is resumable. Every stage works out what is still outstanding by asking the database, so a run that
+dies halfway can simply be run again, and a run with nothing left to do takes about five seconds.
 
 ```bash:
 python main.py --help
@@ -317,6 +344,39 @@ Video compression used to live here as its own step. It has moved into the decod
 compressing, the frame extracting and the audio ripping in a single pass, because decoding the same video three times
 was a bit silly.
 
+#### 1.2.1 The job queue
+
+At full V3C scale you cannot keep the videos. They live on the university server, come down a batch at a time,
+get processed, and go away again. That loop is what `enqueue` / `fetch` / `purge` are for:
+
+```bash 
+python main.py enqueue --manifest videos.txt   # a list of source URIs, one per line
+python main.py fetch                           # pulls the next batch down
+...                                            # decode, select, and so on
+python main.py purge                           # throws away what is no longer needed
+```
+
+How the videos are actually reachable is your business, not the pipeline's — set `CLIMB_FETCH_COMMAND` to
+whatever works (`rsync -a --partial {source} {dest}` by default, but scp, curl or cp are all fine).
+
+`purge` is careful rather than clever. It does not wait for the whole pipeline to finish before freeing
+anything, because the working set is what your SSD is spent on:
+
+- the **downloaded video** goes as soon as decode has produced the 360p copy and the candidate frames. It is by
+  far the biggest thing and nothing afterwards reads it
+- the **candidate frames** go once every scene in that video has a keyframe
+- the **audio** goes once the video has been transcribed, or if it never had any
+
+Each of those is checked against what is actually in the database and on disk, so a decode that died halfway
+cannot talk purge into deleting the only copy of the source.
+
+```bash 
+python main.py status
+```
+
+tells you where everything stands: how many videos are at which stage, how many scenes, keyframes, embeddings,
+captions and transcripts exist, and how much transient junk is still sitting on disk.
+
 #### 1.3 The Database
 
 Everything downstream needs a database: the frame rate of every video (so we can build the millisecond payload for the
@@ -328,7 +388,7 @@ stored in a ```.env``` file placed in the root directory of the project ```(CLIM
 To automatically generate the podman command run
 
 ```bash 
-python main.py --showPostgresCommand
+python main.py schema
 ```
 
 In order to create a Podman Container running Postgres
@@ -364,7 +424,7 @@ Use a fresh volume name and rebuild. Sorry.
 The tables live in ```/video_processing/migrations/``` as numbered ```.sql``` files, and get applied in order by
 
 ```bash 
-python main.py --migrate
+python main.py migrate
 ```
 
 This is safe to run as often as you like, it only applies what is missing. It also refuses to run if somebody edited a
@@ -380,7 +440,7 @@ V3C ships with predefined *master shot boundaries*: the official list of where e
 the backbone of the whole index, so it goes in before anything else touches a video.
 
 ```bash 
-python main.py --ingestShotBoundaries
+python main.py ingest-shots
 ```
 
 This walks the dataset, runs ```ffprobe``` on every video (frame rate, duration, dimensions, whether there is an audio
@@ -400,7 +460,7 @@ rather than taking the whole video down with it.
 Now the actual work. Run
 
 ```bash 
-python main.py --decode
+python main.py decode
 ```
 
 and go do something else for a while. For each video this spawns exactly **one** FFmpeg process which decodes it once
@@ -446,7 +506,7 @@ The decode step left a pile of candidate frames, two per second, which is far mo
 is its own step:
 
 ```bash 
-python main.py --selectKeyframes
+python main.py select
 ```
 
 Each master shot gets **2 to 32 keyframes, picked for how different they look from each other** rather than by the
@@ -480,10 +540,10 @@ stopped and restarted at any point, and all four figure out what is left to do b
 keeping a list.
 
 ```bash 
-python main.py --extractEmbeddings   # SigLIP2 vectors, the backbone of semantic search
-python main.py --extractText         # OCR: signs, chyrons, scoreboards, title cards
-python main.py --generateCaptions    # a sentence describing each shot
-python main.py --transcribeAudio     # Whisper transcripts of the speech
+python main.py embed         # SigLIP2 vectors, the backbone of semantic search
+python main.py ocr           # OCR: signs, chyrons, scoreboards, title cards
+python main.py caption       # a sentence describing each shot
+python main.py asr           # Whisper transcripts of the speech
 ```
 
 **Embeddings** encode each keyframe into a 1024-dimensional vector, so a search query can be encoded into the same space
@@ -504,7 +564,7 @@ pick — and they are the pricier stage, so they stay at one per shot.
 **Text embeddings** are the fourth-and-a-half stage:
 
 ```bash 
-python main.py --embedText
+python main.py embed-text
 ```
 
 Run it after transcription and captioning. Word matching alone does not get you far on either: people rarely phrase a
@@ -528,11 +588,11 @@ plain word matching, because what OCR is uniquely good at is exact strings: if y
 If you find yourself with time to burn before the competition, you can go back and fill in the rest:
 
 ```bash 
-python main.py --generateCaptions --allKeyframes
+python main.py caption --all-keyframes
 ```
 
 Every stage only ever does work that is still outstanding, so this picks up exactly the keyframes the narrower run
-skipped and leaves the existing captions alone. Same flag works for `--extractText`, though that one already covers
+skipped and leaves the existing captions alone. Same flag works for `ocr`, though that one already covers
 everything by default. The permanent equivalents are `CLIMB_OCR_SCOPE` and `CLIMB_CAPTION_SCOPE`, either `all` or
 `shot`.
 
@@ -548,7 +608,7 @@ Embeddings in a table are not a search engine, they are a very expensive list. T
 milliseconds instead of "go get a coffee" run
 
 ```bash 
-python main.py --buildIndexes
+python main.py index build
 ```
 
 This builds the HNSW vector index and the full-text indexes. Two things worth knowing:
@@ -570,7 +630,7 @@ to, in order to encode the searches.
 Just run
 
 ```bash
-python main.py --startSearchEngine
+python main.py serve
 ```
 
 and relax. By default the search engine will run locally on port 5000 but just as everything else, this is configurable
@@ -629,7 +689,7 @@ In order to embed the user searches start the search engine by navigating into t
 running
 
 ```bash:
-python main.py --startSearchEngine
+python main.py serve
 ```
 
 ##### 2.4 Start the backend server itself

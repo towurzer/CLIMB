@@ -72,6 +72,12 @@ class Config:
     TEXT_BATCH_SIZE: int = int(os.getenv("CLIMB_TEXT_BATCH") or 128)
     TEXT_MAX_TOKENS: int = 256
 
+    # --- Fetch stage ---
+    # How the collection is reachable is a property of the server, not of this pipeline, so the
+    # transfer is a command template rather than a hardcoded tool. {source} and {dest} are filled in.
+    FETCH_COMMAND: str = os.getenv("CLIMB_FETCH_COMMAND") or "rsync -a --partial {source} {dest}"
+    FETCH_BATCH: int = int(os.getenv("CLIMB_FETCH_BATCH") or 50)
+
     DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)
     FFMPEG_THREADS: int = int(os.getenv("CLIMB_FFMPEG_THREADS") or 2)
 
@@ -180,58 +186,3 @@ class Config:
             raise ValueError(
                 "SEARCH_ENGINE_PORT must be an integer in your .env file, e.g. SEARCH_ENGINE_PORT=5000") from e
 
-
-@dataclass
-class CLIConfig:
-    database_container_creation_flag: List[str] = field(default_factory=lambda: ["-spc", "--showPostgresCommand"])
-    decode: List[str] = field(default_factory=lambda: ["-d", "--decode"])
-    select_keyframes: List[str] = field(default_factory=lambda: ["-sk", "--selectKeyframes"])
-    extract_embeddings: List[str] = field(default_factory=lambda: ["-ee", "--extractEmbeddings"])
-    run_ocr: List[str] = field(default_factory=lambda: ["-ocr", "--extractText"])
-    run_caption: List[str] = field(default_factory=lambda: ["-cap", "--generateCaptions"])
-    run_asr: List[str] = field(default_factory=lambda: ["-asr", "--transcribeAudio"])
-    all_keyframes: List[str] = field(default_factory=lambda: ["-ak", "--allKeyframes"])
-    embed_text: List[str] = field(default_factory=lambda: ["-et", "--embedText"])
-    start_embedding_worker: List[str] = field(default_factory=lambda: ["-start", "--startSearchEngine"])
-    migrate: List[str] = field(default_factory=lambda: ["-m", "--migrate"])
-    build_indexes: List[str] = field(default_factory=lambda: ["-bi", "--buildIndexes"])
-    ingest_shots: List[str] = field(default_factory=lambda: ["-isb", "--ingestShotBoundaries"])
-    help_flags: List[str] = field(default_factory=lambda: ["-h", "--help"])
-
-    help_string = """
-Usage:
-  python main.py [OPTIONS]
-
-Description:
-  TODO
-
-Options:
--spc, --showPostgresCommand     Create and show the commands to create a podman container housing the postgres database and activate the vector addition for postgres
--d, --decode                   Decode the videos: one FFmpeg pass per video emitting the 360p web
-                               copy, the candidate frames and the audio track all at once
--sk, --selectKeyframes         Pick 2-32 visually distinct keyframes per master shot and write the
-                               keyframe + thumbnail images
--ee, --extractEmbeddings       Embed the Images and store the vectors in the Database
--ocr, --extractText            Read on-screen text off the keyframes (GPU)
--cap, --generateCaptions       Write a one-sentence description of each shot (GPU)
--asr, --transcribeAudio        Transcribe the audio track with Whisper (GPU)
--et, --embedText               Embed the OCR strings and transcripts so they can be searched by
-                               meaning as well as by exact wording (GPU). Run after --extractText
-                               and --transcribeAudio.
-
-  The four stages above accept --shard N --shards M, so several machines can work through the
-  same database at once without tripping over each other.
-
--ak, --allKeyframes            Widen --extractText / --generateCaptions to every keyframe instead
-                               of one per shot. Both stages only ever do outstanding work, so this
-                               tops up what a narrower earlier run left behind. Captions default to
-                               one per shot; run them again with this flag if there is time to
-                               spare before the competition.
--start, --startSearchEngine                     Start the Webserver which embeds user Queries.
--m, --migrate                  Apply any pending schema migrations from video_processing/migrations/
--isb, --ingestShotBoundaries   Probe the videos and load one scene per master shot from the
-                               boundary files. Run this before any decoding.
--bi, --buildIndexes            Build the ANN and full-text indexes. Run this AFTER a bulk load,
-                               on a machine with enough maintenance_work_mem (~8GB).
--h, --help						Show this help message and exit
-"""

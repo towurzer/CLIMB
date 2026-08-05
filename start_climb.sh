@@ -75,8 +75,8 @@ sleep 1
 # Launch Search Engine
 if [ -d "video_processing/src" ]; then
 		run_in_new_terminal "CLIMB Search Engine" "video_processing/src" \
-		"[ -f ../.venv/bin/activate ] && source ../.venv/bin/activate; $PYTHON_CMD main.py --startSearchEngine"
-    # run_in_new_terminal "CLIMB Search Engine" "video_processing/src" "$PYTHON_CMD main.py --startSearchEngine"
+		"[ -f ../.venv/bin/activate ] && source ../.venv/bin/activate; $PYTHON_CMD main.py serve"
+    # run_in_new_terminal "CLIMB Search Engine" "video_processing/src" "$PYTHON_CMD main.py serve"
 else
     echo "Error: Directory 'video_processing/src' not found."
 fi

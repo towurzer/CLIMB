@@ -333,7 +333,8 @@ def decode_batch(jobs, use_gpu=None, force=False, workers=None):
 
 
 SELECT_DECODABLE = """
-    SELECT v.video_id, v.fps, v.duration_ms, v.has_audio, v.damaged
+    SELECT v.video_id, v.fps, v.duration_ms, v.has_audio, v.damaged,
+           EXISTS (SELECT 1 FROM keyframes k WHERE k.video_id = v.video_id) AS has_keyframes
     FROM videos v
     WHERE (%s IS NULL OR v.collection = %s)
     ORDER BY v.video_id
@@ -357,19 +358,27 @@ def decode_from_database(conn, source_dir, collection=None, limit=None, force=Fa
         cur.execute(SELECT_DECODABLE, (collection, collection, limit))
         rows = cur.fetchall()
 
-    jobs, missing = [], []
-    for video_id, fps, duration_ms, has_audio, damaged in rows:
-        source = next(
-            (p for p in (source_dir / f"{video_id}{ext}" for ext in Config.VIDEO_EXTENSIONS) if p.exists()),
-            None,
-        )
+    jobs, missing, finished = [], [], 0
+    for video_id, fps, duration_ms, has_audio, damaged, has_keyframes in rows:
+
+        if has_keyframes and paths.web_video_path(video_id).exists():
+            finished += 1
+            continue
+        # work/raw first, since that is where fetch puts downloaded videos; source_dir second, so
+        # a locally present dataset still works without going through fetch at all.
+        candidates = [paths.raw_video_path(video_id, ext) for ext in Config.VIDEO_EXTENSIONS]
+        candidates += [source_dir / f"{video_id}{ext}" for ext in Config.VIDEO_EXTENSIONS]
+        source = next((p for p in candidates if p.exists()), None)
         if source is None:
             missing.append(video_id)
             continue
         jobs.append((video_id, source, fps, duration_ms, has_audio, damaged))
 
+    if finished:
+        logger.info(f"{finished} video(s) already decoded and selected, skipping")
     if missing:
-        logger.warning(f"{len(missing)} video(s) in the database have no source file, e.g. {missing[:5]}")
+        logger.warning(f"{len(missing)} video(s) still need decoding but have no source file, "
+                       f"e.g. {missing[:5]}")
 
     results = decode_batch(jobs, force=force, workers=workers)
 
