@@ -1,57 +1,73 @@
+from contextlib import asynccontextmanager
+
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import uvicorn
 
-from search_engine import SearchEngine
-from db.connection import connect_to_database
+import custom_logger
 from config import Config
-from dotenv import load_dotenv
-
-app = FastAPI(title="Python Embedding Worker")
+from db.connection import connect_to_database
+from db.index_ops import apply_serve_tuning
+from retrieval.engine import SearchEngine
 
 search_engine = None
 
 
-@app.on_event("startup")
-def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global search_engine
+    from dotenv import load_dotenv
     load_dotenv()
+    logger = custom_logger.get_logger("worker")
 
     conn = connect_to_database()
     if conn:
-        search_engine = SearchEngine(Config(), conn)
+        # hnsw.ef_search must be raised before any search runs: pgvector returns at most ef_search
+        # rows from an index scan, so at the default of 40 the oversample step asks for 1000
+        # candidates, quietly receives 40, and the rerank has almost nothing to work with.
+        apply_serve_tuning(conn)
+        search_engine = SearchEngine(conn)
     else:
-        print("CRITICAL: Could not connect to DB at startup.")
+        logger.error("Could not connect to the database at startup.")
+    yield
 
-    print("AI Worker is ready to receive requests from Node.js!")
+
+app = FastAPI(title="CLIMB search worker", lifespan=lifespan)
 
 
 class SearchRequest(BaseModel):
     prompt: str
     exclude: list = []
     top_k: int = 48
+    collection: str | None = None
+    weights: dict | None = None   # per-retriever RRF weights, for tuning without a restart
+    depth: int | None = None
 
 
 @app.get("/api/health")
 def health():
-    # "reachable" is answered by this response existing at all. "ready" is the
-    # part that matters: the worker starts and serves even when the DB handshake
-    # failed, and in that state every search would 500.
+    ready = search_engine is not None and search_engine.ready
     return {
-        "status": "ok" if search_engine else "degraded",
-        "search_engine_ready": search_engine is not None
+        "status": "ok" if ready else "degraded",
+        "search_engine_ready": ready,
+        "device": search_engine.device if search_engine else None,
     }
 
 
 @app.post("/api/search")
 def do_search(request: SearchRequest):
-    if not search_engine:
+    if not search_engine or not search_engine.ready:
         raise HTTPException(status_code=500, detail="Search engine not initialized")
 
-    raw_results = search_engine.search(request.prompt, request.exclude, request.top_k)
-    enriched = search_engine.enrich_results(raw_results)
-
-    return {"results": enriched}
+    result = search_engine.search(
+        request.prompt, exclude=request.exclude, top_k=request.top_k,
+        collection=request.collection, weights=request.weights, depth=request.depth,
+    )
+    return {
+        "results": result.results,
+        "signals": result.signals_used,
+        "timings_ms": result.timings,
+    }
 
 
 def start():

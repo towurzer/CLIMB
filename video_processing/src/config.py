@@ -78,6 +78,36 @@ class Config:
     FETCH_COMMAND: str = os.getenv("CLIMB_FETCH_COMMAND") or "rsync -a --partial {source} {dest}"
     FETCH_BATCH: int = int(os.getenv("CLIMB_FETCH_BATCH") or 50)
 
+    # --- Retrieval (see retrieval/) ---
+    # How deep each retriever goes before fusion. Deeper costs little and lets a signal that ranks
+    # a scene poorly still contribute.
+    RETRIEVER_DEPTH: int = int(os.getenv("CLIMB_RETRIEVER_DEPTH") or 200)
+    ASR_SEGMENT_LIMIT: int = 500
+    # ts_rank_cd with normalisation 32 is in (0,1). The floor stops OCR noise that happens to
+    # spell a real word from being promoted by the heavy lexical weight below. Tune with WP9.
+    OCR_MIN_RANK: float = float(os.getenv("CLIMB_OCR_MIN_RANK") or 0.01)
+    OCR_TRIGRAM_THRESHOLD: float = 0.45
+
+    # RRF weights. OCR is weighted far above the rest deliberately: an exact match on a proper noun
+    # is close to proof, and it is the one thing embeddings cannot represent at all. The others are
+    # comparable to each other, so they stay at 1.
+    RRF_WEIGHT_VISUAL: float = float(os.getenv("CLIMB_W_VISUAL") or 1.0)
+    RRF_WEIGHT_OCR: float = float(os.getenv("CLIMB_W_OCR") or 4.0)
+    RRF_WEIGHT_CAPTION: float = float(os.getenv("CLIMB_W_CAPTION") or 1.0)
+    RRF_WEIGHT_TRANSCRIPT: float = float(os.getenv("CLIMB_W_TRANSCRIPT") or 1.0)
+    # Explicit text:"..." / said:"..." searches outrank everything -- the user told us what to find.
+    RRF_WEIGHT_PHRASE: float = float(os.getenv("CLIMB_W_PHRASE") or 8.0)
+
+    def rrf_weights(self) -> dict:
+        return {
+            "visual": self.RRF_WEIGHT_VISUAL,
+            "ocr": self.RRF_WEIGHT_OCR,
+            "caption": self.RRF_WEIGHT_CAPTION,
+            "transcript": self.RRF_WEIGHT_TRANSCRIPT,
+            "ocr_phrase": self.RRF_WEIGHT_PHRASE,
+            "asr_phrase": self.RRF_WEIGHT_PHRASE,
+        }
+
     DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)
     FFMPEG_THREADS: int = int(os.getenv("CLIMB_FFMPEG_THREADS") or 2)
 

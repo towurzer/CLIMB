@@ -220,12 +220,15 @@ video_processing/
     src/
         config.py              # Settings
         custom_logger.py       # Logging utilities
-        db_queries.py          # Database queries
         db_setup.py            # Prints the podman command, nothing more
         main.py                # CLI entry point (subcommands)
-        search_engine.py       # Search and embedding service
         utils.py               # Utility functions
-        worker_http_endpoint.py # Search Engine HTTP interface 
+        worker_http_endpoint.py # Search Engine HTTP interface
+        retrieval/
+            query_parser.py    # search box string -> structured query
+            retrievers.py      # the four signals, all scene-level
+            fusion.py          # reciprocal rank fusion
+            engine.py          # ties them together
         db/
             connection.py      # DB connections + a commit/rollback context manager
             migrate.py         # migration runner (with checksums, so nobody edits history)
@@ -623,7 +626,40 @@ The vector index is built over *binary quantized* embeddings and then reranks th
 precision vectors. Roughly: 1024 dimensions squashed to 1024 bits is about 5 GB of index instead of 28 GB, which is the
 difference between fitting in a laptop's RAM and very much not.
 
-#### 1.9 Start the Search Engine
+#### 1.9 How searching actually works
+
+Four different things look for your query at once, and their answers get merged.
+
+- **The picture itself.** Your words get turned into a vector and matched against every keyframe.
+  This is the workhorse and handles anything visual.
+- **Text on screen.** Signs, chyrons, scoreboards, credits. Matched as words, not meaning, because
+  what OCR is uniquely good at is *exact* strings — nothing else in the system can find "Dupont".
+- **Shot descriptions.** Matched by meaning, so "a cyclist outside a shop" finds "A man in a red
+  jacket stands beside a bicycle outside a bakery" despite sharing no words with it.
+- **What people said.** Also by meaning, and mapped back to whichever scenes were on screen at the
+  time.
+
+Each returns its own ranked list of scenes, and the lists are merged by **where** each one placed a
+scene rather than by its score — the numbers are not comparable (image similarity sits around 0.05,
+text similarity around 0.85, keyword rank is unbounded), but "this one came third" always is.
+
+A scene found by two signals beats a scene found by one, and an exact text match is weighted very
+heavily indeed. If you typed a word and a sign says that word, the argument is over.
+
+Everything is per **scene**, not per keyframe. The old search returned keyframes, and since each
+scene had about seven of them, a page of 48 results was really about 22 shots shown three times
+each. Now one row means one shot.
+
+##### Telling it exactly where to look
+
+| You type | What happens                                              |
+|----------|-----------------------------------------------------------|
+| `a red car on a bridge` | everything searches                                       |
+| `text:"BOULANGERIE"` | on-screen text only, as an exact phrase (typos tolerated) |
+| `said:"after the earthquake"` | spoken words only                                         |
+| `-video:00191` | leave that video out (repeatable)                         |
+
+#### 1.10 Start the Search Engine
 
 You are all set, now you can finally start the Search Engine which will open up a connection for the backend to connect
 to, in order to encode the searches.
