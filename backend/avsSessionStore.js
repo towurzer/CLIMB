@@ -3,10 +3,10 @@ const SWEEP_INTERVAL_MS = 30 * 1000;   // how often the idle sweeper runs
 const CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
 const CODE_LENGTH = 4;
 
-/** code -> { code, name, createdAt, lastActivity, scenes: Map<sceneKey, entry> } */
+/** code -> { code, name, createdAt, lastActivity, scenes: Map<scene_id, entry> } */
 const sessions = new Map();
 
-const sceneKey = (videoId, startFrame, endFrame) => `${videoId}_${startFrame}_${endFrame}`;
+const sceneKey = (sceneId) => String(sceneId);
 
 const holdsVideo = (status) => status === "CORRECT" || status === "INDETERMINATE";
 
@@ -37,17 +37,18 @@ function createSession(name) {
         name: name || null,
         createdAt: now,
         lastActivity: now,
-        scenes: new Map() // sceneKey -> { video_id, shot_id, status, user, ts }
+        scenes: new Map() // scene_id -> { scene_id, video_id, start_frame, end_frame, status, user, ts }
     };
     sessions.set(session.code, session);
     return session;
 }
 
-function recordScene(code, {video_id, start_frame, end_frame, status, user}) {
-    if (start_frame === undefined || start_frame === null) return false;
+function recordScene(code, {scene_id, video_id, start_frame, end_frame, status, user}) {
+    if (scene_id === undefined || scene_id === null) return false;
     const session = getSession(code);
     if (!session) return false;
-    session.scenes.set(sceneKey(video_id, start_frame, end_frame), {
+    session.scenes.set(sceneKey(scene_id), {
+        scene_id,
         video_id,
         start_frame,
         end_frame,
@@ -78,7 +79,13 @@ function serializeSession(session) {
     return {
         code: session.code,
         name: session.name,
-        scenes: scenes.map((s) => ({video_id: s.video_id, start_frame: s.start_frame, end_frame: s.end_frame, status: s.status})),
+        scenes: scenes.map((s) => ({
+            scene_id: s.scene_id,
+            video_id: s.video_id,
+            start_frame: s.start_frame,
+            end_frame: s.end_frame,
+            status: s.status
+        })),
         coveredVideos,
         counts: {instances: scenes.length, distinctVideos},
         expiresInMs: Math.max(0, IDLE_TIMEOUT_MS - (Date.now() - session.lastActivity))

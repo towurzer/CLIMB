@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const path = require('path');
 require('dotenv').config();
 
 const {SEARCH_ENGINE_URL} = require('./serviceUrls');
@@ -72,8 +73,16 @@ app.use('/climb/videos', videoRoutes);
 app.use('/climb/dres', dresRoutes);
 app.use('/climb/avs', avsRoutes);
 
-app.use('/keyframes', express.static('../dataset/keyframes'));
-app.use('/videos', express.static('../dataset/web_ready'));
+// Media roots. CLIMB_MEDIA_DIR is where the pipeline writes; at full V3C scale that is the
+// external SSD rather than anywhere inside the repo.
+const MEDIA_DIR = process.env.CLIMB_MEDIA_DIR || path.resolve(__dirname, '../dataset/media');
+
+// Keyframes and thumbnails never change once written
+const immutable = {maxAge: '365d', immutable: true};
+
+app.use('/thumbs', express.static(path.join(MEDIA_DIR, 'thumbs'), immutable));
+app.use('/kf', express.static(path.join(MEDIA_DIR, 'kf'), immutable));
+app.use('/videos', express.static(path.join(MEDIA_DIR, 'video'), {maxAge: '365d'}));
 
 app.listen(PORT, () => {
     console.log(`Video Retrieval API running on http://localhost:${PORT}`);

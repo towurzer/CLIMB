@@ -207,6 +207,30 @@ def ocr_phrase(conn, phrase, exclude, collection, limit):
     return results[:limit]
 
 
+KEYFRAME_VECTOR = """
+    SELECT embedding::text FROM keyframe_embedding
+    WHERE keyframe_id = %(keyframe_id)s AND model_id = %(model_id)s;
+"""
+
+
+def similar_to_keyframe(conn, keyframe_id, model_id, dims, exclude, collection, limit,
+                        oversample=None):
+    """
+    Find-similar, using the same ANN path as a text search.
+
+    Lives here rather than in the Node backend so there is one implementation of
+    oversample-then-rerank. A second copy would silently drift -- and the failure mode is a
+    sequential scan nobody notices until the collection is large.
+    """
+    with conn.cursor() as cur:
+        cur.execute(KEYFRAME_VECTOR, {"keyframe_id": keyframe_id, "model_id": model_id})
+        row = cur.fetchone()
+    if not row:
+        return []
+    return visual(conn, row[0], model_id, dims, exclude, collection, limit + 1,
+                  oversample=oversample)
+
+
 def caption(conn, query_vector, model_id, dims, exclude, collection, limit):
     with conn.cursor() as cur:
         cur.execute(CAPTION_SEARCH, {"model_id": model_id, "dims": dims,

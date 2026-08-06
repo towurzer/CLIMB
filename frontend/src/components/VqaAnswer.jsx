@@ -37,7 +37,7 @@ function VqaAnswer({apiUrl, selectedResult, startTimeMs, endTimeMs, onSubmitted}
 
     // Auto-fill shot info when selection changes
     const shotInfo = selectedResult
-        ? `${selectedResult.video_id} / shot ${selectedResult.shot_id}`
+        ? `${selectedResult.video_id} / scene ${selectedResult.scene_id}`
         : "No shot selected";
 
     const submitText = answer.trim();

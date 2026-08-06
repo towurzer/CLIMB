@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Video Retrieval API",
-    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).",
-    "version": "1.1.0"
+    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.",
+    "version": "2.0.0"
   },
   "servers": [
     {
@@ -220,177 +220,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VideoDetails"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/climb/videos/{video_id}/shots": {
-      "get": {
-        "summary": "Get shots for a specific video",
-        "description": "Returns shots ordered by start_frame/middle_frame. If both `page` and `per_page` are omitted, every shot for the video is returned in one response; if either is provided, the results are paginated.",
-        "operationId": "getVideoShots",
-        "parameters": [
-          {
-            "name": "video_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "description": "Page number (1-indexed). Enables pagination.",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 1
-            }
-          },
-          {
-            "name": "per_page",
-            "in": "query",
-            "required": false,
-            "description": "Number of shots per page (capped at 200). Enables pagination.",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 200,
-              "default": 60
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of shots",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "video_id": {
-                      "type": "string"
-                    },
-                    "shots": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/ShotInfo"
-                      }
-                    },
-                    "total": {
-                      "type": "integer",
-                      "description": "Total number of shots for this video, regardless of pagination."
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/climb/videos/{video_id}/{shot_id}/similar": {
-      "get": {
-        "summary": "Find shots visually similar to the given shot",
-        "operationId": "findSimilar",
-        "parameters": [
-          {
-            "name": "video_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "shot_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "name": "exclude",
-            "in": "query",
-            "required": false,
-            "description": "Comma-separated video ids to leave out of the results. Filtering happens inside the query, so the result limit is backfilled with the next best matches.",
-            "schema": {
-              "type": "string"
-            },
-            "example": "00113,00184"
-          },
-          {
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "description": "1-based page number. Results are not capped - paging continues until the shots table is exhausted.",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 1
-            }
-          },
-          {
-            "name": "per_page",
-            "in": "query",
-            "required": false,
-            "description": "Results per page, clamped to 1-100.",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 24
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Similar search results",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "source_video": {
-                      "type": "string"
-                    },
-                    "source_shot": {
-                      "type": "integer"
-                    },
-                    "excluded": {
-                      "type": "array",
-                      "description": "The video ids that were excluded from this result set",
-                      "items": {
-                        "type": "string"
-                      }
-                    },
-                    "page": {
-                      "type": "integer"
-                    },
-                    "per_page": {
-                      "type": "integer"
-                    },
-                    "count": {
-                      "type": "integer",
-                      "description": "Number of results on this page"
-                    },
-                    "has_more": {
-                      "type": "boolean",
-                      "description": "Whether a further page of similar shots exists"
-                    },
-                    "results": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/SearchResult"
-                      }
-                    }
-                  }
                 }
               }
             }
@@ -759,6 +588,167 @@
           }
         }
       }
+    },
+    "/climb/videos/{video_id}/scenes": {
+      "get": {
+        "summary": "Get scenes (master shots) for a specific video",
+        "description": "Returns scenes in shot order, each with its keyframes. Omit both `page` and `per_page` for every scene in one response.",
+        "operationId": "getVideoScenes",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-indexed). Enables pagination.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "description": "Number of shots per page (capped at 200). Enables pagination.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 60
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of shots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "video_id": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "Total number of shots for this video, regardless of pagination."
+                    },
+                    "scenes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SceneInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/search/similar/{keyframe_id}": {
+      "get": {
+        "summary": "Find scenes visually similar to a keyframe",
+        "operationId": "findSimilar",
+        "parameters": [
+          {
+            "name": "keyframe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Keyframe to find neighbours of"
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated video ids to leave out of the results. Filtering happens inside the query, so the result limit is backfilled with the next best matches.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "00113,00184"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "1-based page number. Results are not capped - paging continues until the shots table is exhausted.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "description": "Results per page, clamped to 1-100.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 24
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Similar search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "excluded": {
+                      "type": "array",
+                      "description": "The video ids that were excluded from this result set",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "per_page": {
+                      "type": "integer"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "description": "Number of results on this page"
+                    },
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether a further page of similar shots exists"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SearchResult"
+                      }
+                    },
+                    "source_keyframe": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -768,9 +758,6 @@
         "properties": {
           "video_id": {
             "type": "string"
-          },
-          "shot_id": {
-            "type": "integer"
           },
           "score": {
             "type": "number",
@@ -794,18 +781,26 @@
           },
           "thumbnail_url": {
             "type": "string"
+          },
+          "scene_id": {
+            "type": "integer",
+            "description": "Master shot this result belongs to"
+          },
+          "keyframe_id": {
+            "type": "integer",
+            "description": "Keyframe shown for the scene"
           }
         },
         "required": [
           "video_id",
-          "shot_id",
           "score",
           "start_frame",
           "end_frame",
           "fps",
           "start_time_ms",
           "end_time_ms",
-          "thumbnail_url"
+          "thumbnail_url",
+          "scene_id"
         ]
       },
       "SearchResponse": {
@@ -860,11 +855,11 @@
             "type": "number",
             "format": "float"
           },
-          "num_shots": {
-            "type": "integer"
-          },
           "thumbnail_url": {
             "type": "string"
+          },
+          "num_scenes": {
+            "type": "integer"
           }
         },
         "required": [
@@ -906,34 +901,6 @@
           "width",
           "height",
           "video_url"
-        ]
-      },
-      "ShotInfo": {
-        "type": "object",
-        "properties": {
-          "shot_id": {
-            "type": "integer"
-          },
-          "start_frame": {
-            "type": "integer"
-          },
-          "end_frame": {
-            "type": "integer"
-          },
-          "fps": {
-            "type": "number",
-            "format": "float"
-          },
-          "thumbnail_url": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "shot_id",
-          "start_frame",
-          "end_frame",
-          "fps",
-          "thumbnail_url"
         ]
       },
       "DresSubmission": {
@@ -1085,8 +1052,7 @@
           "dres_url": {
             "type": "string",
             "default": "https://vbs.videobrowsing.org"
-          }
-          ,
+          },
           "dres_name": {
             "type": "string",
             "description": "Requested evaluation name (e.g. IVADL26)",
@@ -1214,6 +1180,39 @@
         },
         "required": [
           "error"
+        ]
+      },
+      "SceneInfo": {
+        "type": "object",
+        "properties": {
+          "start_frame": {
+            "type": "integer"
+          },
+          "end_frame": {
+            "type": "integer"
+          },
+          "fps": {
+            "type": "number",
+            "format": "float"
+          },
+          "thumbnail_url": {
+            "type": "string"
+          },
+          "scene_id": {
+            "type": "integer",
+            "description": "Master shot this result belongs to"
+          },
+          "keyframe_id": {
+            "type": "integer",
+            "description": "Keyframe shown for the scene"
+          }
+        },
+        "required": [
+          "start_frame",
+          "end_frame",
+          "fps",
+          "thumbnail_url",
+          "scene_id"
         ]
       }
     }

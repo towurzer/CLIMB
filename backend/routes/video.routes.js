@@ -4,7 +4,6 @@ const videosController = require('../controller/video.controller');
 
 router.get('/', videosController.listVideos);
 router.get('/:video_id', videosController.getVideoInfo);
-router.get('/:video_id/shots', videosController.getVideoShots);
-router.get('/:video_id/:shot_id/similar', videosController.findSimilar);
+router.get('/:video_id/scenes', videosController.getVideoScenes);
 
 module.exports = router;

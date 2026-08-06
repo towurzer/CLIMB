@@ -1,105 +1,37 @@
 const queries = require('../models/queries');
-const path = require('path');
-const {createClient} = require('redis');
+const cache = require('../cache');
 
-// Caching Videos to reduce load time
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const VIDEOS_CACHE_TTL_SECONDS = process.env.VIDEOS_CACHE_TTL_SECONDS || 30;
-
-const redisClient = createClient({url: REDIS_URL, socket: {connectTimeout: 3000, reconnectStrategy: false}});
-redisClient.on('error', (err) => {
-    // We don't like errors
-});
-(async () => {
-    try {
-        await Promise.race([
-            redisClient.connect(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Redis connect timeout')), 3000))
-        ]);
-        console.log('Connected to Redis');
-    } catch (err) {
-        console.log('Redis not available, continuing without caching');
-    }
-})();
+const VIDEOS_CACHE_TTL_SECONDS = parseInt(process.env.VIDEOS_CACHE_TTL_SECONDS || '30', 10);
 
 exports.listVideos = async (req, res) => {
-    console.log('all videos queried')
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const perPage = Math.min(Math.max(parseInt(req.query.per_page || '25', 10), 1), 100);
+    const key = `videos:page:${page}:perPage:${perPage}`;
 
-    const page = parseInt(req.query.page || '1');
-    const perPage = Math.min(parseInt(req.query.per_page || '25'), 100);
-
-    const cacheKey = `videos:page:${page}:perPage:${perPage}`;
-
-    // Let's look at our cache
-    try {
-        if (redisClient && redisClient.isOpen) {
-            const cached = await redisClient.get(cacheKey);
-            if (cached) {
-                const parsed = JSON.parse(cached);
-
-                if (parsed.count !== undefined && parsed.total === undefined) {
-                    parsed.total = parsed.count;
-                    delete parsed.count;
-                }
-                console.log(`Returning cached videos page=${page} perPage=${perPage} videos=${(parsed.videos || []).length}`);
-                return res.status(200).json({...parsed, cached: true});
-            }
-        }
-    } catch (err) {
-        console.warn('Redis get failed, continuing without cache:', err.message || err);
-    }
+    const cached = await cache.get(key);
+    if (cached) return res.status(200).json({...cached, cached: true});
 
     const result = await queries.getAllVideos(page, perPage);
-
-    // Cache miss, load video into cach and use this :)
-    try {
-        if (redisClient && redisClient.isOpen) {
-            await redisClient.setEx(cacheKey, VIDEOS_CACHE_TTL_SECONDS, JSON.stringify(result));
-        }
-    } catch (err) {
-        console.warn('Redis set failed:', err.message || err);
-    }
-
-    console.log(`Returning fresh videos page=${page} perPage=${perPage} videos=${(result.videos || []).length}`);
-    res.status(200).json(result);
+    await cache.set(key, result, VIDEOS_CACHE_TTL_SECONDS);
+    res.status(200).json({...result, cached: false});
 };
 
 exports.getVideoInfo = async (req, res) => {
     const {video_id} = req.params;
-    //TODO check
-    console.log(`Querying video details for video ${video_id}`)
     const details = await queries.getVideoDetails(video_id);
+    if (!details) return res.status(404).json({error: `No such video: ${video_id}`});
     res.status(200).json(details);
 };
 
-exports.getVideoShots = async (req, res) => {
+/** Scenes of a video with their keyframes, what the filmstrip and shot browser render. */
+exports.getVideoScenes = async (req, res) => {
     const {video_id} = req.params;
     const hasPagination = req.query.page !== undefined || req.query.per_page !== undefined;
-    const page = hasPagination ? Math.max(parseInt(req.query.page || '1'), 1) : null;
-    const perPage = hasPagination ? Math.min(Math.max(parseInt(req.query.per_page || '60'), 1), 200) : null;
+    const page = hasPagination ? Math.max(parseInt(req.query.page || '1', 10), 1) : null;
+    const perPage = hasPagination
+        ? Math.min(Math.max(parseInt(req.query.per_page || '60', 10), 1), 200)
+        : null;
 
-    console.log(`Querying video shots for video ${video_id} page=${page} perPage=${perPage}`)
-    const {total, shots} = await queries.getVideoShots(video_id, page, perPage);
-    res.status(200).json({video_id, shots, total});
-};
-
-exports.findSimilar = async (req, res) => {
-    const {video_id, shot_id} = req.params;
-    const exclude = (req.query.exclude || '').split(',').map(id => id.trim()).filter(id => id);
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const perPage = Math.min(Math.max(parseInt(req.query.per_page || '24', 10), 1), 100);
-
-    console.log(`Searching for similar videos just as ${video_id} and ${shot_id} excluding [${exclude}] page=${page} per_page=${perPage}`)
-    const {results, hasMore} = await queries.getSimilarShots(video_id, parseInt(shot_id), exclude, page, perPage);
-
-    res.status(200).json({
-        source_video: video_id,
-        source_shot: parseInt(shot_id),
-        excluded: exclude,
-        page,
-        per_page: perPage,
-        count: results.length,
-        has_more: hasMore,
-        results
-    });
+    const {total, scenes} = await queries.getVideoScenes(video_id, page, perPage);
+    res.status(200).json({video_id, scenes, total});
 };

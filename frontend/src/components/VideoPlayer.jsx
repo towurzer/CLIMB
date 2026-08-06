@@ -29,7 +29,7 @@ function VideoPlayer({result, apiUrl}) {
         const video = videoRef.current;
         if (!video) return;
         video.currentTime = startSec;
-    }, [result.shot_id, startSec]);
+    }, [result.keyframe_id, startSec]);
 
     // Loop segment: when video time passes end, jump back to start
     useEffect(() => {

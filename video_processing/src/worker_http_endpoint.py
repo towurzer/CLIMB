@@ -70,6 +70,22 @@ def do_search(request: SearchRequest):
     }
 
 
+class SimilarRequest(BaseModel):
+    keyframe_id: int
+    exclude: list = []
+    top_k: int = 48
+    collection: str | None = None
+
+
+@app.post("/api/similar")
+def do_similar(request: SimilarRequest):
+    if not search_engine or not search_engine.ready:
+        raise HTTPException(status_code=500, detail="Search engine not initialized")
+    result = search_engine.similar(request.keyframe_id, exclude=request.exclude,
+                                   top_k=request.top_k, collection=request.collection)
+    return {"results": result.results, "timings_ms": result.timings}
+
+
 def start():
     conf = Config()
     uvicorn.run(app, host=conf.search_engine_url, port=conf.search_engine_port)

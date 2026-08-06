@@ -40,12 +40,12 @@ function ResultsGrid({
                 const isSelected =
                     selectedResult &&
                     selectedResult.video_id === result.video_id &&
-                    selectedResult.shot_id === result.shot_id;
+                    selectedResult.keyframe_id === result.keyframe_id;
                 const isCovered = coveredVideos.has(result.video_id); // a keyframe from the same scene has already been submitted
 
                 return (
                     <div
-                        key={`${result.video_id}_${result.shot_id}`}
+                        key={result.keyframe_id ?? `${result.video_id}_${result.scene_id}`}
                         ref={isSelected ? selectedRef : null}
                         className={`result-card ${isSelected ? "selected" : ""} ${isCovered ? "covered" : ""}`}
                         onClick={() => onSelect(result)}
@@ -53,7 +53,7 @@ function ResultsGrid({
                         <div className="thumbnail-wrapper">
                             <img
                                 src={result.thumbnail_url}
-                                alt={`${result.video_id} shot ${result.shot_id}`}
+                                alt={`${result.video_id} scene ${result.scene_id}`}
                                 loading="lazy"
                             />
                             <span className="score-badge">
@@ -87,7 +87,7 @@ function ResultsGrid({
                             )}
                         </div>
                         <div className="result-label">
-                            {result.video_id} / shot {result.shot_id}
+                            {result.video_id} / scene {result.scene_id}
                         </div>
                     </div>
                 );

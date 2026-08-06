@@ -21,7 +21,7 @@ function SubmissionLog({submissions}) {
                             </span>
                         ) : (
                             <span className="log-text">
-                                {sub.video_id} / shot {sub.shot_id} ({formatTimecode(sub.start_time_ms)})
+                                {sub.video_id} / scene {sub.scene_id} ({formatTimecode(sub.start_time_ms)})
                             </span>
                         )}
                         <span className={`log-status ${sub.status}`}>

@@ -4,7 +4,7 @@ const EMPTY_SET = new Set();
 
 function ShotBrowser({
     videoId,
-    currentShotId,
+    currentKeyframeId,
     onSelectShot,
     apiUrl,
     onBrowseAll,
@@ -20,10 +20,10 @@ function ShotBrowser({
         if (!videoId) return;
         setLoading(true);
 
-        fetch(`${apiUrl}/climb/videos/${videoId}/shots`)
+        fetch(`${apiUrl}/climb/videos/${videoId}/scenes`)
             .then((res) => res.json())
             .then((data) => {
-                setShots(data.shots);
+                setShots(data.scenes || []);
                 setLoading(false);
             })
             .catch((err) => {
@@ -41,7 +41,7 @@ function ShotBrowser({
                 inline: "center",
             });
         }
-    }, [currentShotId, shots]);
+    }, [currentKeyframeId, shots]);
 
     if (loading) {
         return <div className="shot-browser-loading">Loading shots...</div>;
@@ -61,29 +61,28 @@ function ShotBrowser({
                     </button>
                 )}
                 <span className="shot-browser-title">
-          {videoId} – {shots.length} shots
+          {videoId} – {shots.length} scenes
         </span>
             </div>
             <div className="shot-strip">
                 {shots.map((shot) => {
-                    const isActive = shot.shot_id === currentShotId;
+                    const isActive = shot.keyframes?.some((k) => k.keyframe_id === currentKeyframeId);
                     // Mark scenes already submitted in the AVS session so nobody resubmits.
-                    // Keyed by frame range (all keyframes of a submitted scene get the mark).
-                    const submitted = submittedScenes.has(`${videoId}_${shot.start_frame}_${shot.end_frame}`);
+                    const submitted = submittedScenes.has(String(shot.scene_id));
                     const covered = coveredVideos.has(videoId);
                     return (
                         <div
-                            key={shot.shot_id}
+                            key={shot.scene_id}
                             ref={isActive ? activeRef : null}
                             className={`shot-thumb ${isActive ? "active" : ""} ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
                             onClick={() => onSelectShot(shot)}
                         >
                             <img
                                 src={shot.thumbnail_url}
-                                alt={`Shot ${shot.shot_id}`}
+                                alt={`Scene ${shot.scene_id}`}
                                 loading="lazy"
                             />
-                            <span className="shot-label">{shot.shot_id}</span>
+                            <span className="shot-label">{shot.shot_index}</span>
                             {submitted && <span className="submitted-badge">✓</span>}
                         </div>
                     );

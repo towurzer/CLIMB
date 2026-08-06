@@ -42,6 +42,7 @@ const submitAnswerSet = async (res, answer, {successMessage, errorLabel, record 
         // The DRES answer is what scores; recording the delivered scene into the AVS session  is a best-effort overlay that must never block or alter this response.
         if (record) {
             avsStore.recordSceneSafe(record.avs_session, {
+                scene_id: record.scene_id,
                 video_id: record.video_id,
                 start_frame: record.start_frame,
                 end_frame: record.end_frame,
@@ -161,7 +162,7 @@ exports.dresStatus = async (req, res) => {
 
 // Kis answer submitted (shot), also records it for avs sessions.
 exports.submitToDres = async (req, res) => {
-    const {video_id, start_frame, end_frame, start_time_ms, end_time_ms, avs_session} = req.body;
+    const {scene_id, video_id, start_frame, end_frame, start_time_ms, end_time_ms, avs_session} = req.body;
 
     return submitAnswerSet(res, {
         text: null,
@@ -172,7 +173,7 @@ exports.submitToDres = async (req, res) => {
     }, {
         successMessage: "Submitted successfully!",
         errorLabel: "DRES Submission failed",
-        record: avs_session ? {avs_session, video_id, start_frame, end_frame} : null
+        record: avs_session ? {avs_session, scene_id, video_id, start_frame, end_frame} : null
     });
 };
 

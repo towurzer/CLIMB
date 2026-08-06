@@ -1,9 +1,12 @@
-const {Pool} = require('pg');
-const pgvector = require('pgvector/pg');
+const {Pool, types} = require('pg');
 const axios = require('axios');
 const path = require('path');
 require('dotenv').config({path: path.resolve(__dirname, '../../.env')});
 
+const {SEARCH_ENGINE_URL} = require('../serviceUrls');
+const media = require('../mediaPaths');
+
+types.setTypeParser(types.builtins.INT8, (value) => parseInt(value, 10));
 
 const pool = new Pool({
     user: process.env.POSTGRES_USER || 'postgres',
@@ -12,75 +15,92 @@ const pool = new Pool({
     port: process.env.DB_PORT || 5432,
     database: process.env.POSTGRES_DB_NAME || 'climb_db'
 });
-const {BACKEND_URL, SEARCH_ENGINE_URL} = require('../serviceUrls');
 
-async function initDatabase() {
-    try {
-        const client = await pool.connect();
-        await pgvector.registerType(client);
-        console.log("Successfully registered pgvector type.");
-        client.release();
-    } catch (err) {
-        console.error("Failed to connect to PostgreSQL:", err);
-    }
-}
+pool.on('error', (err) => console.error('Postgres pool error:', err.message));
 
-initDatabase();
-
-pool.on('connect', async (client) => {
-    try {
-        await pgvector.registerType(client);
-    } catch (err) {
-        console.error("Failed to register pgvector type:", err);
-    }
+/**
+ * Shape a worker result for the frontend.
+ *
+ * The worker returns scenes; every URL is derived from (video_id, shot_index, kf_index) rather
+ * than read out of the database.
+ */
+const toResult = (hit) => ({
+    scene_id: hit.scene_id,
+    keyframe_id: hit.keyframe_id,
+    video_id: hit.video_id,
+    shot_index: hit.shot_index,
+    kf_index: hit.kf_index,
+    score: hit.score,
+    signals: hit.signals || {},
+    start_frame: hit.start_frame,
+    end_frame: hit.end_frame,
+    frame_number: hit.frame_number,
+    fps: hit.fps,
+    start_time_ms: hit.start_ms,
+    end_time_ms: hit.end_ms,
+    keyframe_time_ms: hit.ts_ms,
+    damaged: hit.damaged,
+    thumbnail_url: media.thumbnailUrl(hit.video_id, hit.shot_index, hit.kf_index),
+    keyframe_url: media.keyframeUrl(hit.video_id, hit.shot_index, hit.kf_index)
 });
 
 module.exports = {
-    searchByText: async (queryText, exclude = [], topK = 50) => {
-        try {
-            const cleanPrompt = queryText.split(" --exclude:")[0].trim();
-
-            const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
-                prompt: cleanPrompt,
-                exclude: exclude,
-                top_k: topK
-            });
-
-            return res.data.results.map(shot => ({
-                video_id: shot.video_id,
-                shot_id: shot.shot_id,
-                score: shot.similarity_score,
-                start_frame: shot.start_frame,
-                end_frame: shot.end_frame,
-                middle_frame: shot.middle_frame,
-                fps: shot.fps,
-                start_time_ms: shot.start_frame_time_ms,
-                end_time_ms: shot.end_frame_time_ms,
-                thumbnail_url: `${BACKEND_URL}/keyframes/${shot.image_path.split('/').pop()}`
-            }));
-
-        } catch (error) {
-            console.error("Failed to connect to Python Worker");
-            throw error;
-        }
+    /**
+     * Ask the worker for a deep result set.
+     *
+     * Depth, not page: the controller caches this once and pages from the cache. Previously each
+     * page re-ran the whole search with topK = page * perPage and threw the earlier rows away, so
+     * page three cost three searches.
+     */
+    searchByText: async (queryText, exclude = [], depth = 500) => {
+        const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
+            prompt: queryText,
+            exclude,
+            top_k: depth
+        });
+        return (res.data.results || []).map(toResult);
     },
 
+    /**
+     * Scenes similar to a keyframe.
+     *
+     * Also the worker's job: it owns the one implementation of oversample-then-rerank, and a
+     * second copy here would drift silently into a sequential scan.
+     */
+    findSimilarByKeyframe: async (keyframeId, exclude = [], depth = 500) => {
+        const res = await axios.post(`${SEARCH_ENGINE_URL}/api/similar`, {
+            keyframe_id: keyframeId,
+            exclude,
+            top_k: depth
+        });
+        return (res.data.results || []).map(toResult);
+    },
 
     getAllVideos: async (page = 1, perPage = 20) => {
         const offset = (page - 1) * perPage;
 
-        const countSql = `SELECT COUNT(*) ::int AS total
-                          FROM videos;`;
+        const countSql = `SELECT COUNT(*)::int AS total FROM videos;`;
+        // One representative keyframe per video: the first keyframe of its first shot.
         const videosSql = `
             SELECT v.video_id,
                    v.fps,
-                   COUNT(s.shot_id) ::integer AS num_shots
+                   v.duration_ms,
+                   v.width,
+                   v.height,
+                   v.damaged,
+                   (SELECT COUNT(*)::int FROM scenes s WHERE s.video_id = v.video_id) AS num_scenes,
+                   cover.shot_index,
+                   cover.kf_index
             FROM videos v
-                     LEFT JOIN shots s ON v.video_id = s.video_id
-            GROUP BY v.video_id, v.fps
+                     LEFT JOIN LATERAL (
+                SELECT s.shot_index, k.kf_index
+                FROM scenes s
+                         JOIN keyframes k ON k.scene_id = s.scene_id
+                WHERE s.video_id = v.video_id
+                ORDER BY s.shot_index, k.kf_index
+                LIMIT 1) cover ON TRUE
             ORDER BY v.video_id
-                LIMIT $1
-            OFFSET $2;
+            LIMIT $1 OFFSET $2;
         `;
 
         const [countRes, videosRes] = await Promise.all([
@@ -88,155 +108,113 @@ module.exports = {
             pool.query(videosSql, [perPage, offset])
         ]);
 
-        const total = countRes.rows[0].total || 0;
-
-        const videoIds = videosRes.rows.map(r => r.video_id);
-
-        // Fetch preferred keyframes only for returned video ids
-        let prefMap = new Map();
-        if (videoIds.length > 0) {
-            const preferredSql = `
-                SELECT DISTINCT
-                ON (video_id) video_id, image_path
-                FROM shots
-                WHERE image_path LIKE '%_kf_00010.jpg' AND video_id = ANY ($1)
-                ORDER BY video_id, start_frame ASC;
-            `;
-            const prefRes = await pool.query(preferredSql, [videoIds]);
-            prefMap = new Map(prefRes.rows.map(r => [r.video_id, r.image_path]));
-        }
-
-        const videos = videosRes.rows.map(row => ({
+        const videos = videosRes.rows.map((row) => ({
             video_id: row.video_id,
             fps: row.fps,
-            duration_sec: 0,
-            num_shots: row.num_shots,
-            thumbnail_url: prefMap.has(row.video_id)
-                ? `${BACKEND_URL}/keyframes/${path.basename(prefMap.get(row.video_id))}`
-                : `${BACKEND_URL}/keyframes/${row.video_id}_shot_00000_kf_00000.jpg`
+            duration_sec: Math.round((row.duration_ms || 0) / 1000),
+            width: row.width,
+            height: row.height,
+            damaged: row.damaged,
+            num_scenes: row.num_scenes,
+            thumbnail_url: row.shot_index === null
+                ? null
+                : media.thumbnailUrl(row.video_id, row.shot_index, row.kf_index)
         }));
 
-        return {total, videos};
+        return {total: countRes.rows[0].total || 0, videos};
     },
 
     getVideoDetails: async (videoId) => {
-        const sql = `SELECT video_id, fps
-                     FROM videos
-                     WHERE video_id = $1`;
-        const {rows} = await pool.query(sql, [videoId]);
-
+        const {rows} = await pool.query(
+            `SELECT video_id, fps, duration_ms, width, height, damaged, collection
+             FROM videos
+             WHERE video_id = $1`, [videoId]);
         if (rows.length === 0) return null;
-
+        const v = rows[0];
         return {
-            video_id: rows[0].video_id,
-            fps: rows[0].fps,
-            duration_sec: 0,
-            width: 1280,
-            height: 720,
-            video_url: `${BACKEND_URL}/videos/${rows[0].video_id}.mp4`
-
+            video_id: v.video_id,
+            fps: v.fps,
+            duration_sec: Math.round((v.duration_ms || 0) / 1000),
+            width: v.width,
+            height: v.height,
+            damaged: v.damaged,
+            collection: v.collection,
+            video_url: media.videoUrl(v.video_id)
         };
     },
 
-    getVideoShots: async (videoId, page = null, perPage = null) => {
+    /** Scenes of a video, with their keyframes -- the filmstrip. */
+    getVideoScenes: async (videoId, page = null, perPage = null) => {
         const usePagination = page !== null && perPage !== null;
         const offset = usePagination ? (page - 1) * perPage : null;
 
-        const sql = usePagination
-            ? `SELECT shot_id, start_frame, end_frame, middle_frame, image_path
-               FROM shots
-               WHERE video_id = $1
-               ORDER BY start_frame ASC, middle_frame ASC
-                   LIMIT $2
-               OFFSET $3;`
-            : `SELECT shot_id, start_frame, end_frame, middle_frame, image_path
-               FROM shots
-               WHERE video_id = $1
-               ORDER BY start_frame ASC, middle_frame ASC;`;
-        const shotsParams = usePagination ? [videoId, perPage, offset] : [videoId];
-
-        const countSql = `SELECT COUNT(*) ::int AS total
-                          FROM shots
-                          WHERE video_id = $1;`;
-        const fpsSql = `SELECT fps
-                        FROM videos
-                        WHERE video_id = $1`;
-
-        const [shotsRes, countRes, fpsRes] = await Promise.all([
-            pool.query(sql, shotsParams),
-            pool.query(countSql, [videoId]),
-            pool.query(fpsSql, [videoId])
-        ]);
-
-        const fps = fpsRes.rows.length > 0 ? fpsRes.rows[0].fps : 25.0;
-        const total = countRes.rows[0].total || 0;
-
-        const shots = shotsRes.rows.map(row => ({
-            shot_id: row.shot_id,
-            start_frame: row.start_frame,
-            end_frame: row.end_frame,
-            middle_frame: row.middle_frame,
-            fps: fps,
-            thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
-        }));
-
-        return {total, shots};
-    },
-
-    getSimilarShots: async (videoId, shotId, exclude = [], page = 1, perPage = 24) => {
-        const getEmbedSql = `SELECT embedding
-                             FROM shots
-                             WHERE video_id = $1
-                               AND shot_id = $2`;
-        const embedRes = await pool.query(getEmbedSql, [videoId, shotId]);
-
-        if (embedRes.rows.length === 0) throw new Error("Shot not found");
-
-        const targetVectorArray = embedRes.rows[0].embedding;
-
-        if (!targetVectorArray) {
-            return {results: [], hasMore: false};
-        }
-        const formattedVectorString = pgvector.toSql(targetVectorArray);
-
-        const searchSql = `
-            SELECT s.shot_id,
-                   s.video_id,
+        const scenesSql = `
+            SELECT s.scene_id,
+                   s.shot_index,
                    s.start_frame,
                    s.end_frame,
-                   s.middle_frame,
-                   s.image_path,
-                   v.fps,
-                   1 - (s.embedding <=> $1::vector) AS score
-            FROM shots s
-                     JOIN videos v ON s.video_id = v.video_id
-            WHERE s.shot_id != $2
-              AND NOT (s.video_id = ANY ($3::text[]))
-              AND s.embedding IS NOT NULL
-            ORDER BY s.embedding <=> $1::vector
-                LIMIT $4
-            OFFSET $5;
+                   s.start_ms,
+                   s.end_ms,
+                   k.keyframe_id,
+                   k.kf_index,
+                   k.frame_number,
+                   k.ts_ms
+            FROM scenes s
+                     LEFT JOIN keyframes k ON k.scene_id = s.scene_id
+            WHERE s.video_id = $1
+            ORDER BY s.shot_index, k.kf_index
+            ${usePagination ? 'LIMIT $2 OFFSET $3' : ''};
         `;
-        
-        const offset = (page - 1) * perPage;
-        const {rows} = await pool.query(searchSql, [formattedVectorString, shotId, exclude, perPage + 1, offset]);
 
-        const hasMore = rows.length > perPage;
-        const pageRows = hasMore ? rows.slice(0, perPage) : rows;
+        const [scenesRes, countRes, videoRes] = await Promise.all([
+            pool.query(scenesSql, usePagination ? [videoId, perPage, offset] : [videoId]),
+            pool.query(`SELECT COUNT(*)::int AS total FROM scenes WHERE video_id = $1;`, [videoId]),
+            pool.query(`SELECT fps FROM videos WHERE video_id = $1`, [videoId])
+        ]);
 
-        const results = pageRows.map(row => ({
-            video_id: row.video_id,
-            shot_id: row.shot_id,
-            score: row.score ? parseFloat(row.score.toFixed(4)) : 0,
-            start_frame: row.start_frame,
-            end_frame: row.end_frame,
-            middle_frame: row.middle_frame,
-            fps: row.fps,
-            start_time_ms: Math.floor((row.start_frame / row.fps) * 1000),
-            end_time_ms: Math.floor((row.end_frame / row.fps) * 1000),
-            thumbnail_url: `${BACKEND_URL}/keyframes/${row.image_path.split('/').pop()}`
+        const fps = videoRes.rows.length > 0 ? videoRes.rows[0].fps : 25.0;
+
+        // Collapse the scene/keyframe join into one entry per scene.
+        const byScene = new Map();
+        for (const row of scenesRes.rows) {
+            if (!byScene.has(row.scene_id)) {
+                byScene.set(row.scene_id, {
+                    scene_id: row.scene_id,
+                    shot_index: row.shot_index,
+                    start_frame: row.start_frame,
+                    end_frame: row.end_frame,
+                    start_time_ms: row.start_ms,
+                    end_time_ms: row.end_ms,
+                    fps,
+                    keyframes: []
+                });
+            }
+            if (row.keyframe_id !== null) {
+                byScene.get(row.scene_id).keyframes.push({
+                    keyframe_id: row.keyframe_id,
+                    kf_index: row.kf_index,
+                    frame_number: row.frame_number,
+                    keyframe_time_ms: row.ts_ms,
+                    thumbnail_url: media.thumbnailUrl(videoId, row.shot_index, row.kf_index),
+                    keyframe_url: media.keyframeUrl(videoId, row.shot_index, row.kf_index)
+                });
+            }
+        }
+
+        const scenes = [...byScene.values()].map((scene) => ({
+            ...scene,
+            thumbnail_url: scene.keyframes[0]?.thumbnail_url || null
         }));
 
-        return {results, hasMore};
+        return {total: countRes.rows[0].total || 0, scenes};
+    },
+
+    /** Frame range of a scene, so a submission can be recorded against it. */
+    getScene: async (sceneId) => {
+        const {rows} = await pool.query(
+            `SELECT scene_id, video_id, shot_index, start_frame, end_frame, start_ms, end_ms
+             FROM scenes
+             WHERE scene_id = $1`, [sceneId]);
+        return rows[0] || null;
     }
 };

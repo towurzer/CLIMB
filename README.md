@@ -99,6 +99,11 @@ If you don't want to search for something specific, but want to just browse thro
 tab on the top right.
 We will dynamically load more videos on scrolling and cache the Videos loaded for faster retrieval.
 
+Scrolling through search results is cheap now. The first page runs the actual search and everything after it is
+served from cache, so page four arrives in about 15ms instead of running a fourth search and throwing three pages of
+it away. Results are also one row per scene rather than one per keyframe, so a page of 48 is 48 different shots
+instead of about 22 shots shown three times each.
+
 <img src="readme_images/browsing.png" alt="browsing.png" width="500"/>
 
 If you click on a video you can see all the scenes. If you click one it will open up in the right bar.

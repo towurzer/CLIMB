@@ -177,6 +177,21 @@ class SearchEngine:
         return SearchResult(results=enriched, timings=timings,
                             signals_used=[n for n, r in lists.items() if r])
 
+    def similar(self, keyframe_id, exclude=None, top_k=None, collection=None) -> SearchResult:
+        """Scenes that look like the given keyframe. Its own scene is dropped from the results."""
+        top_k = top_k or self.conf.SEARCH_TOP_K
+        started = time.monotonic()
+        pairs = retrievers.similar_to_keyframe(
+            self.conn, keyframe_id, self.visual_model["model_id"], self.visual_model["dims"],
+            exclude or [], collection or None, top_k)
+        timings = {"similar": round((time.monotonic() - started) * 1000, 1)}
+
+        fused = [fusion.FusedResult(scene_id=scene_id, score=1.0 / (rank + 1),
+                                    signals={"similar": rank + 1}, keyframe_id=kf)
+                 for rank, (scene_id, kf) in enumerate(pairs) if kf != keyframe_id][:top_k]
+        return SearchResult(results=self._enrich(fused), timings=timings,
+                            signals_used=["similar"])
+
     def _enrich(self, fused):
         if not fused:
             return []

@@ -94,10 +94,10 @@ function VideoBrowser({
         setShotsTotal(null);
         setShotsLoading(true);
 
-        fetch(`${apiUrl}/climb/videos/${video.video_id}/shots?page=1&per_page=${SHOTS_PER_PAGE}`)
+        fetch(`${apiUrl}/climb/videos/${video.video_id}/scenes?page=1&per_page=${SHOTS_PER_PAGE}`)
             .then((res) => res.json())
             .then((data) => {
-                setShots(data.shots || []);
+                setShots(data.scenes || []);
                 setShotsTotal(data.total ?? null);
                 setShotsLoading(false);
             })
@@ -113,10 +113,10 @@ function VideoBrowser({
 
         const next = shotsPage + 1;
         setShotsLoadingMore(true);
-        fetch(`${apiUrl}/climb/videos/${selectedVideo.video_id}/shots?page=${next}&per_page=${SHOTS_PER_PAGE}`)
+        fetch(`${apiUrl}/climb/videos/${selectedVideo.video_id}/scenes?page=${next}&per_page=${SHOTS_PER_PAGE}`)
             .then((res) => res.json())
             .then((data) => {
-                setShots((prev) => [...prev, ...(data.shots || [])]);
+                setShots((prev) => [...prev, ...(data.scenes || [])]);
                 setShotsPage(next);
                 setShotsTotal(data.total ?? shotsTotal);
             })
@@ -151,11 +151,11 @@ function VideoBrowser({
         setShotsTotal(null);
         setShotsLoading(true);
 
-        fetch(`${apiUrl}/climb/videos/${openVideoId}/shots?page=1&per_page=${SHOTS_PER_PAGE}`)
+        fetch(`${apiUrl}/climb/videos/${openVideoId}/scenes?page=1&per_page=${SHOTS_PER_PAGE}`)
             .then((res) => res.json())
             .then((data) => {
                 if (cancelled) return;
-                const fetchedShots = data.shots || [];
+                const fetchedShots = data.scenes || [];
                 setShots(fetchedShots);
                 setShotsTotal(data.total ?? null);
                 setSelectedVideo({
@@ -191,17 +191,24 @@ function VideoBrowser({
     // middle_frame has to come along, it is the time we submit to DRES
     const handleShotClick = (shot) => {
         const fps = shot.fps || selectedVideo.fps || 25;
+        // A scene tile carries its keyframes; the first one represents it.
+        const keyframe = shot.keyframes?.[0] || {};
         onSelectShot({
+            scene_id: shot.scene_id,
+            keyframe_id: keyframe.keyframe_id,
             video_id: selectedVideo.video_id,
-            shot_id: shot.shot_id,
+            shot_index: shot.shot_index,
+            kf_index: keyframe.kf_index,
             score: 0,
             start_frame: shot.start_frame,
             end_frame: shot.end_frame,
-            middle_frame: shot.middle_frame,
+            frame_number: keyframe.frame_number,
             fps: fps,
-            start_time_ms: Math.round((shot.start_frame / fps) * 1000),
-            end_time_ms: Math.round((shot.end_frame / fps) * 1000),
+            start_time_ms: shot.start_time_ms,
+            end_time_ms: shot.end_time_ms,
+            keyframe_time_ms: keyframe.keyframe_time_ms,
             thumbnail_url: shot.thumbnail_url,
+            keyframe_url: keyframe.keyframe_url,
         });
     };
 
@@ -232,13 +239,13 @@ function VideoBrowser({
                                 const covered = coveredVideos.has(selectedVideo.video_id);
                                 return (
                                     <div
-                                        key={shot.shot_id}
+                                        key={shot.scene_id}
                                         className={`browse-card ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
                                         onClick={() => handleShotClick(shot)}
                                     >
                                         <div className="browse-card-thumb">
-                                            <img src={shot.thumbnail_url} alt={`Shot ${shot.shot_id}`} loading="lazy"/>
-                                            <span className="browse-card-badge">#{shot.shot_id}</span>
+                                            <img src={shot.thumbnail_url} alt={`Scene ${shot.scene_id}`} loading="lazy"/>
+                                            <span className="browse-card-badge">#{shot.shot_index}</span>
                                             {submitted && <span className="submitted-badge">✓</span>}
                                         </div>
                                     </div>

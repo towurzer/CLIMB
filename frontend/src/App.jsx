@@ -2,10 +2,11 @@ import {useState, useCallback, useEffect, useRef} from "react";
 
 const EMPTY_SET = new Set();
 
-// Identifies a scene (shot) by its frame range, not by shot_id, which in this
+// A scene is identified by scene_id. It used to be keyed on its frame range because the old
+// `shots` table had no scene identity; `scenes` is a real table now, so this
 // dataset is a per-keyframe id (many keyframes share one scene). Keying on the
 // range means submitting one keyframe hides/marks the whole scene.
-const sceneKey = (videoId, startFrame, endFrame) => `${videoId}_${startFrame}_${endFrame}`;
+const sceneKey = (sceneId) => String(sceneId);
 
 const avsHolds = (status) => status === "CORRECT" || status === "INDETERMINATE";
 
@@ -13,7 +14,7 @@ const avsHolds = (status) => status === "CORRECT" || status === "INDETERMINATE";
 const heldSceneKeys = (scenes) => new Set(
     (scenes || [])
         .filter((s) => avsHolds(s.status))
-        .map((s) => sceneKey(s.video_id, s.start_frame, s.end_frame))
+        .map((s) => sceneKey(s.scene_id))
 );
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
@@ -100,7 +101,7 @@ function App() {
     // Keyed on the values instead of the object, because every selection path builds a fresh one.
     useEffect(() => {
         setTimeOverride({from: null, to: null});
-    }, [selectedResult?.video_id, selectedResult?.shot_id, selectedKeyframeMs]);
+    }, [selectedResult?.video_id, selectedResult?.keyframe_id, selectedKeyframeMs]);
 
     const handleTimeChange = useCallback((field, value) => {
         setTimeOverride((prev) => ({...prev, [field]: value}));
@@ -120,7 +121,7 @@ function App() {
         return submissions.some(
             (s) => s.type === "segment" &&
                 s.video_id === result.video_id &&
-                s.shot_id === result.shot_id
+                s.keyframe_id === result.keyframe_id
         );
     };
 
@@ -141,7 +142,7 @@ function App() {
                 const currentIndex = selectedResult
                     ? results.findIndex(
                         (r) => r.video_id === selectedResult.video_id &&
-                            r.shot_id === selectedResult.shot_id
+                            r.keyframe_id === selectedResult.keyframe_id
                     )
                     : -1;
                 let nextIndex;
@@ -189,12 +190,13 @@ function App() {
         }
     }, [searchPerPage]);
 
-    const fetchSimilarPage = useCallback(async (videoId, shotId, excluded = [], page = 1, append = false) => {
+    const fetchSimilarPage = useCallback(async (keyframeId, excluded = [], page = 1, append = false) => {
         const params = new URLSearchParams({page, per_page: searchPerPage});
         if (excluded.length) params.set("exclude", excluded.join(","));
         try {
+            // Find-similar lives under /search now: it is fused, cached and paged like a search.
             const res = await fetch(
-                `${API_URL}/climb/videos/${videoId}/${shotId}/similar?${params}`
+                `${API_URL}/climb/search/similar/${keyframeId}?${params}`
             );
             const data = await res.json();
             const pageResults = data.results || [];
@@ -209,8 +211,8 @@ function App() {
     }, [searchPerPage]);
 
     // "Similar to X / shot Y" plus any active exclusions - shown in the results header
-    const similarLabel = (videoId, shotId, excluded = []) => {
-        const base = `Similar to ${videoId} / shot ${shotId}`;
+    const similarLabel = (videoId, keyframeId, excluded = []) => {
+        const base = `Similar to ${videoId} / keyframe ${keyframeId}`;
         return excluded.length ? `${base} --exclude: ${excluded.join(", ")}` : base;
     };
 
@@ -239,12 +241,12 @@ function App() {
     const handleFindSimilar = useCallback(async (result) => {
         setLoading(true);
         setMode("search");
-        setQuery(similarLabel(result.video_id, result.shot_id, excludedVideos));
-        setSimilarSource({video_id: result.video_id, shot_id: result.shot_id});
+        setQuery(similarLabel(result.video_id, result.keyframe_id, excludedVideos));
+        setSimilarSource({video_id: result.video_id, keyframe_id: result.keyframe_id});
         setSelectedResult(null);
         setConfirmSubmit(false);
         try {
-            await fetchSimilarPage(result.video_id, result.shot_id, excludedVideos);
+            await fetchSimilarPage(result.keyframe_id, excludedVideos);
         } finally {
             setLoading(false);
         }
@@ -262,7 +264,7 @@ function App() {
         // re-run whichever kind of search produced the current results (similarity search / text search)
         const isSimilar = Boolean(similarSource);
         const updatedQuery = isSimilar
-            ? similarLabel(similarSource.video_id, similarSource.shot_id, updatedExcluded)
+            ? similarLabel(similarSource.video_id, similarSource.keyframe_id, updatedExcluded)
             : `${baseQuery} --exclude: ${updatedExcluded.join(", ")}`;
 
         // can be triggered from the browse tab, so jump back to the results we just refreshed
@@ -275,7 +277,7 @@ function App() {
         setSearchPage(1);
         try {
             if (isSimilar) {
-                await fetchSimilarPage(similarSource.video_id, similarSource.shot_id, updatedExcluded);
+                await fetchSimilarPage(similarSource.keyframe_id, updatedExcluded);
             } else {
                 await fetchSearchPage(updatedQuery, 1, false);
             }
@@ -439,7 +441,8 @@ function App() {
             const fps = shot.fps || prev?.fps || 25;
             return {
                 video_id: prev?.video_id || shot.video_id,
-                shot_id: shot.shot_id,
+                scene_id: shot.scene_id,
+                keyframe_id: shot.keyframe_id,
                 score: prev?.score || 0,
                 middle_frame: shot.middle_frame,
                 start_frame: shot.start_frame,
@@ -465,7 +468,8 @@ function App() {
             type: "segment",
             task: taskMode,
             video_id: result.video_id,
-            shot_id: result.shot_id,
+            scene_id: result.scene_id,
+            keyframe_id: result.keyframe_id,
             start_time_ms: startTimeMs,
             end_time_ms: endTimeMs,
             time: timeNow(),
@@ -483,6 +487,7 @@ function App() {
                     end_time_ms: endTimeMs,
                     // scene frame range + session let the backend record the whole
                     // scene (all its keyframes) into our shared AVS session
+                    scene_id: result.scene_id,
                     start_frame: result.start_frame,
                     end_frame: result.end_frame,
                     avs_session: isAvs && avsSession?.code ? avsSession.code : undefined,
@@ -500,7 +505,7 @@ function App() {
             // the preview and filmstrip stay put and show a persistent "submitted"
             // state. A WRONG scene is left visible so its keyframes can still be tried.
             if (isAvs && res.ok && avsHolds(data.verdict)) {
-                const key = sceneKey(result.video_id, result.start_frame, result.end_frame);
+                const key = sceneKey(result.scene_id);
                 setAvsSubmittedScenes((prev) => new Set(prev).add(key));
             }
         } catch (err) {
@@ -542,7 +547,7 @@ function App() {
         try {
             // ask for next page, endpoint depends on search type
             if (similarSource) {
-                await fetchSimilarPage(similarSource.video_id, similarSource.shot_id, excludedVideos, nextPage, true);
+                await fetchSimilarPage(similarSource.keyframe_id, excludedVideos, nextPage, true);
             } else {
                 await fetchSearchPage(query, nextPage, true);
             }
@@ -593,13 +598,13 @@ function App() {
     // Drives the "submitted" preview overlay and disables re-submitting it.
     const selectedSubmitted = Boolean(
         isAvs && selectedResult &&
-        avsSubmittedScenes.has(sceneKey(selectedResult.video_id, selectedResult.start_frame, selectedResult.end_frame))
+        avsSubmittedScenes.has(sceneKey(selectedResult.scene_id))
     );
 
     // Results actually shown (submitted scenes are hidden in AVS), so the counter
     // matches the grid instead of counting scenes that have been filtered out.
     const visibleResultCount = (isAvs && avsSubmittedScenes.size)
-        ? results.filter((r) => !avsSubmittedScenes.has(sceneKey(r.video_id, r.start_frame, r.end_frame))).length
+        ? results.filter((r) => !avsSubmittedScenes.has(sceneKey(r.scene_id))).length
         : results.length;
     const hiddenResultCount = results.length - visibleResultCount;
 
@@ -738,7 +743,7 @@ function App() {
                         <>
                             <div className="result-details">
                                 <span>Video: {selectedResult.video_id}</span>
-                                <span>Shot: {selectedResult.shot_id}</span>
+                                <span>Scene: {selectedResult.scene_id}</span>
                                 <span>Score: {(selectedResult.score * 100).toFixed(1)}%</span>
                                 <span>Scene: {formatTimecode(selectedResult.start_time_ms)} – {formatTimecode(selectedResult.end_time_ms)}</span>
                                 <span>Keyframe: {autoTimecode || "unknown"}</span>
@@ -821,7 +826,7 @@ function App() {
                             {/*  film tape under the video */}
                             <ShotBrowser
                                 videoId={selectedResult.video_id}
-                                currentShotId={selectedResult.shot_id}
+                                currentKeyframeId={selectedResult.keyframe_id}
                                 onSelectShot={handleShotSelect}
                                 apiUrl={API_URL}
                                 onBrowseAll={handleBrowseAllShots}
