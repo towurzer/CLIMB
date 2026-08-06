@@ -53,6 +53,8 @@ class SearchEngine:
         self.device = device.pick_device()
         self.visual_model = None
         self.text_model = None
+        # collection -> loaded visual model spec, for collections SigLIP2 does not serve well.
+        self.collection_models = {}
         self._load_models()
 
     def _resolve(self, name):
@@ -60,22 +62,56 @@ class SearchEngine:
             cur.execute(SELECT_MODEL, (name,))
             return cur.fetchone()
 
+    def _load_visual(self, model_name):
+        """Loads a visual model's text tower, or None when it is not registered."""
+        from transformers import AutoModel, AutoProcessor
+
+        registered = self._resolve(model_name)
+        if not registered:
+            return None
+        model_id, name, dims = registered
+        processor = AutoProcessor.from_pretrained(name)
+        full = AutoModel.from_pretrained(name, dtype=device.pick_dtype(self.device))
+        text_tower = full.text_model.to(self.device).eval()
+        # The projection head lives outside text_model on SigLIP, so keep whichever exists.
+        head = getattr(full, "text_projection", None)
+        del full
+        self.logger.info(f"Loaded {name} text tower ({dims}d) on {self.device}")
+        return {"model_id": model_id, "name": name, "dims": dims,
+                "processor": processor, "tower": text_tower, "head": head}
+
+    def visual_model_for(self, collection):
+        """
+        Which visual model answers for a collection.
+
+        Vector spaces are not comparable, so a query must be embedded by the same model that
+        embedded the frames it is being compared against. Scoping a search to a collection is
+        therefore also choosing a model.
+        """
+        if collection:
+            return self.collection_models.get(collection.upper(), self.visual_model)
+        return self.visual_model
+
     def _load_models(self):
-        import torch
         from transformers import AutoModel, AutoProcessor, AutoTokenizer
 
-        visual = self._resolve(self.conf.KIS_MODEL_NAME)
-        if visual:
-            model_id, name, dims = visual
-            processor = AutoProcessor.from_pretrained(name)
-            full = AutoModel.from_pretrained(name, dtype=device.pick_dtype(self.device))
-            text_tower = full.text_model.to(self.device).eval()
-            # The projection head lives outside text_model on SigLIP, so keep whichever exists.
-            head = getattr(full, "text_projection", None)
-            self.visual_model = {"model_id": model_id, "dims": dims, "processor": processor,
-                                 "tower": text_tower, "head": head}
-            del full
-            self.logger.info(f"Loaded {name} text tower ({dims}d) on {self.device}")
+        self.visual_model = self._load_visual(self.conf.KIS_MODEL_NAME)
+
+        # Domain models, one per collection that needs one. Only loaded when the model is both
+        # configured and actually registered with embeddings -- otherwise a typo in the env var
+        # would silently route a collection at a model that has no vectors, and every search of it
+        # would come back empty rather than merely mediocre.
+        for collection, model_name in self.conf.collection_models().items():
+            if model_name == self.conf.KIS_MODEL_NAME:
+                continue
+            spec = self._load_visual(model_name)
+            if spec:
+                self.collection_models[collection.upper()] = spec
+                self.logger.info(f"{collection}: routed to {model_name}")
+            else:
+                self.logger.warning(
+                    f"{collection}: '{model_name}' is not registered in embedding_model, "
+                    f"falling back to {self.conf.KIS_MODEL_NAME}")
 
         text = self._resolve(self.conf.TEXT_MODEL)
         if text:
@@ -90,10 +126,10 @@ class SearchEngine:
     def ready(self) -> bool:
         return self.visual_model is not None
 
-    def embed_query_visual(self, text: str) -> str:
+    def embed_query_visual(self, text: str, spec=None) -> str:
         import torch
 
-        spec = self.visual_model
+        spec = spec or self.visual_model
         inputs = spec["processor"](text=[text], return_tensors="pt", padding="max_length",
                                    truncation=True).to(self.device)
         # The processor hands the vision tower's keys over too; the text tower rejects them.
@@ -130,7 +166,7 @@ class SearchEngine:
         top_k = top_k or conf.SEARCH_TOP_K
         depth = depth or conf.RETRIEVER_DEPTH
         weights = {**conf.rrf_weights(), **(weights or {})}
-        collection = collection or None
+        collection = normalize_collection(collection)
 
         lists, timings = {}, {}
 
@@ -145,10 +181,11 @@ class SearchEngine:
 
         # Visual first, so its keyframe is the one shown -- it is the frame that actually matched,
         # where OCR and ASR only identify the scene.
-        if parsed.has_free_text and self.visual_model:
-            vector = self.embed_query_visual(parsed.free_text)
+        visual_spec = self.visual_model_for(collection)
+        if parsed.has_free_text and visual_spec:
+            vector = self.embed_query_visual(parsed.free_text, visual_spec)
             run("visual", lambda: retrievers.visual(
-                self.conn, vector, self.visual_model["model_id"], self.visual_model["dims"],
+                self.conn, vector, visual_spec["model_id"], visual_spec["dims"],
                 exclude, collection, depth))
 
             tokens = query_parser.distinctive_tokens(parsed.free_text)
@@ -180,9 +217,11 @@ class SearchEngine:
     def similar(self, keyframe_id, exclude=None, top_k=None, collection=None) -> SearchResult:
         """Scenes that look like the given keyframe. Its own scene is dropped from the results."""
         top_k = top_k or self.conf.SEARCH_TOP_K
+        collection = normalize_collection(collection)
         started = time.monotonic()
+        spec = self.visual_model_for(collection)
         pairs = retrievers.similar_to_keyframe(
-            self.conn, keyframe_id, self.visual_model["model_id"], self.visual_model["dims"],
+            self.conn, keyframe_id, spec["model_id"], spec["dims"],
             exclude or [], collection or None, top_k)
         timings = {"similar": round((time.monotonic() - started) * 1000, 1)}
 
@@ -227,6 +266,11 @@ class SearchEngine:
                 "signals": item.signals,
             })
         return out
+
+
+def normalize_collection(collection):
+    """Collections are stored uppercase (V3C1, MVK, GYNSURG). None means every collection."""
+    return collection.strip().upper() if collection else None
 
 
 def _to_pgvector(values) -> str:

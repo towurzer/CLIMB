@@ -98,6 +98,19 @@ class Config:
     # Explicit text:"..." / said:"..." searches outrank everything -- the user told us what to find.
     RRF_WEIGHT_PHRASE: float = float(os.getenv("CLIMB_W_PHRASE") or 8.0)
 
+    # --- Per-collection visual models ---
+    COLLECTION_MODELS_RAW: str = os.getenv("CLIMB_COLLECTION_MODELS") or ""
+
+    def collection_models(self) -> dict:
+        mapping = {}
+        for entry in self.COLLECTION_MODELS_RAW.split(","):
+            entry = entry.strip()
+            if not entry or ":" not in entry:
+                continue
+            collection, model = entry.split(":", 1)
+            mapping[collection.strip().upper()] = model.strip()
+        return mapping
+
     def rrf_weights(self) -> dict:
         return {
             "visual": self.RRF_WEIGHT_VISUAL,
