@@ -6,7 +6,6 @@ Everything is scene-level. The old search returned keyframes, and since a scene 
 One row per scene is the fix, and it comes for free from fusing on scene_id.
 """
 
-import custom_logger
 from config import Config
 
 # Oversample on the binary index, then rerank the candidates against the full halfvec.

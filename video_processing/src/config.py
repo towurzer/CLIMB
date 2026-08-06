@@ -1,6 +1,5 @@
 import os
-from typing import List
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 VIDEO_PROCESSING_ROOT = Path(__file__).resolve().parent.parent

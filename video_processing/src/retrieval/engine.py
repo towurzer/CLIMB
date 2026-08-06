@@ -93,7 +93,7 @@ class SearchEngine:
         return self.visual_model
 
     def _load_models(self):
-        from transformers import AutoModel, AutoProcessor, AutoTokenizer
+        from transformers import AutoModel, AutoTokenizer
 
         self.visual_model = self._load_visual(self.conf.KIS_MODEL_NAME)
 
