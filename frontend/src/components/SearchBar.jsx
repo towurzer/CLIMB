@@ -1,5 +1,15 @@
 import {useState, useRef, useEffect} from "react";
 
+// The query syntax has nowhere else to be discovered, so it hangs off the input as a tooltip.
+const SYNTAX_HELP = [
+    "plain words          search everything",
+    'text:"Boulangerie"   on-screen text only, as a phrase',
+    'said:"good evening"  transcripts only, as a phrase',
+    "-video:00191         exclude a video",
+    "A >> B               A, then B within 30s, same video",
+    "A >>(d120) B         ...within 120s instead",
+].join("\n");
+
 function SearchBar({onSearch, loading, history}) {
     const [input, setInput] = useState("");
     const [showHistory, setShowHistory] = useState(false);
@@ -55,7 +65,8 @@ function SearchBar({onSearch, loading, history}) {
                     onFocus={() => {
                         if (history.length > 0) setShowHistory(true);
                     }}
-                    placeholder="Describe what you're looking for... (Ctrl+K)"
+                    placeholder="Describe what you're looking for, or A >> B for a sequence... (Ctrl+K)"
+                    title={SYNTAX_HELP}
                     disabled={loading}
                 />
                 <button type="submit" disabled={loading || !input.trim()}>

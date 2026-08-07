@@ -41,7 +41,11 @@ const toResult = (hit) => ({
     keyframe_time_ms: hit.ts_ms,
     damaged: hit.damaged,
     thumbnail_url: media.thumbnailUrl(hit.video_id, hit.shot_index, hit.kf_index),
-    keyframe_url: media.keyframeUrl(hit.video_id, hit.shot_index, hit.kf_index)
+    keyframe_url: media.keyframeUrl(hit.video_id, hit.shot_index, hit.kf_index),
+    ...(hit.temporal_partners ? {
+        temporal_partners: hit.temporal_partners.map(toResult),
+        temporal_gaps_ms: hit.temporal_gaps_ms
+    } : {})
 });
 
 module.exports = {
@@ -51,6 +55,9 @@ module.exports = {
      * Depth, not page: the controller caches this once and pages from the cache. Previously each
      * page re-ran the whole search with topK = page * perPage and threw the earlier rows away, so
      * page three cost three searches.
+     *
+     * Returns the whole payload rather than a bare array because `temporal` describes the result
+     * set, not any one row, and it has to survive the controller's cache along with it.
      */
     searchByText: async (queryText, exclude = [], depth = 500) => {
         const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
@@ -58,7 +65,10 @@ module.exports = {
             exclude,
             top_k: depth
         });
-        return (res.data.results || []).map(toResult);
+        return {
+            results: (res.data.results || []).map(toResult),
+            temporal: res.data.temporal || null
+        };
     },
 
     /**
@@ -73,7 +83,8 @@ module.exports = {
             exclude,
             top_k: depth
         });
-        return (res.data.results || []).map(toResult);
+        // Same payload shape as searchByText; find-similar is never a sequence.
+        return {results: (res.data.results || []).map(toResult), temporal: null};
     },
 
     getAllVideos: async (page = 1, perPage = 20) => {

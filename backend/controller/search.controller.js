@@ -9,8 +9,12 @@ const cache = require('../cache');
 const RESULT_DEPTH = parseInt(process.env.SEARCH_RESULT_DEPTH || '500', 10);
 const CACHE_TTL_SECONDS = parseInt(process.env.SEARCH_CACHE_TTL_SECONDS || '300', 10);
 
+// Bump when the cached payload's shape changes. v2 caches {results, temporal} where v1 cached a
+// Change when going back in commit history
+const CACHE_VERSION = 'v2';
+
 const cacheKey = (kind, parts) =>
-    `search:${kind}:${crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex')}`;
+    `search:${CACHE_VERSION}:${kind}:${crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex')}`;
 
 /**
  * Fetch a deep result set once and reuse it.
@@ -22,11 +26,11 @@ const cacheKey = (kind, parts) =>
 async function deepResults(kind, keyParts, fetcher) {
     const key = cacheKey(kind, keyParts);
     const cached = await cache.get(key);
-    if (cached) return {results: cached, cached: true};
+    if (cached) return {payload: cached, cached: true};
 
-    const results = await fetcher();
-    await cache.set(key, results, CACHE_TTL_SECONDS);
-    return {results, cached: false};
+    const payload = await fetcher();
+    await cache.set(key, payload, CACHE_TTL_SECONDS);
+    return {payload, cached: false};
 }
 
 /** Drop scenes already submitted in this AVS session, so nobody submits the same shot twice. */
@@ -61,10 +65,11 @@ exports.searchVideos = async (req, res) => {
         const {page, perPage} = parsePaging(req);
         const exclude = (req.query.exclude || '').split(',').map((v) => v.trim()).filter(Boolean);
 
-        const {results, cached} = await deepResults('text', [q, exclude], () =>
+        const {payload, cached} = await deepResults('text', [q, exclude], () =>
             queries.searchByText(q, exclude, RESULT_DEPTH));
 
-        const filtered = applyAvsFilter(results, avs_session);
+        // Anchors, for a sequence query -
+        const filtered = applyAvsFilter(payload.results, avs_session);
         const {page: pageResults, hasMore} = paginate(filtered, page, perPage);
 
         console.log(`search q=${JSON.stringify(q)} page=${page} ${cached ? '(cached)' : '(fresh)'} ` +
@@ -78,6 +83,7 @@ exports.searchVideos = async (req, res) => {
             total: filtered.length,
             has_more: hasMore,
             cached,
+            temporal: payload.temporal,
             results: pageResults
         });
     } catch (error) {
@@ -96,10 +102,10 @@ exports.findSimilar = async (req, res) => {
         const {page, perPage} = parsePaging(req);
         const exclude = (req.query.exclude || '').split(',').map((v) => v.trim()).filter(Boolean);
 
-        const {results, cached} = await deepResults('similar', [keyframeId, exclude], () =>
+        const {payload, cached} = await deepResults('similar', [keyframeId, exclude], () =>
             queries.findSimilarByKeyframe(keyframeId, exclude, RESULT_DEPTH));
 
-        const filtered = applyAvsFilter(results, req.query.avs_session);
+        const filtered = applyAvsFilter(payload.results, req.query.avs_session);
         const {page: pageResults, hasMore} = paginate(filtered, page, perPage);
 
         res.status(200).json({

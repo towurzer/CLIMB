@@ -97,6 +97,19 @@ class Config:
     # Explicit text:"..." / said:"..." searches outrank everything -- the user told us what to find.
     RRF_WEIGHT_PHRASE: float = float(os.getenv("CLIMB_W_PHRASE") or 8.0)
 
+    # --- Temporal queries (see retrieval/temporal.py) ---
+    # Query-side only: no schema, no embeddings, nothing to re-index.
+    TEMPORAL_DEFAULT_DELTA_MS: int = int(os.getenv("CLIMB_TEMPORAL_DELTA_MS") or 30_000)
+    TEMPORAL_MAX_DELTA_MS: int = int(os.getenv("CLIMB_TEMPORAL_MAX_DELTA_MS") or 600_000)
+    TEMPORAL_MAX_STAGES: int = int(os.getenv("CLIMB_TEMPORAL_MAX_STAGES") or 4)
+    # Deeper than a normal search on purpose. A chain only exists where *every* stage
+    # independently surfaced a hit in the same video, so stage depth is what buys recall here --
+    # and it is the only knob that does, short of rescoring whole videos.
+    TEMPORAL_STAGE_DEPTH: int = int(os.getenv("CLIMB_TEMPORAL_STAGE_DEPTH") or 500)
+    TEMPORAL_STAGE_TOP_K: int = int(os.getenv("CLIMB_TEMPORAL_STAGE_TOP_K") or 1000)
+    # A long video can contain dozens of legal chains; without a cap it owns the whole grid.
+    TEMPORAL_MAX_PER_VIDEO: int = int(os.getenv("CLIMB_TEMPORAL_MAX_PER_VIDEO") or 3)
+
     # --- Per-collection visual models ---
     COLLECTION_MODELS_RAW: str = os.getenv("CLIMB_COLLECTION_MODELS") or ""
 

@@ -52,6 +52,7 @@ function App() {
     const [searchPage, setSearchPage] = useState(1);
     const [searchPerPage] = useState(24);
     const [searchHasMore, setSearchHasMore] = useState(false);
+    const [searchTemporal, setSearchTemporal] = useState(null); // set only by an `A >> B` query
     const [searchLoadingMore, setSearchLoadingMore] = useState(false);
     const [resultsPanel, setResultsPanel] = useState(null);
     const [searchSentinel, setSearchSentinel] = useState(null);
@@ -138,13 +139,13 @@ function App() {
                 if (results.length === 0) return;
                 // blocking default behaviour of the server
                 e.preventDefault();
-                // where are we rn
-                const currentIndex = selectedResult
-                    ? results.findIndex(
-                        (r) => r.video_id === selectedResult.video_id &&
-                            r.keyframe_id === selectedResult.keyframe_id
-                    )
-                    : -1;
+                // where are we rn - a sequence hit can have a partner selected rather than its
+                // anchor, and that still counts as being on that card
+                const onCard = (r) => [r, ...(r.temporal_partners || [])].some(
+                    (scene) => scene.video_id === selectedResult.video_id &&
+                        scene.keyframe_id === selectedResult.keyframe_id
+                );
+                const currentIndex = selectedResult ? results.findIndex(onCard) : -1;
                 let nextIndex;
                 // moving to the next frame in both directions + cycling
                 if (e.key === "ArrowRight" || e.key === "ArrowDown") {
@@ -183,6 +184,8 @@ function App() {
             setResults((prev) => (append ? [...prev, ...pageResults] : pageResults));
             setSearchPage(page);
             setSearchHasMore(Boolean(data.has_more));
+            // Null unless the query used `A >> B`; describes how it was understood.
+            setSearchTemporal(data.temporal || null);
             return pageResults;
         } catch (err) {
             console.error("Search failed:", err);
@@ -203,6 +206,7 @@ function App() {
             setResults((prev) => (append ? [...prev, ...pageResults] : pageResults));
             setSearchPage(page);
             setSearchHasMore(Boolean(data.has_more));
+            setSearchTemporal(null); // find-similar replaces the result set, sequence or not
             return pageResults;
         } catch (err) {
             console.error("Similar search failed:", err);
@@ -608,6 +612,15 @@ function App() {
         : results.length;
     const hiddenResultCount = results.length - visibleResultCount;
 
+    // How an `A >> B` query was understood, plus how much each stage found on its own. When a
+    // sequence comes back empty this is the only thing that distinguishes "a stage matched
+    // nothing" from "no single video contained all of them".
+    const temporalNote = searchTemporal && [
+        `${(searchTemporal.stages || []).length} stages`,
+        `Δ ${(searchTemporal.deltas_ms || []).map((ms) => `${Math.round(ms / 1000)}s`).join(" / ")}`,
+        `stage hits ${(searchTemporal.stage_counts || []).join(" / ")}`
+    ].join(" · ");
+
     return (
         <div className="app">
             {/* for the top top bar */}
@@ -703,9 +716,14 @@ function App() {
                     {mode === "search" ? (
                             <>
                                 {loading && <div className="loading">Searching...</div>}
-                                {!loading && results.length > 0 && (
+                                {/* A sequence that found nothing still shows its header - that is
+                                    exactly when the per-stage counts are worth reading */}
+                                {!loading && (results.length > 0 || temporalNote) && (
                                     <div className="results-info">
                                         {visibleResultCount}{searchHasMore ? "+" : ""} results for "{query}"
+                                        {temporalNote && (
+                                            <span className="results-temporal-note"> · {temporalNote}</span>
+                                        )}
                                         {hiddenResultCount > 0 && (
                                             <span className="results-hidden-note"> · {hiddenResultCount} submitted hidden</span>
                                         )}

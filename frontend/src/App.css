@@ -560,6 +560,69 @@ body {
     text-overflow: ellipsis;
 }
 
+/* ── Temporal chain (A >> B) ──
+   The card is the anchor scene; the strip is the rest of the chain. Clicking any of them makes
+   that scene the selected one, so the outline marks which member the player is showing. */
+.temporal-strip {
+    display: flex;
+    gap: 3px;
+    padding: 3px;
+    background: #141414;
+    border-top: 1px solid #2a2a2a;
+    overflow-x: auto;
+}
+
+.temporal-partner {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    aspect-ratio: 16 / 9;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #222;
+    cursor: pointer;
+}
+
+.temporal-partner img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.temporal-partner:hover {
+    border-color: #555;
+}
+
+.temporal-gap {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0, 0, 0, 0.75);
+    color: #ccc;
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-align: center;
+}
+
+/* Which member of the chain the player is on. Inset rather than a border on the anchor, whose
+   thumbnail sits flush against the card edge. */
+.temporal-partner.temporal-active {
+    border-color: #5b8def;
+}
+
+.thumbnail-wrapper.temporal-active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 2px solid #5b8def;
+    pointer-events: none;
+}
+
 /* ── Player Panel (right) ── */
 .player-panel {
     width: 420px;
@@ -1705,6 +1768,10 @@ body {
 
 .results-hidden-note {
     color: #3fa45b;
+}
+
+.results-temporal-note {
+    color: #5b8def;
 }
 
 .log-tag {

@@ -15,6 +15,12 @@ Syntax:
     text:"..."               OCR only, matched as a phrase
     said:"..."               transcripts only, matched as a phrase
     -video:00191             exclude a video (repeatable)
+    A >> B                   A, then B within the default window, in the same video
+    A >>(d120) B             the same, with a 120 second window
+
+`>>` chains: `A >> B >> C` is three stages and two independent windows. Each stage is a complete
+query in its own right -- `text:"Boulangerie" >> a dog runs past` is a legal sequence -- because a
+stage is scored by the full fused search, not by the visual retriever alone.
 """
 
 import re
@@ -27,6 +33,11 @@ EXCLUDE_PREFIX = re.compile(r'-video:([A-Za-z0-9_]+)')
 LEGACY_EXCLUDE = re.compile(r'--exclude:\s*([^\s]*)')
 
 WORD = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
+
+TEMPORAL_SEPARATOR = ">>"
+# The window annotating a separator: (d120), (120), (d120s), (d500ms). A bare number is seconds,
+# which is the unit anyone typing a VBS hint is thinking in.
+TEMPORAL_DELTA = re.compile(r"\s*\(\s*d?\s*(\d+)\s*(ms|s)?\s*\)")
 
 STOPWORDS = {
     "a", "an", "the", "and", "or", "of", "in", "on", "at", "to", "for", "with", "by", "from",
@@ -57,6 +68,31 @@ class ParsedQuery:
     def targeted(self) -> bool:
         """True when the user asked for one specific retriever rather than a general search."""
         return (self.ocr_phrase is not None or self.asr_phrase is not None) and not self.has_free_text
+
+    @property
+    def has_content(self) -> bool:
+        """False when nothing here would run a retriever, only exclusions, or nothing at all."""
+        return bool(self.has_free_text or self.ocr_phrase or self.asr_phrase)
+
+
+@dataclass
+class TemporalQuery:
+    """
+    One or more stages that must occur in this order, in the same video.
+
+    A plain query is the single-stage case, so the engine has one code path to parse and only
+    branches on `is_temporal`.
+    """
+    raw: str
+    stages: list = field(default_factory=list)
+    # One window per gap, so len(gaps_ms) == len(stages) - 1.
+    gaps_ms: list = field(default_factory=list)
+    # Global: an exclusion written on any stage excludes the video from all of them.
+    exclude_videos: list = field(default_factory=list)
+
+    @property
+    def is_temporal(self) -> bool:
+        return len(self.stages) > 1
 
 
 def distinctive_tokens(text: str) -> list:
@@ -117,3 +153,69 @@ def parse(query: str) -> ParsedQuery:
         asr_phrase=asr_phrase or None,
         exclude_videos=_dedupe(exclude),
     )
+
+
+def _split_stages(text: str) -> list:
+    """
+    Splits on `>>` outside double quotes, returning [(segment, delta_ms | None)].
+
+    Quote-aware, and scanned rather than regex-split, because `text:"a >> b"` is a phrase that
+    happens to contain the separator. A bare split would cut the phrase in half and search for two
+    things nobody asked for -- and it would do it silently.
+
+    The delta rides with the segment *after* the separator it annotates, which is what makes the
+    bookkeeping survive an empty stage being dropped later.
+    """
+    segments = []
+    start, index, delta = 0, 0, None
+    in_quotes = False
+
+    while index < len(text):
+        if text[index] == '"':
+            in_quotes = not in_quotes
+            index += 1
+            continue
+        if not in_quotes and text.startswith(TEMPORAL_SEPARATOR, index):
+            segments.append((text[start:index], delta))
+            index += len(TEMPORAL_SEPARATOR)
+            match = TEMPORAL_DELTA.match(text, index)
+            delta = _delta_ms(match) if match else None
+            index = match.end() if match else index
+            start = index
+            continue
+        index += 1
+
+    segments.append((text[start:], delta))
+    return segments
+
+
+def _delta_ms(match) -> int:
+    value = int(match.group(1))
+    return value if match.group(2) == "ms" else value * 1000
+
+
+def parse_temporal(query: str, default_delta_ms: int, max_delta_ms: int,
+                   max_stages: int) -> TemporalQuery:
+    """
+    Parses a whole search box, sequence syntax included.
+
+    Always returns at least one stage, so a caller can treat a plain query as the degenerate
+    sequence and only branch on `is_temporal`.
+    """
+    raw = query or ""
+    parsed = [(parse(text), delta) for text, delta in _split_stages(raw)]
+
+    exclude = [video for stage, _ in parsed for video in stage.exclude_videos]
+
+    # An empty stage is not a stage: `A >>` is a search for A, not a sequence whose second half
+    # matches nothing and therefore returns nothing at all.
+    kept = [(stage, delta) for stage, delta in parsed if stage.has_content]
+    if not kept:
+        kept = parsed[:1]
+    kept = kept[:max_stages]
+
+    gaps = [min(default_delta_ms if delta is None else delta, max_delta_ms)
+            for _, delta in kept[1:]]
+
+    return TemporalQuery(raw=raw, stages=[stage for stage, _ in kept], gaps_ms=gaps,
+                         exclude_videos=_dedupe(exclude))

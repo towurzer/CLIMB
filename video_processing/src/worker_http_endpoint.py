@@ -67,6 +67,7 @@ def do_search(request: SearchRequest):
         "results": result.results,
         "signals": result.signals_used,
         "timings_ms": result.timings,
+        "temporal": result.temporal, # Null unless the prompt used the `A >> B` sequence syntax.
     }
 
 

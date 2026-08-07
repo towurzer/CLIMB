@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import custom_logger
 from config import Config
 from pipeline import device
-from retrieval import fusion, query_parser, retrievers
+from retrieval import fusion, query_parser, retrievers, temporal
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
 
@@ -36,6 +36,9 @@ class SearchResult:
     results: list
     timings: dict
     signals_used: list
+    # Present only for a sequence query: what it was understood to mean, and how much each stage
+    # found. Without it an empty page cannot be told apart from a stage that matched nothing.
+    temporal: dict = None
 
 
 class SearchEngine:
@@ -161,13 +164,31 @@ class SearchEngine:
     def search(self, query: str, exclude=None, top_k=None, collection=None,
                weights=None, depth=None) -> SearchResult:
         conf = self.conf
-        parsed = query_parser.parse(query)
+        parsed = query_parser.parse_temporal(
+            query, conf.TEMPORAL_DEFAULT_DELTA_MS, conf.TEMPORAL_MAX_DELTA_MS,
+            conf.TEMPORAL_MAX_STAGES)
         exclude = list(dict.fromkeys((exclude or []) + parsed.exclude_videos))
         top_k = top_k or conf.SEARCH_TOP_K
-        depth = depth or conf.RETRIEVER_DEPTH
         weights = {**conf.rrf_weights(), **(weights or {})}
         collection = normalize_collection(collection)
 
+        if parsed.is_temporal:
+            return self._search_temporal(parsed, exclude, collection, weights, top_k, depth)
+
+        fused, timings, lists = self._retrieve(
+            parsed.stages[0], exclude, collection, weights,
+            depth or conf.RETRIEVER_DEPTH, top_k)
+        return SearchResult(results=self._enrich(fused), timings=timings,
+                            signals_used=[n for n, r in lists.items() if r])
+
+    def _retrieve(self, parsed, exclude, collection, weights, depth, limit):
+        """
+        Run every retriever for one query and fuse them.
+
+        Shared by a plain search and by each stage of a sequence, which is the point: a stage is
+        exactly as strong as a search, so `text:"Boulangerie" >> a dog runs past` works and every
+        future signal joins the temporal path for free.
+        """
         lists, timings = {}, {}
 
         def run(name, fn):
@@ -209,10 +230,48 @@ class SearchEngine:
             run("asr_phrase", lambda: retrievers.transcript_phrase(
                 self.conn, parsed.asr_phrase, exclude, collection, depth))
 
-        fused = fusion.fuse(lists, weights, limit=top_k)
-        enriched = self._enrich(fused)
-        return SearchResult(results=enriched, timings=timings,
-                            signals_used=[n for n, r in lists.items() if r])
+        return fusion.fuse(lists, weights, limit=limit), timings, lists
+
+    def _search_temporal(self, parsed, exclude, collection, weights, top_k, depth) -> SearchResult:
+        """
+        Each stage is a full search; the chaining is arithmetic over the results.
+
+        A chain is only found where every stage independently surfaced a hit in the same video,
+        which is why stages run deeper than a normal search.
+        """
+        conf = self.conf
+        stage_depth = depth or conf.TEMPORAL_STAGE_DEPTH
+
+        enriched, timings, signals = [], {}, []
+        for index, stage in enumerate(parsed.stages):
+            fused, stage_timings, lists = self._retrieve(
+                stage, exclude, collection, weights, stage_depth, conf.TEMPORAL_STAGE_TOP_K)
+            for name, elapsed in stage_timings.items():
+                timings[f"s{index}:{name}"] = elapsed
+            signals += [f"s{index}:{name}" for name, results in lists.items() if results]
+            enriched.append(self._enrich(fused))
+
+        started = time.monotonic()
+        chains = temporal.link(enriched, parsed.gaps_ms, limit=top_k,
+                               max_per_video=conf.TEMPORAL_MAX_PER_VIDEO)
+        timings["temporal_link"] = round((time.monotonic() - started) * 1000, 1)
+
+        results = []
+        for chain in chains:
+            anchor = dict(chain.scenes[0])
+            anchor["score"] = round(chain.score, 6)
+            anchor["temporal_partners"] = chain.scenes[1:]
+            anchor["temporal_gaps_ms"] = chain.gaps_ms
+            results.append(anchor)
+
+        return SearchResult(
+            results=results, timings=timings, signals_used=signals,
+            temporal={
+                "stages": [_stage_label(stage) for stage in parsed.stages],
+                "deltas_ms": parsed.gaps_ms,
+                "stage_counts": [len(hits) for hits in enriched],
+                "chains": len(chains),
+            })
 
     def similar(self, keyframe_id, exclude=None, top_k=None, collection=None) -> SearchResult:
         """Scenes that look like the given keyframe. Its own scene is dropped from the results."""
@@ -266,6 +325,23 @@ class SearchEngine:
                 "signals": item.signals,
             })
         return out
+
+
+def _stage_label(stage) -> str:
+    """
+    What a stage actually searched for, for the UI header.
+
+    Rebuilt from the parsed parts rather than echoed from the raw segment, so an exclusion written
+    mid-sequence does not show up as part of the thing being searched for.
+    """
+    parts = []
+    if stage.ocr_phrase:
+        parts.append(f'text:"{stage.ocr_phrase}"')
+    if stage.asr_phrase:
+        parts.append(f'said:"{stage.asr_phrase}"')
+    if stage.has_free_text:
+        parts.append(stage.free_text)
+    return " ".join(parts)
 
 
 def normalize_collection(collection):
