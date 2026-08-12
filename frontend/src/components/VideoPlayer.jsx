@@ -1,16 +1,15 @@
 import {useRef, useEffect, useState} from "react";
-import {formatTimecode} from "../timecode";
+import {formatTimecode, keyframeMs} from "../timecode";
 
-function VideoPlayer({result, apiUrl}) {
+function VideoPlayer({result}) {
     const videoRef = useRef(null);
     const [loopSegment, setLoopSegment] = useState(true);
 
-    const startSec = result.middle_frame
-        ? result.middle_frame / result.fps
-        : result.start_time_ms / 1000;
+    // Start on the keyframe when we know it, on the scene otherwise.
+    const keyframeAt = keyframeMs(result);
+    const startSec = (keyframeAt != null ? keyframeAt : result.start_time_ms) / 1000;
     const endSec = startSec + 5;
-    const videoUrl = `${apiUrl}/videos/${result.video_id}.mp4`;
-    console.log("middle_frame:", result.middle_frame, "startSec:", startSec, "fps:", result.fps);
+    const videoUrl = result.video_url; // Always from the API: mediaPaths.js is the one place that knows the sharded layout.
 
     // When video_id changes, reload the video. When only the segment changes, just seek.
     useEffect(() => {

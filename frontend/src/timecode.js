@@ -45,11 +45,16 @@ export function snapMsToFrame(ms, fps) {
     return Math.round((frame / fps) * 1000);
 }
 
-// The keyframe (called middle_frame due to legacy code) is what we submit, not the scene bounds.
+// The keyframe is what we submit, not the scene bounds.
+//
+// `keyframe_time_ms` is what the API sends (keyframes.ts_ms, measured at extraction time), so it
+// is preferred; `frame_number` is the same instant expressed in frames and is the fallback for a
+// payload that carries only that.
 export function keyframeMs(result) {
     if (!result) return null;
-    if (result.middle_frame != null && result.fps) {
-        return Math.round((result.middle_frame / result.fps) * 1000);
+    if (result.keyframe_time_ms != null) return Math.round(result.keyframe_time_ms);
+    if (result.frame_number != null && result.fps) {
+        return Math.round((result.frame_number / result.fps) * 1000);
     }
     return null;
 }

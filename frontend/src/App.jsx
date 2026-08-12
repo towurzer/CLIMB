@@ -2,12 +2,6 @@ import {useState, useCallback, useEffect, useRef} from "react";
 
 const EMPTY_SET = new Set();
 
-// A scene is identified by scene_id. It used to be keyed on its frame range because the old
-// `shots` table had no scene identity; `scenes` is a real table now, so this
-// dataset is a per-keyframe id (many keyframes share one scene). Keying on the
-// range means submitting one keyframe hides/marks the whole scene.
-const sceneKey = (sceneId) => String(sceneId);
-
 const avsHolds = (status) => status === "CORRECT" || status === "INDETERMINATE";
 
 // Scene keys to hide, from a session snapshot's scene list.
@@ -28,6 +22,7 @@ import AvsSessionBar from "./components/AvsSessionBar";
 import DresLoginModal from "./components/DresLoginModal";
 import BackendStatusDot from "./components/BackendStatusDot";
 import {describeDresResult, describeDresError} from "./dresSubmission";
+import {sceneKey} from "./sceneKey";
 import {formatTimecode, parseTimecode, snapMsToFrame, keyframeMs} from "./timecode";
 import "./App.css";
 
@@ -75,7 +70,7 @@ function App() {
     // AVS: task-type toggle (independent of the search/browse `mode`) and the collaborative session state that hides/marks scenes submitted.
     const [taskMode, setTaskMode] = useState("kis"); // "kis" | "avs"
     const [avsSession, setAvsSession] = useState(null); // {code, name, expiresInMs, counts} | null
-    const [avsSubmittedScenes, setAvsSubmittedScenes] = useState(EMPTY_SET); // Set<"videoId_shotId">
+    const [avsSubmittedScenes, setAvsSubmittedScenes] = useState(EMPTY_SET); // Set<sceneKey(scene_id)>
     const [avsCoveredVideos, setAvsCoveredVideos] = useState(EMPTY_SET);      // Set<videoId>
     const [avsExpiredCode, setAvsExpiredCode] = useState(null); // last session that idled out
 
@@ -443,20 +438,29 @@ function App() {
         setSelectedResult((prev) => {
             // 25 is just a backup becuase it is most common
             const fps = shot.fps || prev?.fps || 25;
+            // ShotBrowser hands over a raw scene from /videos/:id/scenes, where the keyframe
+            // fields sit inside `keyframes`; VideoBrowser hands over an already-flattened one.
+            // Accepting both keeps the two filmstrips from needing different callbacks.
+            const keyframe = shot.keyframes?.[0] || {};
             return {
                 video_id: prev?.video_id || shot.video_id,
                 scene_id: shot.scene_id,
-                keyframe_id: shot.keyframe_id,
+                keyframe_id: shot.keyframe_id ?? keyframe.keyframe_id,
+                kf_index: shot.kf_index ?? keyframe.kf_index,
                 score: prev?.score || 0,
-                middle_frame: shot.middle_frame,
                 start_frame: shot.start_frame,
                 end_frame: shot.end_frame,
                 fps: fps,
+                // The keyframe instant has to survive the hop: it is what prefills the submission
+                // time and where the player seeks to. Dropping it here left both empty.
+                frame_number: shot.frame_number ?? keyframe.frame_number,
+                keyframe_time_ms: shot.keyframe_time_ms ?? keyframe.keyframe_time_ms,
                 // we need to recalculate, because DRES is usinf ms not frames.
                 // these are the bounds of the whole scene, what we submit comes from the keyframe time fields
                 start_time_ms: Math.round((shot.start_frame / fps) * 1000),
                 end_time_ms: Math.round((shot.end_frame / fps) * 1000),
                 thumbnail_url: shot.thumbnail_url,
+                video_url: shot.video_url || prev?.video_url,
             };
         });
     }, []);
@@ -537,7 +541,6 @@ function App() {
 
     // Select result
     const handleSelect = useCallback((result) => {
-        console.log("handleSelect middle_frame:", result.middle_frame);
         setSelectedResult(result);
         setConfirmSubmit(false);
         setSubmitStatus(null);
@@ -777,7 +780,7 @@ function App() {
                                     </div>
                                 </div>
                             ) : (
-                                <VideoPlayer result={selectedResult} apiUrl={API_URL}/>
+                                <VideoPlayer result={selectedResult}/>
                             )}
                             <div className="actions">
                                 {/* what actually gets submitted - auto filled from the keyframe, editable */}

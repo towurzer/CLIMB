@@ -1,4 +1,5 @@
 import {useState, useEffect, useCallback} from "react";
+import {sceneKey} from "../sceneKey";
 
 const SHOTS_PER_PAGE = 60;
 
@@ -188,7 +189,7 @@ function VideoBrowser({
     };
 
     // When user clicks a shot, convert to result format and pass up.
-    // middle_frame has to come along, it is the time we submit to DRES
+    // keyframe_time_ms has to come along, it is the time we submit to DRES
     const handleShotClick = (shot) => {
         const fps = shot.fps || selectedVideo.fps || 25;
         // A scene tile carries its keyframes; the first one represents it.
@@ -209,6 +210,8 @@ function VideoBrowser({
             keyframe_time_ms: keyframe.keyframe_time_ms,
             thumbnail_url: shot.thumbnail_url,
             keyframe_url: keyframe.keyframe_url,
+            // The player builds no URLs of its own; the sharded path comes from the API.
+            video_url: selectedVideo.video_url,
         });
     };
 
@@ -235,7 +238,7 @@ function VideoBrowser({
                     <>
                         <div className="browse-grid">
                             {shots.map((shot) => {
-                                const submitted = submittedScenes.has(`${selectedVideo.video_id}_${shot.start_frame}_${shot.end_frame}`);
+                                const submitted = submittedScenes.has(sceneKey(shot.scene_id));
                                 const covered = coveredVideos.has(selectedVideo.video_id);
                                 return (
                                     <div

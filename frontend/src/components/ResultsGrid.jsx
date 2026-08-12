@@ -1,4 +1,5 @@
 import {useEffect, useRef} from "react";
+import {sceneKey} from "../sceneKey";
 
 const EMPTY_SET = new Set();
 
@@ -36,9 +37,9 @@ function ResultsGrid({
 
     // Hide scenes already submitted in the AVS session (client-side safety net on
     // top of the server filter; also covers scenes just submitted this session).
-    // Scenes are keyed by frame range, so every keyframe of a submitted scene hides.
+    // Keyed by scene_id, so every keyframe of a submitted scene hides with it.
     const visible = hiddenScenes.size
-        ? results.filter((r) => !hiddenScenes.has(`${r.video_id}_${r.start_frame}_${r.end_frame}`))
+        ? results.filter((r) => !hiddenScenes.has(sceneKey(r.scene_id)))
         : results;
 
     if (visible.length === 0) {

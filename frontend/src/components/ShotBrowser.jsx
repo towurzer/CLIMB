@@ -1,4 +1,5 @@
 import {useState, useEffect, useRef} from "react";
+import {sceneKey} from "../sceneKey";
 
 const EMPTY_SET = new Set();
 
@@ -68,7 +69,7 @@ function ShotBrowser({
                 {shots.map((shot) => {
                     const isActive = shot.keyframes?.some((k) => k.keyframe_id === currentKeyframeId);
                     // Mark scenes already submitted in the AVS session so nobody resubmits.
-                    const submitted = submittedScenes.has(String(shot.scene_id));
+                    const submitted = submittedScenes.has(sceneKey(shot.scene_id));
                     const covered = coveredVideos.has(videoId);
                     return (
                         <div
