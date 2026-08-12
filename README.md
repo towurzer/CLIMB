@@ -20,12 +20,14 @@ segments.
 
 In order to run CLIMB, you will need to make sure that the following things are fulfilled:
 
-- You will need the processed media in `dataset/media/` — the 360p videos under `media/video/`, the keyframes under
+- You will need the processed media in `dataset/media/` , the 360p videos under `media/video/`, the keyframes under
   `media/kf/` and `media/thumbs/`. Set `CLIMB_MEDIA_DIR` if you keep them on an external drive instead
 - (To see how to produce all of that, see the "Decoding" section under "Getting Started - Developer")
-- Make sure there is a Database Dump with the embeddings stored under `/dataset/climb_db.dump`
-- (If you don't have a db-dump you will need to embed everything yourself, for that follow the "Getting Started -
-  Developer" Section)
+- Make sure the database exists and the migrations are applied. There is no dump to restore any more , the old
+  `dataset/climb_db.dump` was from the pre-pg17 schema and would not load even if you still had it (see the word of
+  warning under "The Database"). `python main.py schema` prints the podman command, `python main.py migrate` does the
+  rest, and then you embed, (Which means yes, given you don't have a new dump, you will need to embed everything 
+  yourself, for that follow the "Getting Started - Developer" Section)
 - Verify that there is a `.env` file in the root directory having all the necessary Parameters (listed in Section "
   Environment Variables")
 
@@ -159,6 +161,11 @@ FRONTEND_PORT=3000
 ALLOWED_ORIGIN_REGEX=^https?:\/\/(?:[a-zA-Z0-9-]+\.)*q1studios\.at(?::\d+)?$
 ```
 
+That is the service wiring, and it is deliberately not the full list. The pipeline reads about thirty more
+`CLIMB_*` knobs, media and work directories, decode workers, batch sizes per model, OCR backend, caption model,
+the four RRF weights, the temporal query defaults. **`config.py` is the reference for those**; this file documents
+the ones you need to get started rather than pretending to be complete.
+
 ---
 
 ## Getting Started - Developer
@@ -174,6 +181,7 @@ backend/
     openapi.yaml            # API specification
     package.json            # Backend dependencies
     server.js               # Express API server
+    mock-dres-server.js     # a fake DRES to test submissions against (port 8080)
     avsSessionStore.js      # shared in-memory collaborative AVS sessions
     serviceUrls.js          # resolves the backend / search engine base urls from env
     controller/             # Route handlers
@@ -181,7 +189,6 @@ backend/
     routes/                 # Express routes
 
 dataset/                    # local folder only
-    climb_db_backup.dump    # Database dump
     V3C1_200/               # Source video dataset
     media/                  # everything we keep (point CLIMB_MEDIA_DIR at your SSD instead)
         video/              # 360p web-playable copies
@@ -203,6 +210,7 @@ frontend/
         main.jsx            # React entry point
         dresSubmission.js   # formatting of DRES submission results
         timecode.js         # timecode <-> ms <-> frame conversion
+        sceneKey.js         # one canonical scene identity for grid, browser and AVS
         components/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
@@ -218,10 +226,15 @@ frontend/
 
 video_processing/
     requirements.txt           # python dependencies        
+    pytest.ini                 # test config; `-m "not integration"` is the fast run
+    tests/                     # 157 tests: pure logic + HTTP integration + DRES/AVS
     migrations/                # numbered .sql schema migrations, applied in order
         001_core_schema.sql    # videos / scenes / keyframes / text tables / ingest_jobs
         002_vector_function_costs.sql # teaches the query planner that vector math isn't free
         003_videos_damaged_flag.sql   # marks videos whose bitstream only partly decodes
+        004_model_aware_embeddings.sql # lets more than one embedding model coexist
+        005_text_embeddings.sql        # transcript vectors
+        006_caption_embeddings.sql     # caption vectors
     src/
         config.py              # Settings
         custom_logger.py       # Logging utilities
@@ -232,6 +245,7 @@ video_processing/
         retrieval/
             query_parser.py    # search box string -> structured query
             retrievers.py      # the four signals, all scene-level
+            temporal.py        # `A >> B` chains: linking stages across time
             fusion.py          # reciprocal rank fusion
             engine.py          # ties them together
         db/
@@ -275,6 +289,16 @@ pip install -r requirements.txt
 ```
 
 to install neccessary requirements.
+
+Two things that are easy to lose an evening to:
+
+- **`torchvision` is not optional.** Captioning needs it, and without it both VLMs fail with
+  `Unrecognized image processor`, which sends you hunting through the model repo instead of the venv. It is pinned to
+  `0.27.1` because that is the version that matches `torch==2.12.1`; a bare `pip install torchvision` will happily
+  upgrade torch to 2.13.0 behind your back.
+- **PaddleOCR needs Python ≤ 3.13.** There is no `paddlepaddle` wheel for 3.14 at all, so on a 3.14 venv OCR falls
+  back to `rapidocr-onnxruntime` automatically. `CLIMB_OCR_BACKEND` forces the issue either way
+  (`auto` / `paddle` / `rapidocr`); the interface is the same.
 
 In case you prefer using a conda environment run
 ```bash:
@@ -327,7 +351,7 @@ The whole batch in one line:
 python main.py run
 ```
 
-which is `fetch,ingest-shots,decode,select,purge` — pick your own with `--stages`. Order does not matter,
+which is `fetch,ingest-shots,decode,select,purge` , pick your own with `--stages`. Order does not matter,
 they get sorted into pipeline order regardless, so you cannot accidentally ask it to select keyframes from a
 video it has not decoded yet.
 
@@ -364,7 +388,7 @@ python main.py fetch                           # pulls the next batch down
 python main.py purge                           # throws away what is no longer needed
 ```
 
-How the videos are actually reachable is your business, not the pipeline's — set `CLIMB_FETCH_COMMAND` to
+How the videos are actually reachable is your business, not the pipeline's , set `CLIMB_FETCH_COMMAND` to
 whatever works (`rsync -a --partial {source} {dest}` by default, but scp, curl or cp are all fine).
 
 `purge` is careful rather than clever. It does not wait for the whole pipeline to finish before freeing
@@ -454,7 +478,7 @@ python main.py ingest-shots
 This walks the dataset, runs ```ffprobe``` on every video (frame rate, duration, dimensions, whether there is an audio
 track at all) and writes one ```scenes``` row per master shot. Frame rates come from ffprobe rather than OpenCV, because
 OpenCV cheerfully returns 0 or NaN for a decent number of V3C files and the old code's answer to that was "eh, must be 30
-fps" — which then quietly poisons every timestamp we ever send to DRES for that video. The 200-video set alone has ten
+fps" , which then quietly poisons every timestamp we ever send to DRES for that video. The 200-video set alone has ten
 different frame rates in it, including such beauties as 23.000689 and 29.97003.
 
 The parser handles both the course's ```<video_id>.mp4.scenes.txt``` files and the official V3C boundary TSVs. It works
@@ -474,15 +498,15 @@ python main.py decode
 and go do something else for a while. For each video this spawns exactly **one** FFmpeg process which decodes it once
 and produces three things at the same time:
 
-- a 360p H.264 copy under ```media/video/``` — this is what the frontend plays, and at full V3C scale it is the only
+- a 360p H.264 copy under ```media/video/``` , this is what the frontend plays, and at full V3C scale it is the only
   copy of the video we keep once the original goes back to the server
-- candidate frames under ```work/cand/``` — one every half second, which keyframe selection will later thin down
-- a 16 kHz mono Opus track under ```work/audio/``` — food for Whisper
+- candidate frames under ```work/cand/``` , one every half second, which keyframe selection will later thin down
+- a 16 kHz mono Opus track under ```work/audio/``` , food for Whisper
 
 The old code did this in two passes: ```--compress``` decoded the whole video to transcode it, then
 ```--extractKeyframes``` decoded it *again*, seeking to each keyframe individually with OpenCV. Seeking to an arbitrary
 frame in H.264 means decoding forward from the previous I-frame, so sampling once a second re-decodes most of the video
-over and over — and when OpenCV's seek missed (which on V3C it does), the fallback rewound to the start of the shot and
+over and over , and when OpenCV's seek missed (which on V3C it does), the fallback rewound to the start of the shot and
 walked forward frame by frame. On the 39-minute shot in video 00191 that is about 56,000 sequential reads to get one
 picture. It worked. It just did not need to.
 
@@ -501,12 +525,12 @@ A few things worth knowing:
   NVENC sessions you can have at once) that video quietly falls back to the CPU.
 
 - **Broken videos get indexed anyway.** V3C1_200 contains two videos (00016 and 00024) whose H.264 streams are damaged
-  — the container promises 23,120 and 47,289 frames, the bitstream delivers about 84% of that and a great deal of
+  , the container promises 23,120 and 47,289 frames, the bitstream delivers about 84% of that and a great deal of
   shouting about NAL units. Throwing away five sixths of a video because the last sixth is rubbish would be a shame, so
   those get indexed from whatever decodes and flagged as ```damaged``` in the database, which is why their keyframe
   coverage looks thin later.
 - **A short extraction that is *not* explained by a broken file fails the video instead.** That combination means
-  something went wrong outside the video — a full disk, most likely — and is worth retrying. Ask me how I know.
+  something went wrong outside the video , a full disk, most likely , and is worth retrying. Ask me how I know.
 
 #### 1.6 Keyframe selection
 
@@ -533,7 +557,7 @@ clock. The rule:
 4. **Pick the spread.** Start from the most typical frame of the shot, then repeatedly add whichever remaining frame is
    least like everything picked so far. You end up covering the shot instead of collecting near-duplicates of its first
    second.
-5. **Very short shots** (under half a second — about 5% of them, and no candidate frame happens to land inside) simply
+5. **Very short shots** (under half a second , about 5% of them, and no candidate frame happens to land inside) simply
    get their middle frame pulled straight out of the video.
 
 Each chosen frame is written twice: 384px for the detail panel and as model input, 160px for the results grid. Both
@@ -564,10 +588,22 @@ are matched to scenes by overlapping timestamps.
 
 OCR reads **every** keyframe, captions only the **first of each shot**. That asymmetry is deliberate. Keyframes are
 picked for how different they look, so skipping all but the first throws away exactly the frames where the text is most
-likely to have changed — rolling credits, a news banner swapping mid-shot, a scoreboard ticking over, subtitles, a pan
+likely to have changed , rolling credits, a news banner swapping mid-shot, a scoreboard ticking over, subtitles, a pan
 along a row of shopfronts. Miss those and nothing later can recover them; no clever ranking reads a sign nobody looked
-at. Captions do not have that problem — a sentence describing a shot reads much the same whichever frame of it you
-pick — and they are the pricier stage, so they stay at one per shot.
+at. Captions do not have that problem , a sentence describing a shot reads much the same whichever frame of it you
+pick , and they are the pricier stage, so they stay at one per shot.
+
+**A trap worth knowing about:** small VLMs like SmolVLM default to splitting each image into tiles sized for a
+full-resolution photo. Our keyframes are 480x270, so that means 13 crops of 512x512 per frame , every one of them an
+*upscale* of a piece of an already-small picture, for detail that was never in there. It costs 5.3x
+(17.57 s/shot versus 3.34) and buys nothing; the untiled captions were if anything slightly better, since the untiled
+one mentioned on-screen text the tiled one missed. `CLIMB_CAPTION_IMAGE_SPLITTING` defaults to off for exactly this
+reason. Qwen2-VL does not tile and is unaffected.
+
+Which model you point at it is `CLIMB_CAPTION_MODEL`. Measured on 12 CPU cores over the full 200-video set:
+**SmolVLM-256M at 1.9-2.1 s/shot, Qwen2-VL-2B at ~13 s/shot.** SmolVLM is roughly 6x cheaper despite being the one
+you would expect to be worse , but only after the tiling fix above. Before it, the 256M model was the *more*
+expensive of the two despite having eight times fewer parameters, which is a fun thing to discover at 2am.
 
 **Text embeddings** are the fourth-and-a-half stage:
 
@@ -577,18 +613,18 @@ python main.py embed-text
 
 Run it after transcription and captioning. Word matching alone does not get you far on either: people rarely phrase a
 search the way somebody happened to say it out loud, and they certainly do not phrase it the way a model happened to
-describe a picture. Encoding both with a multilingual text model fixes that — on paraphrased speech it finds the right
+describe a picture. Encoding both with a multilingual text model fixes that , on paraphrased speech it finds the right
 segment first 5 times out of 6, and an English query will happily land on a German sentence.
 
 Captions need this even more than transcripts do. Out of five test searches, four shared **not a single content word**
 with the caption that described exactly what they were looking for: search "a cyclist standing outside a shop", and the
 caption says "A man in a red jacket stands beside a bicycle outside a bakery". Match those by keyword and you get
-nothing; match them by meaning and it comes first every time. It is also the only way captions earn their keep — ask for
+nothing; match them by meaning and it comes first every time. It is also the only way captions earn their keep , ask for
 "a man carrying bread walks past a parked bicycle" and it correctly prefers the man carrying bread over the man merely
 standing next to a bicycle, which is the sort of distinction the image embeddings cheerfully ignore.
 
 The OCR text is deliberately **not** encoded this way. We tried it and measured it, and on short shop signs it could not
-tell a bakery from a pharmacy — with two words to go on, the model has nothing to work with. OCR is better served by
+tell a bakery from a pharmacy , with two words to go on, the model has nothing to work with. OCR is better served by
 plain word matching, because what OCR is uniquely good at is exact strings: if you typed "Dupont" and a sign says
 "Dupont", that is not a hint, that is an answer. Trigram matching covers the misreadings ("B0ULANGERIE" still scores
 0.73 against the right sign), and searching for text you have actually seen is what the `text:"..."` prefix is for.
@@ -624,12 +660,25 @@ This builds the HNSW vector index and the full-text indexes. Two things worth kn
 - Do it **after** loading, not before. Maintaining an HNSW index while you shovel millions of rows into it is several
   times slower than building it once at the end.
 - Do it on a machine with some RAM to spare (we ask for 8GB of ```maintenance_work_mem```). Building the index and
-  *reading* the index are very different appetites — the plan is that whoever has the beefy machine builds it, and the
+  *reading* the index are very different appetites , the plan is that whoever has the beefy machine builds it, and the
   competition laptop just gets handed the finished database.
 
 The vector index is built over *binary quantized* embeddings and then reranks the top candidates against the full
 precision vectors. Roughly: 1024 dimensions squashed to 1024 bits is about 5 GB of index instead of 28 GB, which is the
 difference between fitting in a laptop's RAM and very much not.
+
+How much oversampling is worth it, measured over 7,543 keyframes against exhaustive exact search:
+
+| `CLIMB_ANN_OVERSAMPLE` | candidates | recall@20 | latency |
+|------------------------|------------|-----------|---------|
+| 1000 (default)         | 1000       | 15/20     | 29 ms   |
+| 2000                   | 2000       | 18/20     | 54 ms   |
+| **4000**               | 4000       | **20/20** | 91 ms   |
+| 7543 (whole corpus)    | 7543       | 20/20     | 108 ms  |
+
+The ceiling is the binary quantization, not the index , the ANN stage ranks by hamming distance on 1-bit vectors, so
+the true cosine neighbours are not all inside its top-N. Left at 1000 by default because tripling your query latency
+is a decision you should make on purpose.
 
 #### 1.9 How searching actually works
 
@@ -638,14 +687,14 @@ Four different things look for your query at once, and their answers get merged.
 - **The picture itself.** Your words get turned into a vector and matched against every keyframe.
   This is the workhorse and handles anything visual.
 - **Text on screen.** Signs, chyrons, scoreboards, credits. Matched as words, not meaning, because
-  what OCR is uniquely good at is *exact* strings — nothing else in the system can find "Dupont".
+  what OCR is uniquely good at is *exact* strings , nothing else in the system can find "Dupont".
 - **Shot descriptions.** Matched by meaning, so "a cyclist outside a shop" finds "A man in a red
   jacket stands beside a bicycle outside a bakery" despite sharing no words with it.
 - **What people said.** Also by meaning, and mapped back to whichever scenes were on screen at the
   time.
 
 Each returns its own ranked list of scenes, and the lists are merged by **where** each one placed a
-scene rather than by its score — the numbers are not comparable (image similarity sits around 0.05,
+scene rather than by its score , the numbers are not comparable (image similarity sits around 0.05,
 text similarity around 0.85, keyword rank is unbounded), but "this one came third" always is.
 
 A scene found by two signals beats a scene found by one, and an exact text match is weighted very
@@ -663,6 +712,18 @@ each. Now one row means one shot.
 | `text:"BOULANGERIE"` | on-screen text only, as an exact phrase (typos tolerated) |
 | `said:"after the earthquake"` | spoken words only                                         |
 | `-video:00191` | leave that video out (repeatable)                         |
+| `a dog >> a man on a bike` | one thing, then the other, in the same video              |
+| `a dog >>(d120) a man on a bike` | the same, but within 120 seconds                          |
+
+##### Searching for things that happen in order
+
+Sometimes you do not remember a shot, you remember a *sequence* , the interview, then the building. `>>` chains
+stages: `A >> B >> C` is three stages and two independent windows, and each stage is a full query in its own right, so
+`text:"Boulangerie" >> a dog runs past` is perfectly legal. The window rides with the separator that precedes the
+stage: `(d120)` and `(120)` are both 120 seconds, `(d500ms)` is half a second, and leaving it off uses the default.
+
+The splitting is quote-aware, so `text:"a >> b"` stays one phrase rather than becoming a sequence. An empty stage is
+not a stage either , `A >>` is just a search for A, not a sequence missing its second half.
 
 #### 1.10 Start the Search Engine
 
@@ -679,6 +740,25 @@ in the config file.
 
 Since the console will not be yours anymore I guess, so start up a new one and find your way to the root directory and
 start if the next Section.
+
+#### 1.11 Tests
+
+There are tests now. I know, I was surprised too.
+
+```bash
+cd video_processing
+pytest -m "not integration"   # 90 pure-logic tests, ~2 s, no database needed
+pytest                        # all 157, including the 67 that need a live DB and an indexed corpus
+```
+
+The pure ones cover the query parser (`>>` splitting outside quotes, the `(d120)` / `(500ms)` gap syntax, dropped
+empty stages, global `-video:` exclusions), the temporal DP, the RRF arithmetic and both OCR backend adapters. The
+integration ones drive the worker and the backend over HTTP, check that all four RRF signals actually contribute, run
+the temporal cases end to end, `EXPLAIN` the ANN query to confirm the planner really picks HNSW rather than quietly
+falling back to a sequential scan, and exercise the whole DRES/AVS submission path against the mock server below.
+
+If the integration ones skip rather than run, that means the services are not up , they need the database, the worker
+on 5000, the backend on 8000 and the mock DRES on 8080.
 
 ### 2. Backend
 
@@ -744,6 +824,25 @@ npm install
 npm start
 ```
 
+##### 2.5 Testing submissions without DRES
+
+Submitting to a server that does not exist yet is hard to practice, so there is a fake one:
+
+```bash
+node backend/mock-dres-server.js     # port 8080, log in with admin / password
+```
+
+It implements the v2 client API CLIMB actually calls , login, `evaluation/list`, `evaluation/currentTask`,
+`submit/{evaluationId}` , and is deliberately strict in the same places DRES is: unknown session → 401, unknown
+evaluation → 404, and **a submission naming a `mediaItemName` without a `mediaItemCollectionName` → 400**, which is
+the rule the whole thing exists to catch. It also warns if an answer set ever carries more than one answer, because
+DRES grades only the first one and silently ignores the rest.
+
+Test hooks live under `/mock/*`: `POST /mock/verdict` sets what the next submission comes back as, `POST /mock/task`
+sets the current task, `GET /mock/submissions` shows everything received (with a recorded `shape` per submission, so
+the "N separate POSTs, one answer each" rule that AVS depends on is actually assertable), and `POST /mock/reset`
+clears it all again.
+
 ### 3. Frontend
 
 Starting the frontend is even easier.
@@ -773,8 +872,10 @@ one included, browser based wise I like to use
 
 The version of CLIMB that won the course competition indexed 200 videos and 25 hours. VBS 2027 runs against all of V3C:
 **28,450 videos, 3,800 hours, 4.14 million master shots and about 4.7 TB of video**, plus the marine (MVK) and GynSurg
-datasets. That is roughly 150x more video, which is the kind of number where "it works, just slowly" stops being true
-and things simply fall over instead.
+datasets. That is roughly 150x more video , and, more to the point, **289x more master shots**, because our 200-video
+set runs about 550 shots per hour where V3C overall runs about 1,090. It is cut roughly twice as densely as we are, so
+sizing anything off hours alone quietly halves the answer. Either way it is the kind of number where "it works, just
+slowly" stops being true and things simply fall over instead.
 
 So the offline pipeline is being rebuilt. The shape of it:
 
@@ -792,6 +893,3 @@ So the offline pipeline is being rebuilt. The shape of it:
   is absolutely full of readable signs, chyrons and scoreboards.
 - **Thumbnails that are actually thumbnails.** Serving 40 KB full-resolution JPEGs as 200px grid tiles was fine for
   3.9 GB. It is not fine for several million of them.
-
-Progress so far: the database foundation and the master shot ingest are done. The single-pass decode, keyframe
-selection, the GPU stages and the retrieval layer are next.
