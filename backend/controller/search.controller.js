@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 
 const queries = require('../models/queries');
-const avsStore = require('../avsSessionStore');
+const avsClient = require('../avsSessionClient');
 const cache = require('../cache');
 
 // How deep a result set is fetched and cached. Paging then costs a Redis read instead of another search.
@@ -33,14 +33,19 @@ async function deepResults(kind, keyParts, fetcher) {
     return {payload, cached: false};
 }
 
-/** Drop scenes already submitted in this AVS session, so nobody submits the same shot twice. */
+/**
+ * Drop scenes already submitted in this AVS session, so nobody submits the same shot twice.
+ *
+ * Reads the local mirror and nothing else, meaning this is synchronous,
+ * no network, no awaiting, the mirror gets pulled not asked every query.
+ */
 function applyAvsFilter(results, avsSession) {
     if (!avsSession) return results;
-    const session = avsStore.getSession(String(avsSession).toUpperCase());
+    const session = avsClient.getMirror(avsSession);
     if (!session) return results;
     return results.filter((r) => {
-        const scene = session.scenes.get(avsStore.sceneKey(r.scene_id));
-        return !(scene && avsStore.holdsVideo(scene.status));
+        const scene = session.scenes.get(avsClient.sceneKey(r.scene_id));
+        return !(scene && avsClient.holdsVideo(scene.status));
     });
 }
 

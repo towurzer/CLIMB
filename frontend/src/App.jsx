@@ -73,6 +73,7 @@ function App() {
     const [avsSubmittedScenes, setAvsSubmittedScenes] = useState(EMPTY_SET); // Set<sceneKey(scene_id)>
     const [avsCoveredVideos, setAvsCoveredVideos] = useState(EMPTY_SET);      // Set<videoId>
     const [avsExpiredCode, setAvsExpiredCode] = useState(null); // last session that idled out
+    const [avsCollabOffline, setAvsCollabOffline] = useState(false);
 
     const avsFilterRef = useRef({mode: "kis", code: null});
     useEffect(() => {
@@ -353,6 +354,7 @@ function App() {
     // Fold a session snapshot from the backend into local hide/mark state
     const applyAvsSession = useCallback((data) => {
         setAvsExpiredCode(null);
+        setAvsCollabOffline(data.collab === "offline");
         setAvsSession({code: data.code, name: data.name, expiresInMs: data.expiresInMs, counts: data.counts});
         setAvsSubmittedScenes(heldSceneKeys(data.scenes));
         setAvsCoveredVideos(new Set(data.coveredVideos || []));
@@ -365,24 +367,33 @@ function App() {
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({name: dresName || null}),
             });
+            // A new session cannot be created without the shared service, so this one really does fail
+            if (res.status === 503) {
+                setAvsCollabOffline(true);
+                return;
+            }
             applyAvsSession(await res.json());
         } catch (err) {
             console.error("Create AVS session failed:", err);
         }
     }, [dresName, applyAvsSession]);
 
-    // Returns true on success so the join UI can surface "not found" itself
+    // Returns "ok" | "notfound" | "offline" so the join UI can tell the which it was
     const joinAvsSession = useCallback(async (code) => {
         const clean = (code || "").trim().toUpperCase();
-        if (!clean) return false;
+        if (!clean) return "notfound";
         try {
             const res = await fetch(`${API_URL}/climb/avs/session/${clean}/join`, {method: "POST"});
-            if (!res.ok) return false;
+            if (res.status === 503) {
+                setAvsCollabOffline(true);
+                return "offline";
+            }
+            if (!res.ok) return "notfound";
             applyAvsSession(await res.json());
-            return true;
+            return "ok";
         } catch (err) {
             console.error("Join AVS session failed:", err);
-            return false;
+            return "offline";
         }
     }, [applyAvsSession]);
 
@@ -391,10 +402,13 @@ function App() {
         setAvsSession(null);
         setAvsSubmittedScenes(EMPTY_SET);
         setAvsCoveredVideos(EMPTY_SET);
+        setAvsCollabOffline(false);
     }, []);
 
-    // Poll the session while in AVS mode: refreshes the shared hide/mark sets and doubles as the keep-alive heartbeat. A 404
-    // means the server deleted it for inactivity.
+    // Poll the session while in AVS mode: refreshes the shared hide/mark sets and doubles as the keep-alive heartbeat.
+    //
+    // 404 means the session is really gone, so the exclusion list is dropped.
+    // 503 means the backend could not reach the shared session service and has nothing to say
     useEffect(() => {
         if (!isAvs || !avsSession?.code) return;
         const code = avsSession.code;
@@ -403,22 +417,30 @@ function App() {
         const poll = async () => {
             try {
                 const res = await fetch(`${API_URL}/climb/avs/session/${code}`);
+                if (cancelled) return;
                 if (res.status === 404) {
-                    if (cancelled) return;
                     setAvsExpiredCode(code);
+                    setAvsCollabOffline(false);
                     setAvsSession(null);
                     setAvsSubmittedScenes(EMPTY_SET);
                     setAvsCoveredVideos(EMPTY_SET);
                     return;
                 }
+                if (res.status === 503) {
+                    setAvsCollabOffline(true);
+                    return; // keep the session and the scenes we already have
+                }
                 if (!res.ok) return;
                 const data = await res.json();
                 if (cancelled) return;
+                setAvsCollabOffline(data.collab === "offline");
                 setAvsSubmittedScenes(heldSceneKeys(data.scenes));
                 setAvsCoveredVideos(new Set(data.coveredVideos || []));
                 setAvsSession((prev) => prev ? {...prev, name: data.name, expiresInMs: data.expiresInMs, counts: data.counts} : prev);
             } catch (err) {
-                // network issue - next tick retries
+                // Our own backend is unreachable, which the status dot already reports. Keep state
+                // and let the next tick retry.
+                if (!cancelled) setAvsCollabOffline(true);
             }
         };
 
@@ -703,6 +725,7 @@ function App() {
                     apiUrl={API_URL}
                     session={avsSession}
                     expiredCode={avsExpiredCode}
+                    collabOffline={avsCollabOffline}
                     onCreate={createAvsSession}
                     onJoin={joinAvsSession}
                     onLeave={leaveAvsSession}

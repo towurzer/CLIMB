@@ -99,6 +99,37 @@ body {
     box-shadow: 0 0 7px rgba(232, 163, 61, 0.8);
 }
 
+/* AVS session service unreachable: green, because search, browsing and submitting all still work,
+   with a short yellow blink so it is visibly not a clean bill of health. Only collaboration is off. */
+@keyframes collab-offline-blink {
+    0%, 74% {
+        background: #7ade7a;
+        box-shadow: 0 0 7px rgba(122, 222, 122, 0.8);
+    }
+    80%, 92% {
+        background: #e8a33d;
+        box-shadow: 0 0 9px rgba(232, 163, 61, 0.95);
+    }
+    100% {
+        background: #7ade7a;
+        box-shadow: 0 0 7px rgba(122, 222, 122, 0.8);
+    }
+}
+
+.backend-dot.collab-offline {
+    background: #7ade7a;
+    box-shadow: 0 0 7px rgba(122, 222, 122, 0.8);
+    animation: collab-offline-blink 1.6s ease-in-out infinite;
+}
+
+/* Splitting the dot green/yellow instead of animating it if prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+    .backend-dot.collab-offline {
+        animation: none;
+        background: linear-gradient(135deg, #7ade7a 0 50%, #e8a33d 50% 100%);
+    }
+}
+
 .backend-dot.down {
     background: #e67;
     box-shadow: 0 0 7px rgba(230, 103, 119, 0.8);
@@ -1599,6 +1630,13 @@ body {
 
 .avs-session-error {
     color: #e05252;
+}
+
+/* Amber rather than the red of .avs-session-expired: the session is still yours and the scenes you
+   already know about still hide. Only teammate sync is paused. */
+.avs-session-offline {
+    color: #e8a33d;
+    font-weight: 600;
 }
 
 .avs-session-btn {

@@ -76,12 +76,15 @@ At the very right end of the header, past the "Login to DRES" button, there is a
 own services are up. The frontend re-checks every 5 seconds and the colour means:
 
 - green: backend and embedding service both answer, everything works
+- green with a yellow blink: everything works **except** AVS collaboration - the shared session service cannot be
+  reached, so your teammates' submissions stop showing up. Searching, browsing and submitting to DRES are completely
+  unaffected, which is why this is not orange. A blinking green light means "carry on, but you are on your own"
 - orange: the backend is up but the embedding service is not, so browsing, playback and submitting still work while text
   search does not. Usually you forgot to start the search engine (`python main.py serve`) or it could not
   reach the database
 - red: the backend cannot be reached at all, nothing will work until it is back
 
-Hovering the circle tells you which of the two is missing and why.
+Hovering the circle tells you which piece is missing and why.
 
 If you are in a competition I can recommend 2 things:
 
@@ -126,8 +129,17 @@ For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (n
 AVS is collaborative: click New session to get a random 4-letter code, or Join a teammate's code to work together. 
 Each shot you submit is sent as its own submission and is then hidden from everyone in the session's search results, 
 so no one on the team submits the same scene twice. Videos where you already got a correct hit are dimmed and marked 
-"covered", since extra shots from the same video barely raise the AVS score. Sessions are shared across everyone on the 
-same CLIMB server and are automatically deleted after 5 minutes of inactivity.
+"covered", since extra shots from the same video barely raise the AVS score. Sessions are deleted after 2 hours of
+inactivity, which is meant to comfortably outlive a task block rather than punish you for thinking.
+
+Sessions are shared through a small separate service (see [2.6](#26-avs-collaboration-across-machines)), so
+collaboration works even when everyone runs their own CLIMB on their own laptop - which at a competition you very much
+want to, because that keeps thumbnails and video on localhost instead of on the venue wifi. If that service ever
+becomes unreachable you get a "collab offline" badge next to the session code and the header light starts blinking
+yellow: you keep the session and every scene already known to be taken, you just stop hearing about new ones until it
+is back. Nothing about searching or submitting changes. If instead the session genuinely expired you get a
+"Session XXXX expired" banner - a different message on purpose, because one of them means "wait a moment" and the other
+means "start a new session".
 
 Going back to the search tab, you can search for video scenes including specific content.
 
@@ -160,6 +172,13 @@ BACKEND_PORT=8000
 FRONTEND_PORT=3000
 ALLOWED_ORIGIN_REGEX=^https?:\/\/(?:[a-zA-Z0-9-]+\.)*q1studios\.at(?::\d+)?$
 ```
+If you want AVS collaboration across machines you need three more. Leave them out and AVS still works, it is just private to your own CLIMB:
+
+```text:
+AVS_SESSION_SERVICE_URL=https://example.org
+AVS_SESSION_TOKEN=supersecrettoken
+CLIMB_USER=AlexHonold
+```
 
 That is the service wiring, and it is deliberately not the full list. The pipeline reads about thirty more
 `CLIMB_*` knobs, media and work directories, decode workers, batch sizes per model, OCR backend, caption model,
@@ -182,11 +201,19 @@ backend/
     package.json            # Backend dependencies
     server.js               # Express API server
     mock-dres-server.js     # a fake DRES to test submissions against (port 8080)
-    avsSessionStore.js      # shared in-memory collaborative AVS sessions
-    serviceUrls.js          # resolves the backend / search engine base urls from env
+    avsSessionClient.js     # talks to the AVS session service, and mirrors it so search never waits
+    serviceUrls.js          # resolves the backend / search engine / avs service base urls from env
     controller/             # Route handlers
     models/                 # Database models and queries
     routes/                 # Express routes
+
+climb-avs-service/          # the shared AVS session bookkeeper, deployed once for the whole team
+    server.js               # 5 routes wired to the controller. That is the entire service
+    sessions.controller.js  # what those 5 routes actually do
+    auth.js                 # bearer token + rate limit, the whole door
+    sessionStore.js         # the sessions themselves, in memory; the backend requires this too for solo mode
+    Containerfile           # one dependency, no DB, no dataset, no media, no DRES credentials
+    package.json
 
 dataset/                    # local folder only
     V3C1_200/               # Source video dataset
@@ -842,6 +869,46 @@ Test hooks live under `/mock/*`: `POST /mock/verdict` sets what the next submiss
 sets the current task, `GET /mock/submissions` shows everything received (with a recorded `shape` per submission, so
 the "N separate POSTs, one answer each" rule that AVS depends on is actually assertable), and `POST /mock/reset`
 clears it all again.
+
+##### 2.6 AVS collaboration across machines
+
+At a competition every teammate runs their own full CLIMB. 
+
+The one thing that genuinely has to be shared is AVS session bookkeeping, and it is tiny: a few hundred scene records
+keyed by a 4-letter code, no database, no dataset, no media, no DRES credentials. So it lives on its own in
+`climb-avs-service/`, deployed **once** for the whole team:
+
+```bash
+cd climb-avs-service
+podman build -t climb_avs .
+podman run --name climb_avs -d \
+    -e AVS_SESSION_TOKEN="$(openssl rand -hex 24)" \
+    -p 9000:8080 climb_avs
+```
+
+The service always listens on 8080 inside the container; the host side is yours to pick, and only clients care which
+one you picked. Every teammate then sets `AVS_SESSION_SERVICE_URL` (plus `AVS_SESSION_PORT=9000` if they give a bare
+host rather than a full URL) and the same `AVS_SESSION_TOKEN`, and gets on with it.
+
+Three rules this is built around:
+
+- **Search never touches the network.** Every backend keeps a local mirror of the session and filters against that,
+  synchronously. A slow or missing session service cannot slow down a search, and an unknown session just means no
+  filtering - showing a scene twice costs one duplicate submission, failing a search costs you the query.
+- **Submitting never depends on it.** The DRES POST goes out first and is what scores; recording the scene into the
+  session happens afterwards, is not awaited, and cannot fail into your submission.
+- **404 and 503 are different answers.** 404 means the session is really gone. 503 means we could not reach the
+  service and have nothing to say, so the team keeps its exclusion list and only the indicator changes. Collapsing
+  those two would throw away good state over a few seconds of bad wifi.
+
+Leave `AVS_SESSION_SERVICE_URL` unset and none of this applies: the store runs in-process exactly as it used to, which
+is what you want when developing on your own. The backend says which mode it is in on startup, so you never have to
+guess whether you are actually sharing a session:
+
+```text
+AVS sessions: shared via https://example.org
+AVS sessions: in-process (set AVS_SESSION_SERVICE_URL to collaborate across machines)
+```
 
 ### 3. Frontend
 

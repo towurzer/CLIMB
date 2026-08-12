@@ -15,5 +15,9 @@ module.exports = {
     SEARCH_ENGINE_URL: resolveUrl(
         process.env.SEARCH_ENGINE_URL || 'localhost',
         process.env.SEARCH_ENGINE_PORT || 5000
-    )
+    ),
+    // Unset means "no shared session service", which puts the AVS session store in-process (solo dev no collab)
+    AVS_SESSION_SERVICE_URL: process.env.AVS_SESSION_SERVICE_URL
+        ? resolveUrl(process.env.AVS_SESSION_SERVICE_URL, process.env.AVS_SESSION_PORT || 9000)
+        : null
 };

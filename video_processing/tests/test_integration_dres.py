@@ -14,24 +14,17 @@ Run with:
     pytest -m integration tests/test_integration_dres.py
 """
 
-import contextlib
-import os
 import re
-import signal
-import subprocess
 import time
-from pathlib import Path
 
 import pytest
 
-from conftest import get_json, post_json
+from conftest import free_port, get_json, post_json, spawn_backend
 
 pytestmark = pytest.mark.integration
 
 USERNAME = "admin"
 PASSWORD = "password"
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -49,36 +42,6 @@ def connected(backend, dres):
     })
     assert status == 200, body
     return body
-
-
-@contextlib.contextmanager
-def spawn_backend(port, **env_extra):
-    """
-    A backend of our own on another port.
-
-    Two things in the backend are module-level process state -- the DRES connection and the 30 s
-    collection-name cache -- so a test that needs them empty cannot get there by resetting the
-    mock. Starting a second process is the honest way to get a clean one.
-    """
-    env = {**os.environ, "BACKEND_PORT": str(port), **{k: str(v) for k, v in env_extra.items()}}
-    server = subprocess.Popen(["node", "server.js"], cwd=REPO_ROOT / "backend", env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              start_new_session=True)
-    base = f"http://localhost:{port}"
-    try:
-        for _ in range(50):
-            try:
-                if get_json(f"{base}/climb/avs/sessions", timeout=1)[0] == 200:
-                    break
-            except Exception:
-                pass
-            time.sleep(0.2)
-        else:
-            pytest.skip(f"could not start a second backend on {port}")
-        yield base
-    finally:
-        os.killpg(os.getpgid(server.pid), signal.SIGTERM)
-        server.wait(timeout=10)
 
 
 def submissions(dres):
@@ -280,7 +243,9 @@ def test_a_new_session_gets_a_four_letter_code(avs_session):
     assert avs_session["name"] == "pytest"
     assert avs_session["scenes"] == []
     assert avs_session["counts"] == {"instances": 0, "distinctVideos": 0}
-    assert 0 < avs_session["expiresInMs"] <= 5 * 60 * 1000
+    # Two hours, not the five minutes this store used while it lived in the backend. Once the
+    # heartbeat can cross a network, a blip must not delete the team's exclusion list mid-task.
+    assert 0 < avs_session["expiresInMs"] <= 2 * 60 * 60 * 1000
 
 
 def test_joining_by_code_is_case_insensitive(backend, avs_session):
@@ -381,15 +346,16 @@ def test_activity_pushes_the_expiry_out(backend, avs_session):
     _, first = get_json(f"{backend}/climb/avs/session/{avs_session['code']}")
     _, second = get_json(f"{backend}/climb/avs/session/{avs_session['code']}")
     assert second["expiresInMs"] >= first["expiresInMs"]
-    assert second["expiresInMs"] > 5 * 60 * 1000 - 2000
+    assert second["expiresInMs"] > 2 * 60 * 60 * 1000 - 2000
 
 
 def test_the_sweeper_really_deletes_an_idle_session():
     """
-    Spawns its own backend with a two-second idle window, because asserting the real five-minute
-    one would mean a five-minute test. `AVS_IDLE_TIMEOUT_MS` exists for exactly this.
+    Spawns its own backend with a two-second idle window, because asserting the real two-hour one
+    would mean a two-hour test. `AVS_IDLE_TIMEOUT_MS` exists for exactly this.
     """
-    with spawn_backend(8011, AVS_IDLE_TIMEOUT_MS=2000, AVS_SWEEP_INTERVAL_MS=300) as base:
+    with spawn_backend(free_port(), AVS_IDLE_TIMEOUT_MS=2000,
+                       AVS_SWEEP_INTERVAL_MS=300) as base:
         status, session = post_json(f"{base}/climb/avs/session", {"name": "sweeper"}, timeout=5)
         assert status == 201
         assert session["expiresInMs"] <= 2000

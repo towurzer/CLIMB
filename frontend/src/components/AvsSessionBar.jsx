@@ -1,12 +1,17 @@
 import {useState, useCallback} from "react";
 
-// ms -> whole seconds, for the idle-expiry countdown
-const secs = (ms) => Math.max(0, Math.ceil((ms || 0) / 1000));
+const expiryLabel = (ms) => {
+    const total = Math.max(0, Math.ceil((ms || 0) / 1000));
+    if (total >= 3600) return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
+    if (total >= 60) return `${Math.floor(total / 60)}m`;
+    return `${total}s`;
+};
 
 function AvsSessionBar({
     apiUrl,
     session,
     expiredCode,
+    collabOffline,
     onCreate,
     onJoin,
     onLeave,
@@ -18,9 +23,11 @@ function AvsSessionBar({
     const submitJoin = useCallback(async () => {
         const clean = joinCode.trim().toUpperCase();
         if (!clean) return;
-        const ok = await onJoin(clean);
-        if (!ok) {
+        const result = await onJoin(clean);
+        if (result === "notfound") {
             setJoinError(`Session ${clean} not found or expired.`);
+        } else if (result === "offline") {
+            setJoinError("Can't reach the session service — collaboration is offline.");
         } else {
             setJoinError("");
             setJoinCode("");
@@ -36,6 +43,12 @@ function AvsSessionBar({
         try {
             const res = await fetch(`${apiUrl}/climb/avs/sessions`);
             const data = await res.json();
+            if (res.status === 503) {
+                setJoinError("Can't reach the session service — can't list sessions.");
+                setSessions([]);
+                return;
+            }
+            setJoinError("");
             setSessions(data.sessions || []);
         } catch (err) {
             console.error("Failed to list AVS sessions:", err);
@@ -54,9 +67,19 @@ function AvsSessionBar({
                     <span className="avs-session-stats">
                         {session.counts?.instances ?? 0} instances · {session.counts?.distinctVideos ?? 0} videos
                     </span>
-                    <span className="avs-session-expiry" title="Deleted after 5 min with no activity">
-                        expires in {secs(session.expiresInMs)}s
-                    </span>
+                    {collabOffline ? (
+                        <span
+                            className="avs-session-offline"
+                            title={"Can't reach the shared session service. You keep the scenes already known, " +
+                                "but teammates' new submissions won't show up until it's back. Search and DRES submission are unaffected."}
+                        >
+                            collab offline
+                        </span>
+                    ) : (
+                        <span className="avs-session-expiry" title="Deleted after 2 h with no activity">
+                            expires in {expiryLabel(session.expiresInMs)}
+                        </span>
+                    )}
                     <button className="avs-session-btn" onClick={onCreate} title="Start a fresh session">
                         New session
                     </button>
@@ -69,6 +92,11 @@ function AvsSessionBar({
                     {expiredCode && (
                         <span className="avs-session-expired">
                             Session {expiredCode} expired
+                        </span>
+                    )}
+                    {collabOffline && (
+                        <span className="avs-session-offline" title="The shared session service is unreachable. Search and DRES submission still work.">
+                            collab offline
                         </span>
                     )}
                     <span className="avs-session-hint">No AVS session — create one or join to collaborate.</span>

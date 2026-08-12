@@ -5,6 +5,7 @@ const path = require('path');
 require('dotenv').config();
 
 const {SEARCH_ENGINE_URL} = require('./serviceUrls');
+const avsClient = require('./avsSessionClient');
 
 const searchRoutes = require('./routes/search.routes');
 const videoRoutes = require('./routes/video.routes');
@@ -58,11 +59,19 @@ const probeEmbeddingService = async () => {
 };
 
 app.get('/climb/health', async (req, res) => {
-    const embedding = await probeEmbeddingService();
+    const [embedding, collab] = await Promise.all([
+        probeEmbeddingService(),
+        avsClient.health()
+    ]);
+    const status = !embedding.ready
+        ? "degraded"
+        : (collab.configured && !collab.reachable ? "collab_offline" : "ok");
+
     res.status(200).json({
-        status: embedding.ready ? "ok" : "degraded",
+        status,
         backend: "ok",
         embedding_service: embedding,
+        avs_collab: collab,
         uptime_seconds: Math.floor(process.uptime()),
         time: new Date().toISOString()
     });

@@ -1,15 +1,20 @@
-// Delete a session after this long with no interaction.
-const IDLE_TIMEOUT_MS = parseInt(process.env.AVS_IDLE_TIMEOUT_MS || `${5 * 60 * 1000}`, 10);
-const SWEEP_INTERVAL_MS = parseInt(process.env.AVS_SWEEP_INTERVAL_MS || `${30 * 1000}`, 10);
+const IDLE_TIMEOUT_MS = parseInt(process.env.AVS_IDLE_TIMEOUT_MS || `${2 * 60 * 60 * 1000}`, 10);
+const SWEEP_INTERVAL_MS = parseInt(process.env.AVS_SWEEP_INTERVAL_MS || `${60 * 1000}`, 10);
+
 const CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
 const CODE_LENGTH = 4;
 
-/** code -> { code, name, createdAt, lastActivity, scenes: Map<scene_id, entry> } */
+/**
+ * code -> { code, name, createdAt, lastActivity, scenes: Map<scene_id, entry> }
+ */
 const sessions = new Map();
 
 const sceneKey = (sceneId) => String(sceneId);
 
 const holdsVideo = (status) => status === "CORRECT" || status === "INDETERMINATE";
+
+// INDETERMINATE means "DRES has not judged this yet". Everything else is a final answer.
+const isFinal = (status) => Boolean(status) && status !== "INDETERMINATE";
 
 function randomCode() {
     let code;
@@ -21,7 +26,6 @@ function randomCode() {
     return code;
 }
 
-
 // refreshes the idle timer, so a session only dies once everyone has left it.
 function getSession(code) {
     if (!code) return null;
@@ -29,6 +33,11 @@ function getSession(code) {
     if (!session) return null;
     session.lastActivity = Date.now();
     return session;
+}
+
+function peekSession(code) {
+    if (!code) return null;
+    return sessions.get(code) || null;
 }
 
 function createSession(name) {
@@ -48,13 +57,26 @@ function recordScene(code, {scene_id, video_id, start_frame, end_frame, status, 
     if (scene_id === undefined || scene_id === null) return false;
     const session = getSession(code);
     if (!session) return false;
-    session.scenes.set(sceneKey(scene_id), {
+
+    const key = sceneKey(scene_id);
+    const existing = session.scenes.get(key);
+    const incoming = status || "INDETERMINATE";
+
+
+    if (existing && isFinal(existing.status) && !isFinal(incoming)) {
+        return true;
+    }
+
+    // Merge rather than replace.
+    const pick = (next, prev) => (next === undefined || next === null ? prev : next);
+
+    session.scenes.set(key, {
         scene_id,
-        video_id,
-        start_frame,
-        end_frame,
-        status: status || "INDETERMINATE",
-        user: user || null,
+        video_id: pick(video_id, existing?.video_id),
+        start_frame: pick(start_frame, existing?.start_frame),
+        end_frame: pick(end_frame, existing?.end_frame),
+        status: incoming,
+        user: pick(user, existing?.user) || null,
         ts: Date.now()
     });
     return true;
@@ -69,8 +91,14 @@ function recordSceneSafe(code, scene) {
     }
 }
 
-// Public snapshot for the frontend: what to hide (scenes), what to dim
-// (coveredVideos), the counter, and how long until this session idles out.
+/**
+ * Public snapshot for the frontend:
+ *
+ * - what to hide (scenes)
+ * - what to dim (coveredVideos)
+ * - the counter
+ * - how long until this session idles out
+ */
 function serializeSession(session) {
     const scenes = [...session.scenes.values()];
     const coveredVideos = [...new Set(
@@ -85,7 +113,8 @@ function serializeSession(session) {
             video_id: s.video_id,
             start_frame: s.start_frame,
             end_frame: s.end_frame,
-            status: s.status
+            status: s.status,
+            user: s.user
         })),
         coveredVideos,
         counts: {instances: scenes.length, distinctVideos},
@@ -118,8 +147,10 @@ module.exports = {
     IDLE_TIMEOUT_MS,
     sceneKey,
     holdsVideo,
+    isTerminal: isFinal,
     createSession,
     getSession,
+    peekSession,
     recordScene,
     recordSceneSafe,
     serializeSession,

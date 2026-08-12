@@ -1,0 +1,16 @@
+FROM docker.io/library/node:22-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+
+COPY sessionStore.js auth.js sessions.controller.js server.js ./
+
+ENV AVS_SESSION_PORT=8080
+EXPOSE 8080
+
+USER node
+
+# AVS_SESSION_TOKEN has no default on purpose the service refuses to start without one.
+CMD ["node", "server.js"]

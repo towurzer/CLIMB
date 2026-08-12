@@ -1,5 +1,5 @@
 const axios = require('axios')
-const avsStore = require('../avsSessionStore');
+const avsClient = require('../avsSessionClient');
 
 let dresState = {
     connected: false,
@@ -78,16 +78,19 @@ const submitAnswerSet = async (res, answer, {successMessage, errorLabel, record 
             params: {session: dresState.sessionId}
         });
 
-        // The DRES answer is what scores; recording the delivered scene into the AVS session  is a best-effort overlay that must never block or alter this response.
+        // The DRES answer is what scores; recording the delivered scene into the AVS session is a
+        // best-effort overlay that must never block or alter this response. Deliberately not
+        // awaited: the recording may now travel to a remote session service, and the operator gets
+        // their verdict back immediately instead of waiting on it. It cannot reject.
         if (record) {
-            avsStore.recordSceneSafe(record.avs_session, {
+            avsClient.record(record.avs_session, {
                 scene_id: record.scene_id,
                 video_id: record.video_id,
                 start_frame: record.start_frame,
                 end_frame: record.end_frame,
                 // null falls back to INDETERMINATE inside the store
                 status: response.data?.submission || (response.status === 202 ? "INDETERMINATE" : null)
-            });
+            }).catch((err) => console.error("AVS record failed (non-fatal):", err.message));
         }
 
         return res.status(200).json({

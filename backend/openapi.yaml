@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Video Retrieval API",
-    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.",
-    "version": "2.0.0"
+    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.\n\nv2.1.0: AVS session bookkeeping moved out of this backend into a separate service (`climb-avs-service`), so teammates running their own local stacks share one exclusion list. Every AVS route can now answer **503** when that service is unreachable, which is deliberately distinct from 404: 404 means the session is gone, 503 means we cannot tell. Snapshots carry a `collab` field, and /climb/health reports `avs_collab`. Search and DRES submission never depend on the service; search filters a local mirror. With `AVS_SESSION_SERVICE_URL` unset the store stays in-process and 503 never occurs.",
+    "version": "2.1.0"
   },
   "servers": [
     {
@@ -19,11 +19,11 @@
     "/climb/health": {
       "get": {
         "summary": "Liveness probe for the backend and the embedding service",
-        "description": "Answers as long as the backend process is running. Reaching it requires no database or cache, so a response always means the API itself is up. It additionally probes the Python embedding worker at SEARCH_ENGINE_URL/api/health with a 2 second timeout and reports the outcome, but never fails because of it: the status code stays 200 whenever the backend lives, and callers read the body to tell a healthy system from a degraded one. The frontend polls this every 5 seconds to drive the coloured indicator in the header - green for status 'ok', orange for 'degraded', red when this endpoint cannot be reached at all.",
+        "description": "Answers as long as the backend process is running. Reaching it requires no database or cache, so a response always means the API itself is up. It additionally probes the Python embedding worker at SEARCH_ENGINE_URL/api/health with a 2 second timeout, and the AVS session service when one is configured, reporting both outcomes but never failing because of them: the status code stays 200 whenever the backend lives, and callers read the body to tell a healthy system from a degraded one.\n\nThe frontend polls this every 5 seconds to drive the coloured indicator in the header. Three failure tiers, because they cost very different things: red when this endpoint cannot be reached at all (nothing works), orange for 'degraded' (no embedding service, so search is dead), and green with a yellow blink for 'collab_offline' (only AVS collaboration is down - search, browsing and DRES submission are all unaffected, so painting it orange would misreport a working tool as broken).",
         "operationId": "healthCheck",
         "responses": {
           "200": {
-            "description": "Backend is alive. 'status' is 'ok' only when the embedding service is ready too, otherwise 'degraded'.",
+            "description": "Backend is alive. 'status' is 'ok' when the embedding service is ready and collaboration is fine, 'collab_offline' when only the AVS session service is unreachable, and 'degraded' when the embedding service is not usable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31,9 +31,10 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "description": "'ok' when every component answered, 'degraded' when the backend is up but the embedding service is not usable",
+                      "description": "'ok' when every component answered. 'degraded' when the backend is up but the embedding service is not usable, which kills search. 'collab_offline' when everything works except the shared AVS session service, which only stops teammates syncing.",
                       "enum": [
                         "ok",
+                        "collab_offline",
                         "degraded"
                       ]
                     },
@@ -55,6 +56,24 @@
                         "ready": {
                           "type": "boolean",
                           "description": "Whether the worker answered and has an initialized search engine. Text search only works when this is true."
+                        },
+                        "detail": {
+                          "type": "string",
+                          "description": "Human readable reason, surfaced as the tooltip of the header indicator"
+                        }
+                      }
+                    },
+                    "avs_collab": {
+                      "type": "object",
+                      "description": "State of the shared AVS session service. Actively probed rather than inferred from the last call, because with nobody in AVS mode there are no calls to infer from.",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean",
+                          "description": "Whether AVS_SESSION_SERVICE_URL is set. False means sessions are in-process and there is nothing to be offline."
+                        },
+                        "reachable": {
+                          "type": "boolean",
+                          "description": "Whether the session service answered. Always true when 'configured' is false."
                         },
                         "detail": {
                           "type": "string",
@@ -85,6 +104,30 @@
                         "detail": "Embedding service ready"
                       },
                       "uptime_seconds": 4213,
+                      "time": "2026-07-26T12:34:56.789Z",
+                      "avs_collab": {
+                        "configured": true,
+                        "reachable": true,
+                        "detail": "AVS session service reachable"
+                      }
+                    }
+                  },
+                  "collab_offline": {
+                    "summary": "Everything works except AVS collaboration",
+                    "value": {
+                      "status": "collab_offline",
+                      "backend": "ok",
+                      "embedding_service": {
+                        "reachable": true,
+                        "ready": true,
+                        "detail": "Embedding service ready"
+                      },
+                      "avs_collab": {
+                        "configured": true,
+                        "reachable": false,
+                        "detail": "AVS session service unreachable: ECONNREFUSED. Collaboration is off; search and submit are unaffected."
+                      },
+                      "uptime_seconds": 4213,
                       "time": "2026-07-26T12:34:56.789Z"
                     }
                   },
@@ -99,7 +142,12 @@
                         "detail": "Embedding service unreachable: connect ECONNREFUSED 127.0.0.1:5000"
                       },
                       "uptime_seconds": 12,
-                      "time": "2026-07-26T12:34:56.789Z"
+                      "time": "2026-07-26T12:34:56.789Z",
+                      "avs_collab": {
+                        "configured": false,
+                        "reachable": true,
+                        "detail": "AVS sessions are in-process (no shared service configured)"
+                      }
                     }
                   }
                 }
@@ -150,7 +198,7 @@
             "name": "avs_session",
             "in": "query",
             "required": false,
-            "description": "Active AVS session code. When provided, scenes already submitted in that collaborative session are removed from the results, and the session's idle timer is refreshed.",
+            "description": "Active AVS session code. When provided, scenes already submitted in that collaborative session are removed from the results.\n\nFiltering reads this backend's local mirror of the session and never calls the session service, so it adds no latency and cannot fail: an unknown code, or a mirror not yet populated, simply means no filtering. Unlike earlier versions this does NOT refresh the session's idle timer - GET /climb/avs/session/{code} is the heartbeat, so a search cannot keep someone else's session alive.",
             "schema": {
               "type": "string"
             }
@@ -451,7 +499,7 @@
     "/climb/avs/session": {
       "post": {
         "summary": "Create a new collaborative AVS session",
-        "description": "Creates a fresh session with a random 4-letter (consonant-only) code and returns its snapshot. Sessions are shared by every client of this backend and are deleted after 5 minutes with no interaction (submit, in-session search, or GET poll).",
+        "description": "Creates a fresh session with a random 4-letter (consonant-only) code and returns its snapshot. Sessions live in the shared session service when AVS_SESSION_SERVICE_URL is configured, so every teammate's backend sees the same one; otherwise they are in-process and local to this backend. A session is deleted after 2 hours with no interaction (a submit or a GET poll). Creating needs the service, so this is the one AVS route that cannot fall back to a mirror: 503 when it is unreachable.",
         "operationId": "createAvsSession",
         "requestBody": {
           "required": false,
@@ -480,6 +528,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The shared AVS session service could not be reached, so the backend has nothing to say about this session. Deliberately NOT 404: 404 means the session is gone, 503 means we cannot tell, and a client must not discard a working exclusion list over the difference. Never returned when AVS_SESSION_SERVICE_URL is unset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsUnreachable"
+                }
+              }
+            }
           }
         }
       }
@@ -487,7 +545,7 @@
     "/climb/avs/sessions": {
       "get": {
         "summary": "List active AVS sessions",
-        "description": "Lightweight listing for a 'join one of these' UI.",
+        "description": "Lightweight listing for a 'join one of these' UI. Always asks the session service, so it answers 503 rather than an empty list when that is unreachable -- 'nobody has a session open' and 'we could not ask' must not look alike.",
         "operationId": "listAvsSessions",
         "responses": {
           "200": {
@@ -507,6 +565,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The shared AVS session service could not be reached, so the backend has nothing to say about this session. Deliberately NOT 404: 404 means the session is gone, 503 means we cannot tell, and a client must not discard a working exclusion list over the difference. Never returned when AVS_SESSION_SERVICE_URL is unset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsUnreachable"
+                }
+              }
+            }
           }
         }
       }
@@ -514,7 +582,7 @@
     "/climb/avs/session/{code}/join": {
       "post": {
         "summary": "Join an existing AVS session by code",
-        "description": "Returns the session snapshot (case-insensitive code) and refreshes its idle timer. 404 means the session does not exist or has expired.",
+        "description": "Returns the session snapshot (case-insensitive code) and refreshes its idle timer. Awaits the session service deliberately: joining is an explicit action that needs a real answer, and guessing that a code exists would be worse than waiting for the round trip. 404 means the session does not exist or has expired; 503 means the service could not be reached.",
         "operationId": "joinAvsSession",
         "parameters": [
           {
@@ -546,6 +614,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The shared AVS session service could not be reached, so the backend has nothing to say about this session. Deliberately NOT 404: 404 means the session is gone, 503 means we cannot tell, and a client must not discard a working exclusion list over the difference. Never returned when AVS_SESSION_SERVICE_URL is unset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsUnreachable"
+                }
+              }
+            }
           }
         }
       }
@@ -553,7 +631,7 @@
     "/climb/avs/session/{code}": {
       "get": {
         "summary": "Fetch an AVS session snapshot (also the poll/heartbeat)",
-        "description": "Returns the current scenes, covered videos, and counts for the session, and refreshes its idle timer. Clients poll this endpoint to stay in sync and to keep the session alive; a 404 tells a client its session has expired.",
+        "description": "Returns the current scenes, covered videos and counts for the session. This is the heartbeat: clients poll it to stay in sync and to keep the session alive.\n\nThe backend serves this from its local mirror, refreshing it from the session service when older than AVS_MIRROR_TTL_MS. If the service is unreachable but a mirror exists, the last known snapshot is returned with `collab: \"offline\"` -- the team keeps working from what it already knows. 503 is only for an unreachable service with nothing cached; 404 still means genuinely expired.",
         "operationId": "getAvsSession",
         "parameters": [
           {
@@ -582,6 +660,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AvsSessionError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The shared AVS session service could not be reached, so the backend has nothing to say about this session. Deliberately NOT 404: 404 means the session is gone, 503 means we cannot tell, and a client must not discard a working exclusion list over the difference. Never returned when AVS_SESSION_SERVICE_URL is unset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvsUnreachable"
                 }
               }
             }
@@ -1087,6 +1175,11 @@
               "UNDECIDABLE"
             ],
             "description": "DRES verdict at the time the scene was submitted (INDETERMINATE while a live judgement is pending). A CORRECT scene's video is reported in coveredVideos."
+          },
+          "user": {
+            "type": "string",
+            "nullable": true,
+            "description": "CLIMB_USER of the backend that submitted this scene, or null. Only meaningful with a shared service, where several people write into one session."
           }
         },
         "required": [
@@ -1138,6 +1231,15 @@
           "expiresInMs": {
             "type": "integer",
             "description": "Milliseconds until this session idles out, unless an interaction refreshes it"
+          },
+          "collab": {
+            "type": "string",
+            "description": "Where this snapshot came from. 'local' = in-process store, no service configured. 'online' = the shared service answered. 'offline' = the service is unreachable and this is the last known snapshot, so teammates' newer submissions are missing.",
+            "enum": [
+              "local",
+              "online",
+              "offline"
+            ]
           }
         },
         "required": [
@@ -1214,6 +1316,29 @@
           "thumbnail_url",
           "scene_id"
         ]
+      },
+      "AvsUnreachable": {
+        "type": "object",
+        "description": "The AVS session service is unreachable. Collaboration is paused; search and DRES submission are unaffected.",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "collab": {
+            "type": "string",
+            "enum": [
+              "offline"
+            ]
+          },
+          "hint": {
+            "type": "string",
+            "description": "What still works, so the operator does not stop trusting the tool"
+          },
+          "detail": {
+            "type": "string",
+            "description": "Underlying transport error, when there is one"
+          }
+        }
       }
     }
   }

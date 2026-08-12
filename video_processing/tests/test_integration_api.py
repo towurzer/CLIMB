@@ -109,7 +109,7 @@ def test_worker_similar_returns_neighbours(worker, corpus, db):
 
 # --- backend ------------------------------------------------------------------------------------
 
-def test_backend_health_sees_the_worker(backend):
+def test_backend_health_sees_the_worker(backend, worker):
     status, body = get_json(f"{backend}/climb/health")
     assert status == 200
     assert body["status"] == "ok"
