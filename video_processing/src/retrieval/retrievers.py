@@ -161,9 +161,17 @@ def _resolve_scenes(conn, ordered_ids, exclude, collection, limit):
 
 def visual(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
     conf = Config()
+    depth = oversample or conf.ANN_OVERSAMPLE
     with conn.cursor() as cur:
+        cur.execute("SET LOCAL hnsw.ef_search = %s", (min(depth, conf.HNSW_EF_SEARCH_MAX),))
+        if depth > conf.HNSW_EF_SEARCH_MAX:
+            # ef_search cannot go above 1000, so a larger oversample is only honoured if the scan
+            # is allowed to continue past it. Without this, asking for 4000 candidates silently
+            # yields 1000. Relaxed order is fine: VISUAL_RERANK re-sorts by exact distance immediately afterwards.
+            cur.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+            cur.execute("SET LOCAL hnsw.max_scan_tuples = %s", (conf.HNSW_MAX_SCAN_TUPLES,))
         cur.execute(VISUAL_ANN, {"model_id": model_id, "dims": dims, "query": query_vector,
-                                 "oversample": oversample or conf.ANN_OVERSAMPLE})
+                                 "oversample": depth})
         ids = [row[0] for row in cur.fetchall()]
         if not ids:
             return []

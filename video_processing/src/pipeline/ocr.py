@@ -5,6 +5,10 @@ V3C is full of readable text  and KIS-Textual hints mention it constantly. Text 
 resolves hints SigLIP2 cannot express at all.
 
 Scope is Config.OCR_SCOPE. 'all' (default) reads every keyframe; 'shot' only the first of each
+
+The engine is pluggable (Config.OCR_BACKEND). Both backends run the same PP-OCR models; paddle is
+the better of the two, but it needs a `paddlepaddle` wheel that does
+not exist for every interpreter, so rapidocr-onnxruntime is the portable fallback.
 """
 
 from dataclasses import dataclass
@@ -51,31 +55,87 @@ class OcrResult:
     skipped: int = 0
 
 
-def load_reader(dev: str):
-    """PaddleOCR, loaded lazily so a machine that never runs this stage need not install it."""
-    try:
+class PaddleReader:
+    """
+    PaddleOCR. The better engine
+
+    Needs `paddlepaddle`, which ships no wheel for every interpreter -- Python 3.14 has none at
+    all, which is why the backend below exists.
+    """
+
+    def __init__(self, dev: str):
         from paddleocr import PaddleOCR
-    except ImportError as e:
-        raise ImportError(
-            "paddleocr is not installed. This stage runs on the GPU box: "
-            "pip install paddleocr paddlepaddle-gpu"
-        ) from e
-    return PaddleOCR(use_angle_cls=True, lang="en", use_gpu=(dev == "cuda"), show_log=False)
+        self._engine = PaddleOCR(use_angle_cls=True, lang="en",
+                                 use_gpu=(dev == "cuda"), show_log=False)
+
+    def read(self, image_path) -> list:
+        result = self._engine.ocr(str(image_path), cls=True)
+        lines = []
+        for page in result or []:
+            for line in page or []:
+                # PaddleOCR returns [box, (text, confidence)]
+                if len(line) >= 2 and isinstance(line[1], (list, tuple)) and line[1]:
+                    lines.append((line[1][0], line[1][1]))
+        return lines
+
+
+class RapidReader:
+    """
+    rapidocr-onnxruntime: the same PP-OCR models exported to ONNX, CPU-only, no paddle runtime.
+
+    Its models ride along inside the wheel, so unlike paddle there is nothing to download and
+    nothing to go stale. Measured here at ~1.6 s/frame.
+    """
+
+    def __init__(self, dev: str):
+        from rapidocr_onnxruntime import RapidOCR
+        self._engine = RapidOCR()
+
+    def read(self, image_path) -> list:
+        result, _elapsed = self._engine(str(image_path))
+        # A frame with no text returns None rather than an empty list.
+        # Confidence arrives as a string, so it must be coerced before it is compared to a float.
+        return [(line[1], float(line[2])) for line in result or [] if len(line) >= 3]
+
+
+BACKENDS = {"paddle": PaddleReader, "rapidocr": RapidReader}
+
+
+def load_reader(dev: str):
+    """
+    An OCR reader exposing `.read(path) -> [(text, confidence)]`, whichever engine backs it.
+
+    Set CLIMB_OCR_BACKEND to pin one. The default tries paddle and falls back.
+    """
+    logger = custom_logger.get_logger("ocr")
+    requested = (Config.OCR_BACKEND or "auto").lower()
+
+    if requested != "auto":
+        if requested not in BACKENDS:
+            raise ValueError(f"unknown CLIMB_OCR_BACKEND {requested!r}; "
+                             f"expected one of {', '.join(BACKENDS)} or 'auto'")
+        logger.info(f"OCR backend: {requested} (pinned)")
+        return BACKENDS[requested](dev)
+
+    for name, backend in BACKENDS.items():
+        try:
+            reader = backend(dev)
+        except ImportError:
+            continue
+        logger.info(f"OCR backend: {name}")
+        return reader
+
+    raise ImportError(
+        "No OCR backend available. Install one of:\n"
+        "  pip install rapidocr-onnxruntime      # CPU, self-contained, works everywhere\n"
+        "  pip install paddleocr paddlepaddle-gpu # better, needs a paddle wheel for this Python"
+    )
 
 
 def extract_text(reader, image_path) -> str:
     """Returns recognised text joined by spaces, or '' when the frame has none."""
-    result = reader.ocr(str(image_path), cls=True)
-    if not result:
-        return ""
-    pieces = []
-    for page in result:
-        for line in page or []:
-            # PaddleOCR returns [box, (text, confidence)]
-            if len(line) >= 2 and isinstance(line[1], (list, tuple)) and line[1]:
-                text, confidence = line[1][0], line[1][1]
-                if text and confidence >= Config.OCR_MIN_CONFIDENCE:
-                    pieces.append(str(text).strip())
+    pieces = [str(text).strip() for text, confidence in reader.read(image_path)
+              if text and confidence >= Config.OCR_MIN_CONFIDENCE]
     return " ".join(p for p in pieces if p)
 
 

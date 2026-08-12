@@ -4,6 +4,7 @@ Search: parse the query, run the retrievers, fuse, enrich.
 Replaces search_engine.py, which searched a `shots` table that no longer exists, ordered by an expression pgvector could not index, and sorted NULLs first.
 """
 
+import functools
 import time
 from dataclasses import dataclass
 
@@ -13,6 +14,32 @@ from pipeline import device
 from retrieval import fusion, query_parser, retrievers, temporal
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
+
+
+def _ends_transaction(method):
+    """
+    Ends the transaction after every public query.
+
+    The engine holds one connection for the life of the worker process and psycopg2 opens a
+    transaction on the first statement, so without this the worker sits `idle in transaction`
+    forever. (found a 7h39m-old transaction from a single search xd)
+
+    Rollback rather than commit: every path through here is read-only, so there is never anything
+    to commit, and rollback is the cheaper and more honest terminator.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            try:
+                self.conn.rollback()
+            except Exception:  # a dead connection is the next query's problem, not this one's
+                logger = custom_logger.get_logger("engine")
+                logger.warning("rollback after query failed; connection may be dead")
+
+    return wrapper
 
 # One round trip for everything the UI needs about the fused scenes.
 ENRICH = """
@@ -161,6 +188,7 @@ class SearchEngine:
             pooled = pooled / pooled.norm(p=2, dim=-1, keepdim=True)
         return _to_pgvector(pooled[0].float().cpu().numpy())
 
+    @_ends_transaction
     def search(self, query: str, exclude=None, top_k=None, collection=None,
                weights=None, depth=None) -> SearchResult:
         conf = self.conf
@@ -273,6 +301,7 @@ class SearchEngine:
                 "chains": len(chains),
             })
 
+    @_ends_transaction
     def similar(self, keyframe_id, exclude=None, top_k=None, collection=None) -> SearchResult:
         """Scenes that look like the given keyframe. Its own scene is dropped from the results."""
         top_k = top_k or self.conf.SEARCH_TOP_K

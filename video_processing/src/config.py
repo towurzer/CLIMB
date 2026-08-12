@@ -2,9 +2,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 VIDEO_PROCESSING_ROOT = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = VIDEO_PROCESSING_ROOT.parent
 
+load_dotenv(PROJECT_ROOT / ".env")
 
 @dataclass
 class Config:
@@ -53,6 +56,9 @@ class Config:
     # Drop batch sizes via env
     OCR_BATCH_SIZE: int = int(os.getenv("CLIMB_OCR_BATCH") or 32)
     OCR_MIN_CONFIDENCE: float = 0.5
+    # 'auto' prefers paddle and falls back to rapidocr-onnxruntime, so when a GPU is available it uses
+    # the better model without configuration.
+    OCR_BACKEND: str = os.getenv("CLIMB_OCR_BACKEND") or "auto"
     # 'all' = every keyframe, 'shot' = only kf_index 0.
     # OCR defaults to 'all': WP4 picks keyframes *by visual difference*, so the frames skipped by
     # 'shot' are exactly the ones most likely to show different text
@@ -61,6 +67,8 @@ class Config:
     CAPTION_MODEL: str = os.getenv("CLIMB_CAPTION_MODEL") or "Qwen/Qwen2-VL-2B-Instruct"
     CAPTION_BATCH_SIZE: int = int(os.getenv("CLIMB_CAPTION_BATCH") or 8)
     CAPTION_MAX_TOKENS: int = 64
+    CAPTION_IMAGE_SPLITTING: bool = (os.getenv("CLIMB_CAPTION_IMAGE_SPLITTING") or "0") \
+        .lower() in ("1", "true", "yes") # true takes 5xlonger without any benefit since there will be no new details found through upscaling
     CAPTION_PROMPT: str = ("Describe this video frame in one sentence. Name the objects, people "
                            "and setting, and how they relate to each other.")
     ASR_MODEL: str = os.getenv("CLIMB_ASR_MODEL") or "large-v3-turbo"
@@ -73,7 +81,7 @@ class Config:
 
     # --- Fetch stage ---
     # How the collection is reachable is a property of the server, not of this pipeline, so the
-    # transfer is a command template rather than a hardcoded tool. {source} and {dest} are filled in.
+    # transfer is a command template rather than a hardcoded tool.
     FETCH_COMMAND: str = os.getenv("CLIMB_FETCH_COMMAND") or "rsync -a --partial {source} {dest}"
     FETCH_BATCH: int = int(os.getenv("CLIMB_FETCH_BATCH") or 50)
 
@@ -171,7 +179,16 @@ class Config:
     # m=16 / ef_construction=64 are pgvector's defaults and are adequate for binary vectors.
     HNSW_M: int = 16
     HNSW_EF_CONSTRUCTION: int = 64
-    ANN_OVERSAMPLE: int = 1000
+    # How many candidates the ANN stage hands to the exact rerank. This is the recall/latency dial.
+    # Measured on 7,543 keyframes, recall@20 against exhaustive exact search:
+    #     1000 -> 15/20 at  29 ms      2000 -> 18/20 at  54 ms
+    #     4000 -> 20/20 at  91 ms      7543 -> 20/20 at 108 ms
+    # The ceiling is binary quantization, not the index: the ANN stage ranks by hamming distance on
+    # 1-bit vectors, so the true nearest neighbours by cosine are not all inside its top-N. Left at
+    # 1000 because tripling query latency is shit for competition
+    ANN_OVERSAMPLE: int = int(os.getenv("CLIMB_ANN_OVERSAMPLE") or 1000)
+    HNSW_EF_SEARCH_MAX: int = 1000
+    HNSW_MAX_SCAN_TUPLES: int = int(os.getenv("CLIMB_HNSW_MAX_SCAN_TUPLES") or 100_000)
 
     # --- Postgres tuning: build profile ---
     PG_BUILD_MAINTENANCE_WORK_MEM: str = "8GB"

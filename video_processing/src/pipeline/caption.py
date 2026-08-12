@@ -59,6 +59,11 @@ def load_model(dev: str):
         raise ImportError("transformers is required for captioning") from e
 
     processor = AutoProcessor.from_pretrained(conf.CAPTION_MODEL)
+    # See Config.CAPTION_IMAGE_SPLITTING: tiling a 480x270 keyframe into 512px crops costs 5.3x
+    # for no detail that was not already there. Set only where the processor supports it.
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is not None and hasattr(image_processor, "do_image_splitting"):
+        image_processor.do_image_splitting = conf.CAPTION_IMAGE_SPLITTING
     model = AutoModelForImageTextToText.from_pretrained(
         conf.CAPTION_MODEL, dtype=device.pick_dtype(dev)
     ).to(dev).eval()

@@ -20,6 +20,7 @@ keyframes.
 """
 
 import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -173,7 +174,9 @@ def fetch(conn, limit=None, collection=None) -> int:
         if destination.exists():
             fetched.append(video_id)
             continue
-        command = conf.FETCH_COMMAND.format(source=source_uri, dest=str(destination))
+
+        command = conf.FETCH_COMMAND.format(source=shlex.quote(source_uri),
+                                            dest=shlex.quote(str(destination)))
         try:
             subprocess.run(command, shell=True, check=True, capture_output=True)
             fetched.append(video_id)
