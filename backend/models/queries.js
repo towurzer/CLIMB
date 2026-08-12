@@ -42,6 +42,7 @@ const toResult = (hit) => ({
     damaged: hit.damaged,
     thumbnail_url: media.thumbnailUrl(hit.video_id, hit.shot_index, hit.kf_index),
     keyframe_url: media.keyframeUrl(hit.video_id, hit.shot_index, hit.kf_index),
+    video_url: media.videoUrl(hit.video_id),
     ...(hit.temporal_partners ? {
         temporal_partners: hit.temporal_partners.map(toResult),
         temporal_gaps_ms: hit.temporal_gaps_ms
@@ -160,21 +161,29 @@ module.exports = {
         const offset = usePagination ? (page - 1) * perPage : null;
 
         const scenesSql = `
-            SELECT s.scene_id,
-                   s.shot_index,
-                   s.start_frame,
-                   s.end_frame,
-                   s.start_ms,
-                   s.end_ms,
+            WITH page AS (SELECT s.scene_id,
+                                 s.shot_index,
+                                 s.start_frame,
+                                 s.end_frame,
+                                 s.start_ms,
+                                 s.end_ms
+                          FROM scenes s
+                          WHERE s.video_id = $1
+                          ORDER BY s.shot_index
+                              ${usePagination ? 'LIMIT $2 OFFSET $3' : ''})
+            SELECT p.scene_id,
+                   p.shot_index,
+                   p.start_frame,
+                   p.end_frame,
+                   p.start_ms,
+                   p.end_ms,
                    k.keyframe_id,
                    k.kf_index,
                    k.frame_number,
                    k.ts_ms
-            FROM scenes s
-                     LEFT JOIN keyframes k ON k.scene_id = s.scene_id
-            WHERE s.video_id = $1
-            ORDER BY s.shot_index, k.kf_index
-            ${usePagination ? 'LIMIT $2 OFFSET $3' : ''};
+            FROM page p
+                     LEFT JOIN keyframes k ON k.scene_id = p.scene_id
+            ORDER BY p.shot_index, k.kf_index;
         `;
 
         const [scenesRes, countRes, videoRes] = await Promise.all([

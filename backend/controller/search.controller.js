@@ -9,9 +9,9 @@ const cache = require('../cache');
 const RESULT_DEPTH = parseInt(process.env.SEARCH_RESULT_DEPTH || '500', 10);
 const CACHE_TTL_SECONDS = parseInt(process.env.SEARCH_CACHE_TTL_SECONDS || '300', 10);
 
-// Bump when the cached payload's shape changes. v2 caches {results, temporal} where v1 cached a
-// Change when going back in commit history
-const CACHE_VERSION = 'v2';
+// Bump when the cached payload's shape changes. v2 caches {results, temporal}
+// v3 adds video_url to every result;
+const CACHE_VERSION = 'v3';
 
 const cacheKey = (kind, parts) =>
     `search:${CACHE_VERSION}:${kind}:${crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex')}`;
