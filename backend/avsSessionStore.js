@@ -1,5 +1,6 @@
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // delete a session after 5 min with no interaction
-const SWEEP_INTERVAL_MS = 30 * 1000;   // how often the idle sweeper runs
+// Delete a session after this long with no interaction.
+const IDLE_TIMEOUT_MS = parseInt(process.env.AVS_IDLE_TIMEOUT_MS || `${5 * 60 * 1000}`, 10);
+const SWEEP_INTERVAL_MS = parseInt(process.env.AVS_SWEEP_INTERVAL_MS || `${30 * 1000}`, 10);
 const CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
 const CODE_LENGTH = 4;
 

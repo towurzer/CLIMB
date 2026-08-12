@@ -23,9 +23,48 @@ const summarizeDresStatus = (code) => {
     return DRES_STATUS_SUMMARY[code] || `DRES responded with HTTP ${code}`;
 };
 
+// DRES requires mediaItemCollectionName alongside mediaItemName whenever the server hosts more
+// than one collection, and it is a property of the running task rather than of the shot, so it
+// is read from currentTask rather than hardcoded. Cached briefly: every submission would otherwise
+// pay a round trip, but a competition switches tasks (and can switch collection with them) often
+// enough that caching it for the whole session would eventually submit against the wrong one.
+const COLLECTION_TTL_MS = 30_000;
+let collectionCache = {at: 0, name: null};
+
+const resolveCollectionName = async () => {
+    if (Date.now() - collectionCache.at < COLLECTION_TTL_MS && collectionCache.name) {
+        return collectionCache.name;
+    }
+    try {
+        const taskRes = await axios.get(
+            `${dresState.dres_url}/api/v2/client/evaluation/currentTask/${dresState.evaluationId}`,
+            {params: {session: dresState.sessionId}}
+        );
+        const task = taskRes.data || {};
+        // The spelling has moved between DRES versions; take the first that is actually present.
+        const name = task.collectionName || task.mediaCollectionName
+            || task.mediaItemCollectionName || task.collection?.name || null;
+        if (name) collectionCache = {at: Date.now(), name};
+        return name;
+    } catch (error) {
+        console.warn("Could not read currentTask for the collection name:",
+            error.response?.data || error.message);
+        return collectionCache.name;
+    }
+};
+
 const submitAnswerSet = async (res, answer, {successMessage, errorLabel, record = null}) => {
     if (!dresState.connected || !dresState.evaluationId) {
         return res.status(401).json({error: "Not connected to DRES. Please login first."});
+    }
+
+    if (answer.mediaItemName && !answer.mediaItemCollectionName) {
+        const collectionName = await resolveCollectionName();
+        if (collectionName) {
+            answer = {...answer, mediaItemCollectionName: collectionName};
+        } else {
+            console.warn("Submitting without mediaItemCollectionName: currentTask named no collection.");
+        }
     }
 
     const payload = {answerSets: [{answers: [answer]}]};
@@ -167,7 +206,6 @@ exports.submitToDres = async (req, res) => {
     return submitAnswerSet(res, {
         text: null,
         mediaItemName: video_id,
-        //mediaItemCollectionName: "IVADL",
         start: start_time_ms,
         end: end_time_ms
     }, {
@@ -189,7 +227,6 @@ exports.submitVqaToDres = async (req, res) => {
     return submitAnswerSet(res, {
         text: textToSubmit,
         mediaItemName: video_id || null,
-        // mediaItemCollectionName: video_id ? "IVADL" : null,
         start: start_time_ms || null,
         end: end_time_ms || null
     }, {
