@@ -228,6 +228,8 @@ __pycache__/
 .DS_Store
 .env
 dist/
+/papers/
+
 
 # database dump
 climb_db_backup.dump

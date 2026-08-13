@@ -883,11 +883,11 @@ cd climb-avs-service
 podman build -t climb_avs .
 podman run --name climb_avs -d \
     -e AVS_SESSION_TOKEN="$(openssl rand -hex 24)" \
-    -p 9000:8080 climb_avs
+    -p 20359:8080 climb_avs
 ```
 
 The service always listens on 8080 inside the container; the host side is yours to pick, and only clients care which
-one you picked. Every teammate then sets `AVS_SESSION_SERVICE_URL` (plus `AVS_SESSION_PORT=9000` if they give a bare
+one you picked. Every teammate then sets `AVS_SESSION_SERVICE_URL` (plus `AVS_SESSION_PORT=20359` if they give a bare
 host rather than a full URL) and the same `AVS_SESSION_TOKEN`, and gets on with it.
 
 Three rules this is built around:

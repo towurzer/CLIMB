@@ -18,6 +18,6 @@ module.exports = {
     ),
     // Unset means "no shared session service", which puts the AVS session store in-process (solo dev no collab)
     AVS_SESSION_SERVICE_URL: process.env.AVS_SESSION_SERVICE_URL
-        ? resolveUrl(process.env.AVS_SESSION_SERVICE_URL, process.env.AVS_SESSION_PORT || 9000)
+        ? resolveUrl(process.env.AVS_SESSION_SERVICE_URL, process.env.AVS_SESSION_PORT || 20359)
         : null
 };

@@ -4,7 +4,7 @@ const store = require('./sessionStore');
 const sessions = require('./sessions.controller');
 const {requireToken} = require('./auth');
 
-const PORT = parseInt(process.env.AVS_SESSION_PORT || '9000', 10);
+const PORT = parseInt(process.env.AVS_SESSION_PORT || '20359', 10);
 
 const app = express();
 
