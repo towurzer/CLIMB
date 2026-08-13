@@ -107,7 +107,7 @@ class Config:
 
     # --- Temporal queries (see retrieval/temporal.py) ---
     # Query-side only: no schema, no embeddings, nothing to re-index.
-    TEMPORAL_DEFAULT_DELTA_MS: int = int(os.getenv("CLIMB_TEMPORAL_DELTA_MS") or 30_000)
+    TEMPORAL_DEFAULT_DELTA_MS: int = int(os.getenv("CLIMB_TEMPORAL_DELTA_MS") or 60_000)
     TEMPORAL_MAX_DELTA_MS: int = int(os.getenv("CLIMB_TEMPORAL_MAX_DELTA_MS") or 600_000)
     TEMPORAL_MAX_STAGES: int = int(os.getenv("CLIMB_TEMPORAL_MAX_STAGES") or 4)
     # Deeper than a normal search on purpose. A chain only exists where *every* stage

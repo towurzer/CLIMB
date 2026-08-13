@@ -42,6 +42,10 @@ class SearchRequest(BaseModel):
     collection: str | None = None
     weights: dict | None = None   # per-retriever RRF weights, for tuning without a restart
     depth: int | None = None
+    # Which sources to search: any of visual, ocr, asr, caption. None or empty means all of them.
+    # A source left out is not run at all, so switching one off makes the search cheaper as well
+    # as quieter. See SOURCE_RETRIEVERS in retrieval/engine.py.
+    sources: list | None = None
 
 
 @app.get("/api/health")
@@ -62,6 +66,7 @@ def do_search(request: SearchRequest):
     result = search_engine.search(
         request.prompt, exclude=request.exclude, top_k=request.top_k,
         collection=request.collection, weights=request.weights, depth=request.depth,
+        sources=request.sources,
     )
     return {
         "results": result.results,

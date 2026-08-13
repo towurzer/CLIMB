@@ -727,6 +727,27 @@ text similarity around 0.85, keyword rank is unbounded), but "this one came thir
 A scene found by two signals beats a scene found by one, and an exact text match is weighted very
 heavily indeed. If you typed a word and a sign says that word, the argument is over.
 
+Each result card says which signals found it, in the order of who did the work , `[OCR (3)] [Visual (41)]` means a
+sign matched at rank 3 and the picture agreed, distantly, at 41. That ordering is by *contribution*, not by rank,
+because the weights are not equal: OCR at rank 20 is doing more for a scene than the visual retriever at rank 5, and
+sorting the badges by rank would cheerfully credit the wrong one. Sequence hits show no badges.
+
+##### Turning a signal off
+
+Under the search box are four tickboxes , Visual, Caption, OCR, ASR , and all four start ticked. Untick one and it is
+not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
+embedded.
+
+This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
+match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the
+lexical pass falls back to ORing every content word, so `a snowboarder doing a backflip` goes hunting for scenes whose
+subtitles say "backflip", and eight of those sit above the first actual snowboarder. Unticking OCR is how you say "not
+this time" for one query, instead of retuning the weights for every query forever.
+
+The tickboxes do **not** gag `text:"..."` or `said:"..."`. Those only run because you typed them, and an is an
+instruction rather than a preference , so an explicit phrase search still works with OCR unticked, which beats
+returning nothing, because nothing cannot be submitted.
+
 Everything is per **scene**, not per keyframe. The old search returned keyframes, and since each
 scene had about seven of them, a page of 48 results was really about 22 shots shown three times
 each. Now one row means one shot.
@@ -957,6 +978,7 @@ So the offline pipeline is being rebuilt. The shape of it:
   The old scheme gave a 39-minute scene 2,329 keyframes, which is both a lot of disk and not actually helpful.
 - **More than one signal.** SigLIP2 embeddings, OCR over the keyframes, Whisper transcripts of the audio and VLM
   captions, all fused by reciprocal rank fusion. Text search is exact where embeddings are vague, and it turns out V3C
-  is absolutely full of readable signs, chyrons and scoreboards.
+  is absolutely full of readable signs, chyrons and scoreboards. Every result card names the ones that found it, so
+  you never have to wonder whether that hit was the picture or a sign in the background.
 - **Thumbnails that are actually thumbnails.** Serving 40 KB full-resolution JPEGs as 200px grid tiles was fine for
   3.9 GB. It is not fine for several million of them.

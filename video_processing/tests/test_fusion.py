@@ -93,6 +93,51 @@ def test_a_scene_found_by_one_retriever_has_one_signal():
     assert {r.scene_id: set(r.signals) for r in results} == {1: {"visual"}, 2: {"ocr"}}
 
 
+def test_a_scene_named_twice_by_one_retriever_accumulates():
+    """
+    The OCR retrievers return a row per keyframe and never collapse to scenes, so a scene with two
+    matching keyframes really does appear twice in one ranked list. `scores` has always summed
+    those; signals and contributions have to agree with it rather than keep only the last one.
+    """
+    results = fuse({"ocr": [1, 1, 2]}, {"ocr": 4.0})
+    scene = next(r for r in results if r.scene_id == 1)
+
+    assert scene.score == pytest.approx(4.0 / (RRF_K + 1) + 4.0 / (RRF_K + 2))
+    assert sum(scene.contributions.values()) == pytest.approx(scene.score)
+    # The best rank, not the last one -- that is where the retriever actually placed the scene.
+    assert scene.signals == {"ocr": 1}
+
+
+def test_contributions_split_the_score_by_retriever():
+    results = fuse({"visual": [1, 2], "ocr": [2, 1]}, {"visual": 1.0, "ocr": 4.0})
+    by_scene = {r.scene_id: r.contributions for r in results}
+    assert by_scene[1] == pytest.approx({"visual": 1.0 / (RRF_K + 1), "ocr": 4.0 / (RRF_K + 2)})
+    assert by_scene[2] == pytest.approx({"visual": 1.0 / (RRF_K + 2), "ocr": 4.0 / (RRF_K + 1)})
+    # They are shares of the score, so they add back up to it.
+    for result in results:
+        assert sum(result.contributions.values()) == pytest.approx(result.score)
+
+
+def test_the_biggest_contributor_is_not_always_the_best_rank():
+    """
+    The whole reason contributions are recorded separately from ranks.
+
+    OCR is weighted 4x, so it can be the reason a scene surfaced while sitting far below the visual
+    retriever in rank. Ordering the UI's signal badges by rank would name the wrong encoder.
+    """
+    ocr_rank, visual_rank = 20, 5
+    # Distinct filler scenes ahead of the one under test, so it lands on the intended rank in each
+    # list without either retriever repeating a scene.
+    results = fuse({"visual": list(range(100, 100 + visual_rank - 1)) + [1],
+                    "ocr": list(range(200, 200 + ocr_rank - 1)) + [1]},
+                   {"visual": 1.0, "ocr": 4.0})
+    scene = next(r for r in results if r.scene_id == 1)
+
+    assert scene.signals == {"visual": visual_rank, "ocr": ocr_rank}
+    assert min(scene.signals, key=scene.signals.get) == "visual"
+    assert max(scene.contributions, key=scene.contributions.get) == "ocr"
+
+
 def test_bare_scene_ids_and_tuples_both_accepted():
     results = fuse({"visual": [(1, 100)], "ocr": [2]}, {"visual": 1.0, "ocr": 1.0})
     by_scene = {r.scene_id: r.keyframe_id for r in results}

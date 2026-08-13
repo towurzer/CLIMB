@@ -1,15 +1,5 @@
 import {useState, useCallback, useEffect, useRef} from "react";
-
-const EMPTY_SET = new Set();
-
-const avsHolds = (status) => status === "CORRECT" || status === "INDETERMINATE";
-
-// Scene keys to hide, from a session snapshot's scene list.
-const heldSceneKeys = (scenes) => new Set(
-    (scenes || [])
-        .filter((s) => avsHolds(s.status))
-        .map((s) => sceneKey(s.scene_id))
-);
+import {ALL_SOURCE_KEYS} from "./sources";
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
@@ -26,6 +16,16 @@ import {sceneKey} from "./sceneKey";
 import {formatTimecode, parseTimecode, snapMsToFrame, keyframeMs} from "./timecode";
 import "./App.css";
 
+const EMPTY_SET = new Set();
+
+const avsHolds = (status) => status === "CORRECT" || status === "INDETERMINATE";
+
+// Scene keys to hide, from a session snapshot's scene list.
+const heldSceneKeys = (scenes) => new Set(
+    (scenes || [])
+        .filter((s) => avsHolds(s.status))
+        .map((s) => sceneKey(s.scene_id))
+);
 const backendHost = import.meta.env.BACKEND_URL || "localhost";
 const backendPort = import.meta.env.BACKEND_PORT || "8000";
 const API_URL = backendHost.startsWith("http://") || backendHost.startsWith("https://")
@@ -48,6 +48,7 @@ function App() {
     const [searchPerPage] = useState(24);
     const [searchHasMore, setSearchHasMore] = useState(false);
     const [searchTemporal, setSearchTemporal] = useState(null); // set only by an `A >> B` query
+    const [sources, setSources] = useState(ALL_SOURCE_KEYS);
     const [searchLoadingMore, setSearchLoadingMore] = useState(false);
     const [resultsPanel, setResultsPanel] = useState(null);
     const [searchSentinel, setSearchSentinel] = useState(null);
@@ -79,6 +80,11 @@ function App() {
     useEffect(() => {
         avsFilterRef.current = {mode: taskMode, code: avsSession?.code || null};
     }, [taskMode, avsSession]);
+
+    const sourcesRef = useRef(sources);
+    useEffect(() => {
+        sourcesRef.current = sources;
+    }, [sources]);
 
     const isAvs = taskMode === "avs";
 
@@ -172,8 +178,13 @@ function App() {
             // In AVS mode the backend hides scenes already submitted in our session
             const {mode, code} = avsFilterRef.current;
             const avsParam = mode === "avs" && code ? `&avs_session=${code}` : "";
+            // Omitted when everything is ticked, which the backend already reads as "all sources".
+            const picked = sourcesRef.current;
+            const sourcesParam = picked.length < ALL_SOURCE_KEYS.length
+                ? `&sources=${picked.join(",")}`
+                : "";
             const res = await fetch(
-                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}`
+                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}${sourcesParam}`
             );
             const data = await res.json();
             const pageResults = data.results || [];
@@ -236,6 +247,30 @@ function App() {
         await fetchSearchPage(searchQuery, 1, false);
         setLoading(false);
     }, [fetchSearchPage]);
+
+    // Ticking a source changes the result set, so the query re-runs on the spot
+    const handleToggleSource = useCallback((key) => {
+        const next = sources.includes(key)
+            ? sources.filter((source) => source !== key)
+            : [...sources, key];
+
+        if (!next.length) return;
+
+        setSources(next);
+
+        sourcesRef.current = next;
+
+        if (mode !== "search" || similarSource || !query.trim()) return;
+
+        (async () => {
+            setLoading(true);
+            setSelectedResult(null);
+            setSearchPage(1);
+            setSearchHasMore(false);
+            await fetchSearchPage(query, 1, false);
+            setLoading(false);
+        })();
+    }, [sources, mode, similarSource, query, fetchSearchPage]);
 
     // Find similar refines what we are already looking at, so exclusions carry over
     const handleFindSimilar = useCallback(async (result) => {
@@ -733,7 +768,14 @@ function App() {
             )}
             {/* if statement, because for browsing we dont need it */}
             {mode === "search" && (
-                <SearchBar onSearch={handleSearch} loading={loading} history={searchHistory}/>
+                <SearchBar
+                    onSearch={handleSearch}
+                    loading={loading}
+                    history={searchHistory}
+                    sources={sources}
+                    onToggleSource={handleToggleSource}
+                />
+
             )}
 
             <div className="main-content">

@@ -11,7 +11,8 @@ const CACHE_TTL_SECONDS = parseInt(process.env.SEARCH_CACHE_TTL_SECONDS || '300'
 
 // Bump when the cached payload's shape changes. v2 caches {results, temporal}
 // v3 adds video_url to every result;
-const CACHE_VERSION = 'v3';
+// v4 adds contributions (per-signal share of the fused score) 
+const CACHE_VERSION = 'v4';
 
 const cacheKey = (kind, parts) =>
     `search:${CACHE_VERSION}:${kind}:${crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex')}`;
@@ -69,9 +70,14 @@ exports.searchVideos = async (req, res) => {
 
         const {page, perPage} = parsePaging(req);
         const exclude = (req.query.exclude || '').split(',').map((v) => v.trim()).filter(Boolean);
+        // Which sources to search. Absent means all of them, which is also what the UI sends when
+        // every checkbox is ticked. Sorted into the cache key, because the same query against a
+        // different set of sources is a different result set, not a cache hit.
+        const sources = (req.query.sources || '').split(',').map((v) => v.trim().toLowerCase())
+            .filter(Boolean).sort();
 
-        const {payload, cached} = await deepResults('text', [q, exclude], () =>
-            queries.searchByText(q, exclude, RESULT_DEPTH));
+        const {payload, cached} = await deepResults('text', [q, exclude, sources], () =>
+            queries.searchByText(q, exclude, RESULT_DEPTH, sources));
 
         // Anchors, for a sequence query -
         const filtered = applyAvsFilter(payload.results, avs_session);

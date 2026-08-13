@@ -15,6 +15,29 @@ from retrieval import fusion, query_parser, retrievers, temporal
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
 
+# The sources a caller can switch off
+SOURCE_RETRIEVERS = {
+    "visual": ("visual",),
+    "ocr": ("ocr",),
+    "asr": ("transcript",),
+    "caption": ("caption",),
+}
+
+
+def _allowed_retrievers(sources):
+    """
+    Retriever names a request permits, or None for "no restriction".
+
+    An unknown source name contributes nothing rather than raising: the frontend and this map are
+    edited in different languages, and a typo should narrow a search, never break it.
+    """
+    if not sources:
+        return None
+    allowed = set()
+    for source in sources:
+        allowed.update(SOURCE_RETRIEVERS.get(str(source).strip().lower(), ()))
+    return allowed
+
 
 def _ends_transaction(method):
     """
@@ -190,7 +213,7 @@ class SearchEngine:
 
     @_ends_transaction
     def search(self, query: str, exclude=None, top_k=None, collection=None,
-               weights=None, depth=None) -> SearchResult:
+               weights=None, depth=None, sources=None) -> SearchResult:
         conf = self.conf
         parsed = query_parser.parse_temporal(
             query, conf.TEMPORAL_DEFAULT_DELTA_MS, conf.TEMPORAL_MAX_DELTA_MS,
@@ -200,24 +223,33 @@ class SearchEngine:
         weights = {**conf.rrf_weights(), **(weights or {})}
         collection = normalize_collection(collection)
 
+        allowed = _allowed_retrievers(sources)
+
         if parsed.is_temporal:
-            return self._search_temporal(parsed, exclude, collection, weights, top_k, depth)
+            return self._search_temporal(parsed, exclude, collection, weights, top_k, depth,
+                                         allowed)
 
         fused, timings, lists = self._retrieve(
             parsed.stages[0], exclude, collection, weights,
-            depth or conf.RETRIEVER_DEPTH, top_k)
+            depth or conf.RETRIEVER_DEPTH, top_k, allowed)
         return SearchResult(results=self._enrich(fused), timings=timings,
                             signals_used=[n for n, r in lists.items() if r])
 
-    def _retrieve(self, parsed, exclude, collection, weights, depth, limit):
+    def _retrieve(self, parsed, exclude, collection, weights, depth, limit, allowed=None):
         """
         Run every retriever for one query and fuse them.
 
         Shared by a plain search and by each stage of a sequence, which is the point: a stage is
         exactly as strong as a search, so `text:"Boulangerie" >> a dog runs past` works and every
         future signal joins the temporal path for free.
+
+        `allowed` is the set of retriever names the request permits, or None for all of them. A
+        disabled retriever is never run, so its query embedding is never computed either.
         """
         lists, timings = {}, {}
+
+        def enabled(name):
+            return allowed is None or name in allowed
 
         def run(name, fn):
             started = time.monotonic()
@@ -232,24 +264,28 @@ class SearchEngine:
         # where OCR and ASR only identify the scene.
         visual_spec = self.visual_model_for(collection)
         if parsed.has_free_text and visual_spec:
-            vector = self.embed_query_visual(parsed.free_text, visual_spec)
-            run("visual", lambda: retrievers.visual(
-                self.conn, vector, visual_spec["model_id"], visual_spec["dims"],
-                exclude, collection, depth))
+            if enabled("visual"):
+                vector = self.embed_query_visual(parsed.free_text, visual_spec)
+                run("visual", lambda: retrievers.visual(
+                    self.conn, vector, visual_spec["model_id"], visual_spec["dims"],
+                    exclude, collection, depth))
 
             tokens = query_parser.distinctive_tokens(parsed.free_text)
-            if tokens:
+            if tokens and enabled("ocr"):
                 run("ocr", lambda: retrievers.ocr_lexical(
                     self.conn, tokens, exclude, collection, depth))
 
-            if self.text_model:
+            # One embedding serves both, so it is only worth computing if either is wanted.
+            if self.text_model and (enabled("caption") or enabled("transcript")):
                 text_vector = self.embed_query_text(parsed.free_text)
-                run("caption", lambda: retrievers.caption(
-                    self.conn, text_vector, self.text_model["model_id"],
-                    self.text_model["dims"], exclude, collection, depth))
-                run("transcript", lambda: retrievers.transcript(
-                    self.conn, text_vector, self.text_model["model_id"],
-                    self.text_model["dims"], exclude, collection, depth))
+                if enabled("caption"):
+                    run("caption", lambda: retrievers.caption(
+                        self.conn, text_vector, self.text_model["model_id"],
+                        self.text_model["dims"], exclude, collection, depth))
+                if enabled("transcript"):
+                    run("transcript", lambda: retrievers.transcript(
+                        self.conn, text_vector, self.text_model["model_id"],
+                        self.text_model["dims"], exclude, collection, depth))
 
         if parsed.ocr_phrase:
             run("ocr_phrase", lambda: retrievers.ocr_phrase(
@@ -260,7 +296,8 @@ class SearchEngine:
 
         return fusion.fuse(lists, weights, limit=limit), timings, lists
 
-    def _search_temporal(self, parsed, exclude, collection, weights, top_k, depth) -> SearchResult:
+    def _search_temporal(self, parsed, exclude, collection, weights, top_k, depth,
+                         allowed=None) -> SearchResult:
         """
         Each stage is a full search; the chaining is arithmetic over the results.
 
@@ -273,7 +310,8 @@ class SearchEngine:
         enriched, timings, signals = [], {}, []
         for index, stage in enumerate(parsed.stages):
             fused, stage_timings, lists = self._retrieve(
-                stage, exclude, collection, weights, stage_depth, conf.TEMPORAL_STAGE_TOP_K)
+                stage, exclude, collection, weights, stage_depth, conf.TEMPORAL_STAGE_TOP_K,
+                allowed)
             for name, elapsed in stage_timings.items():
                 timings[f"s{index}:{name}"] = elapsed
             signals += [f"s{index}:{name}" for name, results in lists.items() if results]
@@ -314,7 +352,8 @@ class SearchEngine:
         timings = {"similar": round((time.monotonic() - started) * 1000, 1)}
 
         fused = [fusion.FusedResult(scene_id=scene_id, score=1.0 / (rank + 1),
-                                    signals={"similar": rank + 1}, keyframe_id=kf)
+                                    signals={"similar": rank + 1},
+                                    contributions={"similar": 1.0 / (rank + 1)}, keyframe_id=kf)
                  for rank, (scene_id, kf) in enumerate(pairs) if kf != keyframe_id][:top_k]
         return SearchResult(results=self._enrich(fused), timings=timings,
                             signals_used=["similar"])
@@ -352,6 +391,7 @@ class SearchEngine:
                 "damaged": damaged,
                 "score": round(item.score, 6),
                 "signals": item.signals,
+                "contributions": item.contributions,
             })
         return out
 

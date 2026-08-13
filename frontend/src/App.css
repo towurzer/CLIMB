@@ -349,7 +349,69 @@ body {
     gap: 8px;
     padding: 12px 20px;
     background: #1a1a1a;
+}
+
+/* Sits directly under the input and carries the header's bottom border, so the query and the
+   sources it runs against read as one block. */
+.source-picker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 0 20px 10px;
+    background: #1a1a1a;
     border-bottom: 1px solid #333;
+}
+
+.source-picker-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #666;
+    margin-right: 2px;
+}
+
+.source-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px 3px 7px;
+    font-size: 12px;
+    color: #777;
+    background: #222;
+    border: 1px solid #383838;
+    border-radius: 999px;
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.source-toggle:hover {
+    border-color: #4a4a4a;
+}
+
+.source-toggle.active {
+    color: #ccc;
+    border-color: #45536f;
+}
+
+.source-toggle input {
+    accent-color: #5b8def;
+    width: 13px;
+    height: 13px;
+    margin: 0;
+    cursor: pointer;
+}
+
+/* The last one standing, and everything while a search is in flight. */
+.source-toggle:has(input:disabled) {
+    cursor: default;
+    opacity: 0.75;
+}
+
+.source-toggle input:disabled {
+    cursor: default;
 }
 
 .search-history {
@@ -589,6 +651,25 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Which encoders found this scene, strongest contributor first. Its own row rather than appended to
+   .result-label, which is nowrap + ellipsis and would swallow it on a 160px card. */
+.result-signals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    padding: 0 6px 5px;
+}
+
+.signal-badge {
+    background: rgba(0, 0, 0, 0.35);
+    color: #888;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
 }
 
 /* ── Temporal chain (A >> B) ──

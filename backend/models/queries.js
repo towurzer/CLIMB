@@ -32,6 +32,7 @@ const toResult = (hit) => ({
     kf_index: hit.kf_index,
     score: hit.score,
     signals: hit.signals || {},
+    contributions: hit.contributions || {},
     start_frame: hit.start_frame,
     end_frame: hit.end_frame,
     frame_number: hit.frame_number,
@@ -60,11 +61,13 @@ module.exports = {
      * Returns the whole payload rather than a bare array because `temporal` describes the result
      * set, not any one row, and it has to survive the controller's cache along with it.
      */
-    searchByText: async (queryText, exclude = [], depth = 500) => {
+    searchByText: async (queryText, exclude = [], depth = 500, sources = []) => {
         const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
             prompt: queryText,
             exclude,
-            top_k: depth
+            top_k: depth,
+            // Empty means "every source"; the worker treats null and [] the same way.
+            ...(sources.length ? {sources} : {})
         });
         return {
             results: (res.data.results || []).map(toResult),

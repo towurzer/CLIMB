@@ -1,5 +1,6 @@
 import {useEffect, useRef} from "react";
 import {sceneKey} from "../sceneKey";
+import {SIGNAL_LABELS} from "../sources";
 
 const EMPTY_SET = new Set();
 
@@ -9,6 +10,25 @@ function formatGap(ms) {
     const seconds = Math.round((ms || 0) / 1000);
     if (seconds < 60) return `+${seconds}s`;
     return `+${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * Which encoders found this scene, most responsible first.
+ *
+ * Ordered by contribution rather than by rank, because the RRF weights differ
+ */
+function describeSignals(signals, contributions) {
+    const shares = contributions || {};
+    const merged = new Map();
+    for (const [name, rank] of Object.entries(signals || {})) {
+        const label = SIGNAL_LABELS[name] || name;
+        const share = shares[name] || 0;
+        const previous = merged.get(label);
+        merged.set(label, previous
+            ? {label, rank: Math.min(previous.rank, rank), share: previous.share + share}
+            : {label, rank, share});
+    }
+    return [...merged.values()].sort((a, b) => b.share - a.share || a.rank - b.rank);
 }
 
 const isSameScene = (a, b) =>
@@ -57,6 +77,10 @@ function ResultsGrid({
                 const isSelected =
                     anchorSelected || partners.some((p) => isSameScene(selectedResult, p));
                 const isCovered = coveredVideos.has(result.video_id); // a keyframe from the same scene has already been submitted
+                // Not for a chain: the anchor's own signals explain why *it* matched, which says nothing about why the sequence did
+                const found = partners.length
+                    ? []
+                    : describeSignals(result.signals, result.contributions);
 
                 return (
                     <div
@@ -129,6 +153,18 @@ function ResultsGrid({
                         <div className="result-label">
                             {result.video_id} / scene {result.scene_id}
                         </div>
+                        {found.length > 0 && (
+                            <div
+                                className="result-signals"
+                                title={found.map((s) => `${s.label} rank ${s.rank}`).join(" · ")}
+                            >
+                                {found.map((signal) => (
+                                    <span className="signal-badge" key={signal.label}>
+                                        {signal.label} ({signal.rank})
+                                    </span>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 );
             })}

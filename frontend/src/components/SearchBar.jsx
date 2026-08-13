@@ -1,4 +1,5 @@
 import {useState, useRef, useEffect} from "react";
+import {SOURCES} from "../sources";
 
 // The query syntax has nowhere else to be discovered, so it hangs off the input as a tooltip.
 const SYNTAX_HELP = [
@@ -6,11 +7,11 @@ const SYNTAX_HELP = [
     'text:"Boulangerie"   on-screen text only, as a phrase',
     'said:"good evening"  transcripts only, as a phrase',
     "-video:00191         exclude a video",
-    "A >> B               A, then B within 30s, same video",
+    "A >> B               A, then B within 1min, same video",
     "A >>(d120) B         ...within 120s instead",
 ].join("\n");
 
-function SearchBar({onSearch, loading, history}) {
+function SearchBar({onSearch, loading, history, sources, onToggleSource}) {
     const [input, setInput] = useState("");
     const [showHistory, setShowHistory] = useState(false);
     const inputRef = useRef(null);
@@ -73,6 +74,33 @@ function SearchBar({onSearch, loading, history}) {
                     {loading ? "..." : "Search"}
                 </button>
             </form>
+
+            {/* All four on by default. Untick one and it is not searched at all -- OCR is pure
+                noise on a query like "a snowboarder doing a backflip", and this is how you say so
+                for one query without retuning the weights for every query. */}
+            <div className="source-picker">
+                <span className="source-picker-label">Sources</span>
+                {SOURCES.map(({key, label, title}) => {
+                    const active = sources.includes(key);
+                    // Searching nothing is not a search. The last one standing cannot be unticked.
+                    const isLast = active && sources.length === 1;
+                    return (
+                        <label
+                            key={key}
+                            className={`source-toggle${active ? " active" : ""}`}
+                            title={isLast ? "At least one source has to stay on" : title}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={active}
+                                disabled={loading || isLast}
+                                onChange={() => onToggleSource(key)}
+                            />
+                            {label}
+                        </label>
+                    );
+                })}
+            </div>
 
             {showHistory && history.length > 0 && (
                 <div className="search-history">

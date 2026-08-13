@@ -202,6 +202,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated list of the sources to search: any of visual, caption, ocr, asr. Omitted (or empty) means all of them.\n\nA source left out is not queried at all rather than being zero-weighted, so narrowing the list makes a search cheaper as well as quieter - useful because the OCR retriever fires on ordinary lowercase words and is weighted 4x, which lets subtitle text dominate a page for a query like 'a snowboarder doing a backflip'.\n\nThis does NOT gate the explicit phrase operators: text:\"...\" and said:\"...\" always run, because an operator in the query is an instruction rather than a source preference. Part of the cache key, so the same query against different sources is a separate result set.",
+            "schema": {
+              "type": "string",
+              "example": "visual,caption,asr"
+            }
           }
         ],
         "responses": {
@@ -877,6 +887,21 @@
           "keyframe_id": {
             "type": "integer",
             "description": "Keyframe shown for the scene"
+          },
+          "signals": {
+            "type": "object",
+            "description": "Retriever -> the rank it gave this scene. Keys are visual, ocr, ocr_phrase, caption, transcript, asr_phrase, or similar for find-similar. A retriever that did not find the scene is absent.",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "contributions": {
+            "type": "object",
+            "description": "Retriever -> its share of `score`, i.e. weight / (60 + rank), summing to `score`. Ranks alone do not identify the retriever responsible for a hit, because the RRF weights differ by up to 8x.",
+            "additionalProperties": {
+              "type": "number",
+              "format": "float"
+            }
           }
         },
         "required": [
