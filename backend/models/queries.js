@@ -144,7 +144,8 @@ module.exports = {
             num_scenes: row.num_scenes,
             thumbnail_url: row.shot_index === null
                 ? null
-                : media.thumbnailUrl(row.video_id, row.shot_index, row.kf_index)
+                : media.thumbnailUrl(row.video_id, row.shot_index, row.kf_index),
+            video_url: media.videoUrl(row.video_id)
         }));
 
         return {total: countRes.rows[0].total || 0, videos};
@@ -241,6 +242,7 @@ module.exports = {
             total: countRes.rows[0].total || 0,
             fps,
             duration_sec: Math.round((video.duration_ms || 0) / 1000),
+            video_url: media.videoUrl(videoId),
             scenes
         };
     },

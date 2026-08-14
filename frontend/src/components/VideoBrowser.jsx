@@ -101,6 +101,7 @@ function VideoBrowser({
             .then((data) => {
                 setShots(data.scenes || []);
                 setShotsTotal(data.total ?? null);
+                setSelectedVideo((prev) => prev ? {...prev, video_url: data.video_url ?? prev.video_url} : prev);
                 setShotsLoading(false);
             })
             .catch((err) => {
@@ -164,6 +165,7 @@ function VideoBrowser({
                     video_id: openVideoId,
                     fps: data.fps || fetchedShots[0]?.fps || 25,
                     duration_sec: data.duration_sec || 0,
+                    video_url: data.video_url,
                 });
                 setShotsLoading(false);
                 onOpenVideoHandled?.();
@@ -295,7 +297,7 @@ function VideoBrowser({
                     <div key={video.video_id} className={`browse-card ${covered ? "covered" : ""}`} onClick={() => handleVideoClick(video)}>
                         <div className="browse-card-thumb">
                             <img src={video.thumbnail_url} alt={video.video_id} loading="lazy"/>
-                            <span className="browse-card-badge">{video.num_shots} shots</span>
+                            <span className="browse-card-badge">{video.num_scenes} shots</span>
                             {covered && <span className="covered-badge" title="Already has a correct hit">covered</span>}
                         </div>
                         <div className="browse-card-label">
