@@ -29,6 +29,7 @@ function VideoBrowser({
     onSelectShot,
     openVideoId,
     onOpenVideoHandled,
+    onExitBrowse,
     submittedScenes = EMPTY_SET,
     coveredVideos = EMPTY_SET,
 }) {
@@ -45,6 +46,9 @@ function VideoBrowser({
     const [shotsTotal, setShotsTotal] = useState(null);
     const [shotsLoadingMore, setShotsLoadingMore] = useState(false);
     const [filter, setFilter] = useState("");
+    // True when the shot view was opened by a deep link (Browse in Fullscreen) rather than by
+    // clicking a card in the grid. The back arrow follows the way in, so it leads back out.
+    const [openedByDeepLink, setOpenedByDeepLink] = useState(false);
 
     // Fetch first page on mount
     useEffect(() => {
@@ -89,8 +93,9 @@ function VideoBrowser({
     );
 
     // Fetch shots (page 1) when a video is selected
-    const handleVideoClick = (video) => {
+    const handleVideoClick = (video, viaDeepLink = false) => {
         setSelectedVideo(video);
+        setOpenedByDeepLink(viaDeepLink);
         setShots([]);
         setShotsPage(1);
         setShotsTotal(null);
@@ -142,13 +147,14 @@ function VideoBrowser({
 
         const existing = videos.find((v) => v.video_id === openVideoId);
         if (existing) {
-            handleVideoClick(existing);
+            handleVideoClick(existing, true);
             onOpenVideoHandled?.();
             return;
         }
 
         let cancelled = false;
         setSelectedVideo({video_id: openVideoId, fps: 25, duration_sec: 0});
+        setOpenedByDeepLink(true);
         setShots([]);
         setShotsPage(1);
         setShotsTotal(null);
@@ -183,9 +189,16 @@ function VideoBrowser({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [openVideoId, apiUrl]);
 
-    // Go back to video grid
+    // Back retraces the way in: out to the results we were sent from if this view was deep-linked,
+    // to the video grid if the user got here by clicking a card.
+    const exitsToCaller = openedByDeepLink && Boolean(onExitBrowse);
     const handleBack = () => {
+        if (exitsToCaller) {
+            onExitBrowse();
+            return;
+        }
         setSelectedVideo(null);
+        setOpenedByDeepLink(false);
         setShots([]);
         setShotsPage(1);
         setShotsTotal(null);
@@ -227,7 +240,7 @@ function VideoBrowser({
             <div className="browse-view">
                 <div className="browse-top-bar">
                     <button className="browse-back" onClick={handleBack}>
-                        ← Back to videos
+                        ← Back to {exitsToCaller ? "results" : "videos"}
                     </button>
                     <span className="browse-video-title">
             {selectedVideo.video_id}

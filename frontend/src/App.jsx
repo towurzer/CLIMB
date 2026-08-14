@@ -323,6 +323,7 @@ function App() {
 
         // can be triggered from the browse tab, so jump back to the results we just refreshed
         setMode("search");
+        setBrowseReturnMode(null);
         setQuery(updatedQuery);
         setLoading(true);
         setSelectedResult(null);
@@ -678,12 +679,25 @@ function App() {
 
     // Jump to browse mode with a specific video's shots open (triggered from the sidebar ShotBrowser)
     const [browseOpenVideoId, setBrowseOpenVideoId] = useState(null);
+    // Where "Browse in Fullscreen" was fired from. Set only when the jump crossed modes, so the
+    // shot view's back arrow returns to the results the user came from instead of the video grid.
+    const [browseReturnMode, setBrowseReturnMode] = useState(null);
     const handleBrowseAllShots = useCallback((videoId) => {
+        // Re-triggering from inside browse keeps the original origin: the user never left it.
+        if (mode !== "browse") setBrowseReturnMode(mode);
         setMode("browse");
         setBrowseOpenVideoId(videoId);
-    }, []);
+    }, [mode]);
     const handleBrowseOpenVideoHandled = useCallback(() => {
         setBrowseOpenVideoId(null);
+    }, []);
+    const handleBrowseExit = useCallback(() => {
+        setMode(browseReturnMode || "search");
+        setBrowseReturnMode(null);
+    }, [browseReturnMode]);
+    const switchMode = useCallback((next) => {
+        setBrowseReturnMode(null);
+        setMode(next);
     }, []);
 
     const isDuplicate = selectedResult ? alreadySubmitted(selectedResult) : false;
@@ -735,11 +749,12 @@ function App() {
                         </div>
                     )}
                     <div className="mode-toggle">
+                        {/* Switching by hand drops the "return here" marker: the user picked a mode. */}
                         <button className={`mode-btn ${mode === "search" ? "active" : ""}`}
-                                onClick={() => setMode("search")}>Search
+                                onClick={() => switchMode("search")}>Search
                         </button>
                         <button className={`mode-btn ${mode === "browse" ? "active" : ""}`}
-                                onClick={() => setMode("browse")}>Browse
+                                onClick={() => switchMode("browse")}>Browse
                         </button>
                     </div>
                     {/* task type: KIS (single shot) vs AVS (many collaborative instances) */}
@@ -848,6 +863,7 @@ function App() {
                                 onSelectShot={handleBrowseSelect}
                                 openVideoId={browseOpenVideoId}
                                 onOpenVideoHandled={handleBrowseOpenVideoHandled}
+                                onExitBrowse={browseReturnMode ? handleBrowseExit : null}
                                 submittedScenes={isAvs ? avsSubmittedScenes : EMPTY_SET}
                                 coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}
                             />
