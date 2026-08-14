@@ -118,6 +118,10 @@ class Config:
     # A long video can contain dozens of legal chains; without a cap it owns the whole grid.
     TEMPORAL_MAX_PER_VIDEO: int = int(os.getenv("CLIMB_TEMPORAL_MAX_PER_VIDEO") or 3)
 
+    # How many query vectors to keep. Embedding a query string is the single most expensive part of
+    # a search on my CPU only laptop, on GPU it's not that important but caching is not slower than not doing it.
+    QUERY_EMBED_CACHE_SIZE: int = int(os.getenv("CLIMB_QUERY_EMBED_CACHE") or 512)
+
     # --- Per-collection visual models ---
     COLLECTION_MODELS_RAW: str = os.getenv("CLIMB_COLLECTION_MODELS") or ""
 

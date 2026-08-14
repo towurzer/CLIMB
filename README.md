@@ -691,13 +691,18 @@ milliseconds instead of "go get a coffee" run
 python main.py index build
 ```
 
-This builds the HNSW vector index and the full-text indexes. Two things worth knowing:
+This builds the HNSW vector indexes , one per model per vector table, so **three** families of them.
+Three things worth knowing:
 
 - Do it **after** loading, not before. Maintaining an HNSW index while you shovel millions of rows into it is several
   times slower than building it once at the end.
 - Do it on a machine with some RAM to spare (we ask for 8GB of ```maintenance_work_mem```). Building the index and
   *reading* the index are very different appetites , the plan is that whoever has the beefy machine builds it, and the
   competition laptop just gets handed the finished database.
+- Give the Postgres container a real ```--shm-size``` (8g if you are asking for 8GB of ```maintenance_work_mem```). A
+  parallel index build wants a shared memory segment that big, the pgvector image ships with 63MB of ```/dev/shm```,
+  and the error you get is ```No space left on device``` pointing at a disk with plenty of space on it. The build
+  falls back to a serial one and tells you so rather than dying, but serial is the slow way to spend an evening.
 
 The vector index is built over *binary quantized* embeddings and then reranks the top candidates against the full
 precision vectors. Roughly: 1024 dimensions squashed to 1024 bits is about 5 GB of index instead of 28 GB, which is the
@@ -715,6 +720,18 @@ How much oversampling is worth it, measured over 7,543 keyframes against exhaust
 The ceiling is the binary quantization, not the index , the ANN stage ranks by hamming distance on 1-bit vectors, so
 the true cosine neighbours are not all inside its top-N. Left at 1000 by default because tripling your query latency
 is a decision you should make on purpose.
+
+Captions and transcripts run the exact same oversample-then-rerank, which is the point of it living in one function.
+They score much better on the same knob because 1000 candidates is a far larger slice of 14k captions than of 12.4M
+keyframes , recall@20 measured at 96.2% for captions and 98.8% for transcripts, against the visual retriever's 75%.
+Do not read that as free: it will drift toward the visual number as the collection grows, and it is a real (small)
+step down from the exhaustive scan those two used to do. Being exact is easy when you are small.
+
+It has to be a *binary quantized* index for these two as well, and not only for the 5x size saving. `embedding` is a
+dimensionless `halfvec` column so one column can carry every model, and an index on the typmod cast
+`embedding::halfvec(768)` is one Postgres will happily build and then never once match against the identical
+expression in a query. `binary_quantize()` is a real function call, so the expressions match. Ask how long that took
+to work out sometime.
 
 #### 1.9 How searching actually works
 
@@ -781,6 +798,17 @@ stage: `(d120)` and `(120)` are both 120 seconds, `(d500ms)` is half a second, a
 
 The splitting is quote-aware, so `text:"a >> b"` stays one phrase rather than becoming a sequence. An empty stage is
 not a stage either , `A >>` is just a search for A, not a sequence missing its second half.
+
+Interesting to know is: 
+
+- **Query vectors are cached** (`CLIMB_QUERY_EMBED_CACHE`, 512 entries). Nobody types a sequence once , you type it,
+  look, change the last word, look again. Refining one stage of three now re-embeds one stage of three instead of
+  cheerfully redoing all of it.
+- **Stages are embedded before any of them runs**, so on a GPU all of them go through the tower in one pass. On CPU
+  they deliberately do *not* , a batch of three measured 903 ms against 816 ms for three separate calls, because the
+  forward pass already owns every core and batching just makes it longer. `batch_embeddings` decides, not you.
+- **Nothing is enriched until the chains exist.** A stage runs 1000 deep and maybe 40 hits survive into a chain, so
+  fetching filmstrips for the other 2960 was pure tribute. Linking only ever wanted four columns.
 
 #### 1.10 Start the Search Engine
 

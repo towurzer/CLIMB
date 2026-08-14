@@ -486,35 +486,67 @@ def test_a_phrase_stage_can_anchor_a_sequence(worker, corpus, db):
     assert any(signal.startswith("s0:ocr_phrase") for signal in body["signals"]), body["signals"]
 
 
+# --- stability ----------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sources", [["caption"], ["asr"], ["visual", "caption"]])
+def test_the_same_search_twice_returns_the_same_order(worker, corpus, sources):
+    """
+    Distances tie in bulk -- a top-2000 caption set had 888 distinct distances across 2000 rows --
+    so without an explicit tiebreak the database returns equals in whatever order the plan
+    happened to produce, and a parallel plan does not produce the same one twice. That was live:
+    re-running one query gave three different result grids in three tries.
+    """
+    prompt = "a man talking to the camera"
+    runs = [[(r["scene_id"], r["keyframe_id"], r["score"])
+             for r in _search(worker, prompt, top_k=40, sources=sources)["results"]]
+            for _ in range(4)]
+    if not runs[0]:
+        pytest.skip(f"no results for {sources}")
+    assert all(run == runs[0] for run in runs), f"{sources} reordered between identical searches"
+
+
 # --- the ANN index ------------------------------------------------------------------------------
 
 MIN_ROWS_FOR_ANN = 2000  # below this a sequential scan is the planner being right
 
 
-def test_the_ann_index_is_used_for_the_visual_query(db, corpus):
+def _ann_tables():
+    from retrieval.retrievers import ASR_ANN, CAPTION_ANN, VISUAL_ANN
+    return [("keyframe_embedding", VISUAL_ANN),
+            ("caption_embedding", CAPTION_ANN),
+            ("transcript_embedding", ASR_ANN)]
+
+
+@pytest.mark.parametrize("table,ann_sql", _ann_tables(), ids=[t for t, _ in _ann_tables()])
+def test_the_ann_index_is_used(db, corpus, table, ann_sql):
     """
-    The query has to be shaped exactly as `retrievers.VISUAL_ANN` shapes it: the vector as a bind
-    parameter (a column reference silently loses the index) and model_id inline so the partial
-    index predicate is provable.
+    The query has to be shaped exactly as the retriever shapes it: the vector as a bind parameter
+    (a column reference silently loses the index) and model_id inline so the partial index
+    predicate is provable.
+
+    All three vector tables, because captions and transcripts spent a long time being searched by
+    sequential scan without anything noticing -- it is only slow once the collection is big, and by
+    then it is the competition.
     """
     from db.index_ops import ann_index_name
-    from retrieval.retrievers import VISUAL_ANN
 
     with db.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT e.model_id, m.dims, count(*)
-            FROM keyframe_embedding e JOIN embedding_model m ON m.model_id = e.model_id
+            FROM {table} e JOIN embedding_model m ON m.model_id = e.model_id
             GROUP BY e.model_id, m.dims ORDER BY count(*) DESC LIMIT 1;
         """)
-        model_id, dims, rows = cur.fetchone()
+        row = cur.fetchone()
+        if row is None:
+            pytest.skip(f"no embeddings in {table}")
+        model_id, dims, rows = row
 
-        cur.execute("SELECT embedding FROM keyframe_embedding WHERE model_id = %s LIMIT 1;",
-                    (model_id,))
+        cur.execute(f"SELECT embedding FROM {table} WHERE model_id = %s LIMIT 1;", (model_id,))
         vector = cur.fetchone()[0]
 
         # model_id inlined, exactly as the retriever does it, so the WHERE of the partial index
         # can be matched; everything else stays a bind parameter.
-        sql = VISUAL_ANN.replace("%(model_id)s", str(model_id))
+        sql = ann_sql.replace("%(model_id)s", str(model_id))
         cur.execute("EXPLAIN " + sql,
                     {"dims": dims, "query": vector, "oversample": 100})
         plan = "\n".join(line for (line,) in cur.fetchall())
@@ -522,7 +554,7 @@ def test_the_ann_index_is_used_for_the_visual_query(db, corpus):
     if rows < MIN_ROWS_FOR_ANN and "Seq Scan" in plan:
         pytest.skip(f"only {rows} embeddings -- a sequential scan is the correct plan here")
 
-    assert ann_index_name(model_id) in plan, f"HNSW index not used:\n{plan}"
+    assert ann_index_name(model_id, table) in plan, f"HNSW index not used:\n{plan}"
     assert "Seq Scan" not in plan, f"fell back to a sequential scan:\n{plan}"
 
 

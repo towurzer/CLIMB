@@ -27,22 +27,32 @@ from config import Config
 # contiguous id range, that merge join would traverse essentially the whole index. As two
 # statements the ANN is a clean index scan and the lookup is a bounded `= ANY(ids)` on the primary
 # key, whatever the planner is feeling.
-VISUAL_ANN = """
-    SELECT e.keyframe_id
-    FROM keyframe_embedding e
-    WHERE e.model_id = %(model_id)s
-    ORDER BY binary_quantize(e.embedding::halfvec(%(dims)s))::bit(%(dims)s)
+ANN_SQL = """
+    SELECT {key}
+    FROM {table}
+    WHERE model_id = %(model_id)s
+    ORDER BY binary_quantize(embedding::halfvec(%(dims)s))::bit(%(dims)s)
           <~> binary_quantize(%(query)s::halfvec(%(dims)s))::bit(%(dims)s)
     LIMIT %(oversample)s;
 """
 
-VISUAL_RERANK = """
-    SELECT keyframe_id
-    FROM keyframe_embedding
-    WHERE keyframe_id = ANY (%(ids)s)
+# The trailing key is a tiebreak. Distances tie constantly, a top-2000 caption set had 888
+# distinct distances, and without it a parallel plan returns equals in whatever order it happened
+# to produce, so two identical searches came back in different orders.
+RERANK_SQL = """
+    SELECT {key}
+    FROM {table}
+    WHERE {key} = ANY (%(ids)s)
       AND model_id = %(model_id)s
-    ORDER BY embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s);
+    ORDER BY embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s), {key};
 """
+
+VISUAL_ANN = ANN_SQL.format(table="keyframe_embedding", key="keyframe_id")
+VISUAL_RERANK = RERANK_SQL.format(table="keyframe_embedding", key="keyframe_id")
+CAPTION_ANN = ANN_SQL.format(table="caption_embedding", key="keyframe_id")
+CAPTION_RERANK = RERANK_SQL.format(table="caption_embedding", key="keyframe_id")
+ASR_ANN = ANN_SQL.format(table="transcript_embedding", key="segment_id")
+ASR_RERANK = RERANK_SQL.format(table="transcript_embedding", key="segment_id")
 
 # Metadata and filtering for an already-ranked set of keyframes. Single table plus a tiny join to
 # videos, both on primary keys.
@@ -68,7 +78,7 @@ OCR_SEARCH = """
       AND ts_rank_cd(t.tsv, q.query, 32) >= %(min_rank)s
       AND NOT (k.video_id = ANY (%(exclude)s))
       AND (%(collection)s IS NULL OR v.collection = %(collection)s)
-    ORDER BY rank DESC
+    ORDER BY rank DESC, t.keyframe_id
     LIMIT %(limit)s;
 """
 
@@ -82,49 +92,45 @@ OCR_TRIGRAM_SEARCH = """
     WHERE t.ocr_text %% %(phrase)s
       AND NOT (k.video_id = ANY (%(exclude)s))
       AND (%(collection)s IS NULL OR v.collection = %(collection)s)
-    ORDER BY sim DESC
+    ORDER BY sim DESC, t.keyframe_id
     LIMIT %(limit)s;
 """
 
-CAPTION_SEARCH = """
-    SELECT keyframe_id
-    FROM caption_embedding
-    WHERE model_id = %(model_id)s
-    ORDER BY embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s)
-    LIMIT %(limit)s;
-"""
-
-# Transcript segments carry a time range, not a keyframe, so they are mapped onto scenes by
-# overlapping start_ms/end_ms. This is why scenes store milliseconds rather than only frames.
-ASR_SEARCH = """
-    WITH hits AS (SELECT t.video_id, t.start_ms, t.end_ms
-                  FROM transcript_embedding e
-                           JOIN transcript_segment t ON t.segment_id = e.segment_id
-                           JOIN videos v ON v.video_id = t.video_id
-                  WHERE e.model_id = %(model_id)s
-                    AND NOT (t.video_id = ANY (%(exclude)s))
-                    AND (%(collection)s IS NULL OR v.collection = %(collection)s)
-                  ORDER BY e.embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s)
-                  LIMIT %(segment_limit)s)
-    SELECT DISTINCT ON (s.scene_id) s.scene_id, NULL::bigint AS keyframe_id
-    FROM hits h
-             JOIN scenes s ON s.video_id = h.video_id
-        AND s.start_ms < h.end_ms AND s.end_ms > h.start_ms
-    LIMIT %(limit)s;
-"""
-
-ASR_PHRASE_SEARCH = """
-    SELECT DISTINCT ON (s.scene_id) s.scene_id, NULL::bigint AS keyframe_id,
-                                    ts_rank_cd(t.tsv, q.query, 32) AS rank
-    FROM to_tsquery('simple', %(tsquery)s) AS q(query),
-         transcript_segment t
+# Scenes an already-ranked set of transcript segments lands on.
+#
+# Segments carry a time range, not a keyframe, so they are mapped onto scenes by overlapping
+# start_ms/end_ms. This is why scenes store milliseconds rather than only frames. The filtering
+# lives here rather than beside the ANN: a WHERE next to an HNSW ORDER BY is applied *after* the
+# index has already chosen its rows, so an excluded video silently eats a candidate slot.
+ASR_SCENES = """
+    SELECT t.segment_id, s.scene_id
+    FROM transcript_segment t
              JOIN videos v ON v.video_id = t.video_id
              JOIN scenes s ON s.video_id = t.video_id
                  AND s.start_ms < t.end_ms AND s.end_ms > t.start_ms
-    WHERE t.tsv @@ q.query
+    WHERE t.segment_id = ANY (%(segment_ids)s)
       AND NOT (t.video_id = ANY (%(exclude)s))
-      AND (%(collection)s IS NULL OR v.collection = %(collection)s)
-    ORDER BY s.scene_id, rank DESC
+      AND (%(collection)s IS NULL OR v.collection = %(collection)s);
+"""
+
+# DISTINCT ON has to sort by scene_id first to pick one segment per scene, which is not the order
+# the caller wants -- the ranking is the whole point, and RRF reads position as rank. So the pick
+# happens inside and the ranking outside, and the LIMIT with it, or the cut would keep the
+# lowest-numbered scenes rather than the best-matching ones.
+ASR_PHRASE_SEARCH = """
+    SELECT scene_id, keyframe_id
+    FROM (SELECT DISTINCT ON (s.scene_id) s.scene_id, NULL::bigint AS keyframe_id,
+                                          ts_rank_cd(t.tsv, q.query, 32) AS rank
+          FROM to_tsquery('simple', %(tsquery)s) AS q(query),
+               transcript_segment t
+                   JOIN videos v ON v.video_id = t.video_id
+                   JOIN scenes s ON s.video_id = t.video_id
+                       AND s.start_ms < t.end_ms AND s.end_ms > t.start_ms
+          WHERE t.tsv @@ q.query
+            AND NOT (t.video_id = ANY (%(exclude)s))
+            AND (%(collection)s IS NULL OR v.collection = %(collection)s)
+          ORDER BY s.scene_id, rank DESC, t.segment_id) best
+    ORDER BY rank DESC, scene_id
     LIMIT %(limit)s;
 """
 
@@ -201,7 +207,14 @@ def _expand_to_keyframes(conn, scene_rows, limit):
     return out
 
 
-def visual(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
+def _ann_rerank(conn, ann_sql, rerank_sql, query_vector, model_id, dims, oversample=None):
+    """
+    Oversample on the binary index, then rerank the candidates against the full halfvec.
+
+    One implementation for all three vector tables. A second copy would drift, and the failure mode
+    is a sequential scan nobody notices until the collection is large -- which is exactly what the
+    caption and transcript retrievers were doing before they were routed through here.
+    """
     conf = Config()
     depth = oversample or conf.ANN_OVERSAMPLE
     with conn.cursor() as cur:
@@ -209,17 +222,21 @@ def visual(conn, query_vector, model_id, dims, exclude, collection, limit, overs
         if depth > conf.HNSW_EF_SEARCH_MAX:
             # ef_search cannot go above 1000, so a larger oversample is only honoured if the scan
             # is allowed to continue past it. Without this, asking for 4000 candidates silently
-            # yields 1000. Relaxed order is fine: VISUAL_RERANK re-sorts by exact distance immediately afterwards.
+            # yields 1000. Relaxed order is fine: the rerank re-sorts by exact distance immediately afterwards.
             cur.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
             cur.execute("SET LOCAL hnsw.max_scan_tuples = %s", (conf.HNSW_MAX_SCAN_TUPLES,))
-        cur.execute(VISUAL_ANN, {"model_id": model_id, "dims": dims, "query": query_vector,
-                                 "oversample": depth})
+        cur.execute(ann_sql, {"model_id": model_id, "dims": dims, "query": query_vector,
+                              "oversample": depth})
         ids = [row[0] for row in cur.fetchall()]
         if not ids:
             return []
-        cur.execute(VISUAL_RERANK, {"ids": ids, "model_id": model_id, "dims": dims,
-                                    "query": query_vector})
-        ranked = [row[0] for row in cur.fetchall()]
+        cur.execute(rerank_sql, {"ids": ids, "model_id": model_id, "dims": dims,
+                                 "query": query_vector})
+        return [row[0] for row in cur.fetchall()]
+
+
+def visual(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
+    ranked = _ann_rerank(conn, VISUAL_ANN, VISUAL_RERANK, query_vector, model_id, dims, oversample)
     return _resolve_scenes(conn, ranked, exclude, collection, limit)
 
 
@@ -280,7 +297,7 @@ def similar_to_keyframe(conn, keyframe_id, model_id, dims, exclude, collection, 
                   oversample=oversample)
 
 
-def caption(conn, query_vector, model_id, dims, exclude, collection, limit):
+def caption(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
     """
     Captions describe the shot, not the frame, so a hit expands across the scene's keyframes.
 
@@ -290,22 +307,43 @@ def caption(conn, query_vector, model_id, dims, exclude, collection, limit):
     retriever's worth of score that none of its siblings can earn. Measured before this was added,
     that pinned kf_index 0 to all 15 of the top 15 results.
     """
-    with conn.cursor() as cur:
-        cur.execute(CAPTION_SEARCH, {"model_id": model_id, "dims": dims,
-                                     "query": query_vector, "limit": limit * 4})
-        ranked = [row[0] for row in cur.fetchall()]
+    ranked = _ann_rerank(conn, CAPTION_ANN, CAPTION_RERANK, query_vector, model_id, dims,
+                         oversample)
     scenes = _resolve_scenes(conn, ranked, exclude, collection, limit)
     return _expand_to_keyframes(conn, scenes, limit)
 
 
-def transcript(conn, query_vector, model_id, dims, exclude, collection, limit):
+def transcript(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
+    """
+    Scenes that were on screen while something matching the query was being said.
+
+    Scene order follows the best-ranked segment that reached it. The previous version did
+    `DISTINCT ON (scene_id)` with no ORDER BY, so which segment won and what order the scenes came
+    back in were both whatever the plan produced, and RRF then read that as a ranking.
+    """
     conf = Config()
+    ranked = _ann_rerank(conn, ASR_ANN, ASR_RERANK, query_vector, model_id, dims,
+                         oversample or conf.ASR_SEGMENT_LIMIT)
+    if not ranked:
+        return []
+
     with conn.cursor() as cur:
-        cur.execute(ASR_SEARCH, {"model_id": model_id, "dims": dims, "query": query_vector,
-                                 "exclude": exclude, "collection": collection, "limit": limit,
-                                 "segment_limit": conf.ASR_SEGMENT_LIMIT})
-        scenes = [(row[0], row[1]) for row in cur.fetchall()]
-    return _expand_to_keyframes(conn, scenes, limit)
+        cur.execute(ASR_SCENES, {"segment_ids": ranked, "exclude": exclude,
+                                 "collection": collection})
+        scenes_of = defaultdict(list)
+        for segment_id, scene_id in cur.fetchall():
+            scenes_of[segment_id].append(scene_id)
+
+    seen, scenes = set(), []
+    for segment_id in ranked:
+        # A segment can span several scenes; they all inherit its rank, so sort for a stable order.
+        for scene_id in sorted(scenes_of.get(segment_id, ())):
+            if scene_id not in seen:
+                seen.add(scene_id)
+                scenes.append((scene_id, None))
+        if len(scenes) >= limit:
+            break
+    return _expand_to_keyframes(conn, scenes[:limit], limit)
 
 
 def transcript_phrase(conn, phrase, exclude, collection, limit):

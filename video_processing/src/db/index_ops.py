@@ -22,8 +22,23 @@ from config import Config
 # expression is what lets a single dimensionless column carry all of them.
 ANN_INDEX_PREFIX = "keyframe_embedding_m"
 
+# Every table that is searched by vector at query time.
+#
+# All three used to be listed here only in spirit: keyframes got an index and captions and
+# transcripts got a sequential scan over the whole table on every single query. That is invisible
+# at 14k rows and fatal at V3C's millions, so they are built the same way now -- and searched the
+# same way too, oversample on the binary index then rerank exact (see retrieval/retrievers.py).
+#
+# It has to be binary_quantize() rather than a plain halfvec index, and not only for the 5x size
+# saving: `embedding` is a dimensionless halfvec column so that one column can carry every model,
+# and an index on the typmod cast `embedding::halfvec(768)` is one Postgres will build and then
+# never match against the identical expression in a query. The binary_quantize() call is a real
+# function, so the expressions match and the planner uses it. (measured: 6 ms indexed against
+# 11-20 ms scanning, on a table small enough that the scan should have been winning)
+ANN_TABLES = ("keyframe_embedding", "caption_embedding", "transcript_embedding")
+
 CREATE_ANN_INDEX = """
-    CREATE INDEX IF NOT EXISTS {name} ON keyframe_embedding
+    CREATE INDEX IF NOT EXISTS {name} ON {table}
     USING hnsw ((binary_quantize(embedding::halfvec({dims}))::bit({dims})) bit_hamming_ops)
     WITH (m = {m}, ef_construction = {ef_construction})
     WHERE model_id = {model_id};
@@ -32,13 +47,13 @@ CREATE_ANN_INDEX = """
 SELECT_MODELS_WITH_ROWS = """
     SELECT m.model_id, m.name, m.dims
     FROM embedding_model m
-    WHERE EXISTS (SELECT 1 FROM keyframe_embedding e WHERE e.model_id = m.model_id)
+    WHERE EXISTS (SELECT 1 FROM {table} e WHERE e.model_id = m.model_id)
     ORDER BY m.model_id;
 """
 
 
-def ann_index_name(model_id: int) -> str:
-    return f"{ANN_INDEX_PREFIX}{model_id}_bq_hnsw"
+def ann_index_name(model_id: int, table: str = "keyframe_embedding") -> str:
+    return f"{table}_m{model_id}_bq_hnsw"
 
 TEXT_INDEXES = [
     ("keyframe_text_tsv_idx",
@@ -54,7 +69,8 @@ TEXT_INDEXES = [
      "CREATE INDEX IF NOT EXISTS transcript_segment_tsv_idx ON transcript_segment USING gin (tsv);"),
 ]
 
-ANALYZE_TABLES = ["keyframe_embedding", "keyframe_text", "keyframe_caption", "transcript_segment"]
+ANALYZE_TABLES = ["keyframe_embedding", "caption_embedding", "transcript_embedding",
+                  "keyframe_text", "keyframe_caption", "transcript_segment"]
 
 
 def apply_build_tuning(conn):
@@ -105,6 +121,41 @@ def apply_serve_tuning(conn):
     )
 
 
+def _create_index(conn, sql, logger):
+    """
+    Builds one index, falling back to a serial build if the container cannot host a parallel one.
+
+    A parallel HNSW build asks for a dynamic shared memory segment the size of
+    maintenance_work_mem, and the pgvector image ships with a 63 MB /dev/shm, so with the 8 GB we
+    ask for the very first build of a new index dies on `No space left on device` -- pointing at a
+    disk that is not full. A serial build wants no shared segment at all and gets the same index,
+    just slower, which beats not having one.
+
+    The real fix is `--shm-size=8g` on the container; this is so a build never fails for it.
+    """
+    import psycopg2
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.commit()
+        return
+    except psycopg2.errors.DiskFull:
+        conn.rollback()
+
+    logger.warning(
+        "Parallel index build could not get shared memory (/dev/shm is too small for "
+        "maintenance_work_mem). Falling back to a serial build -- slower, same index. "
+        "Give the Postgres container a bigger --shm-size to get the parallel build back."
+    )
+    with conn.cursor() as cur:
+        cur.execute("SET max_parallel_maintenance_workers = 0;")
+        cur.execute(sql)
+    conn.commit()
+    with conn.cursor() as cur:
+        cur.execute(f"SET max_parallel_maintenance_workers = {Config().PG_BUILD_PARALLEL_WORKERS};")
+
+
 def build_indexes(conn, ann=True, text=True, analyze=True):
     """Creates the derived indexes. Safe to re-run; each statement is IF NOT EXISTS."""
     conf = Config()
@@ -113,16 +164,16 @@ def build_indexes(conn, ann=True, text=True, analyze=True):
     apply_build_tuning(conn)
 
     if ann:
-        for model_id, name, dims in embedded_models(conn):
-            index = ann_index_name(model_id)
-            logger.info(f"Building {index} for {name} ({dims}d) -- this is the long one...")
-            with conn.cursor() as cur:
-                cur.execute(CREATE_ANN_INDEX.format(
-                    name=index, dims=dims, model_id=model_id,
+        for table in ANN_TABLES:
+            for model_id, name, dims in embedded_models(conn, table):
+                index = ann_index_name(model_id, table)
+                logger.info(f"Building {index} for {name} ({dims}d) -- this is the long one...")
+                sql = CREATE_ANN_INDEX.format(
+                    name=index, table=table, dims=dims, model_id=model_id,
                     m=conf.HNSW_M, ef_construction=conf.HNSW_EF_CONSTRUCTION,
-                ))
-            conn.commit()
-            logger.info(f"Built {index}.")
+                )
+                _create_index(conn, sql, logger)
+                logger.info(f"Built {index}.")
 
     if text:
         for name, sql in TEXT_INDEXES:
@@ -147,7 +198,8 @@ def drop_indexes(conn, ann=True, text=True):
 
     targets = []
     if ann:
-        targets.extend(ann_index_name(m[0]) for m in embedded_models(conn))
+        targets.extend(ann_index_name(m[0], table)
+                       for table in ANN_TABLES for m in embedded_models(conn, table))
     if text:
         targets.extend(name for name, _ in TEXT_INDEXES)
 
@@ -158,16 +210,19 @@ def drop_indexes(conn, ann=True, text=True):
         logger.info(f"Dropped {name}.")
 
 
-def embedded_models(conn):
-    """Returns [(model_id, name, dims)] for models that actually have embeddings stored."""
+def embedded_models(conn, table: str = "keyframe_embedding"):
+    """Returns [(model_id, name, dims)] for models that actually have vectors in `table`."""
+    if table not in ANN_TABLES:  # the name is interpolated, so it may only come from that list
+        raise ValueError(f"{table} is not a vector table")
     with conn.cursor() as cur:
-        cur.execute(SELECT_MODELS_WITH_ROWS)
+        cur.execute(SELECT_MODELS_WITH_ROWS.format(table=table))
         return cur.fetchall()
 
 
 def index_status(conn):
     """Returns [(index_name, exists, size_pretty)] for reporting."""
-    expected = ([ann_index_name(m[0]) for m in embedded_models(conn)]
+    expected = ([ann_index_name(m[0], table)
+                 for table in ANN_TABLES for m in embedded_models(conn, table)]
                 + [name for name, _ in TEXT_INDEXES])
 
     with conn.cursor() as cur:
