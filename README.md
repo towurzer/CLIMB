@@ -106,17 +106,26 @@ We will dynamically load more videos on scrolling and cache the Videos loaded fo
 
 Scrolling through search results is cheap now. The first page runs the actual search and everything after it is
 served from cache, so page four arrives in about 15ms instead of running a fourth search and throwing three pages of
-it away. Results are also one row per scene rather than one per keyframe, so a page of 48 is 48 different shots
-instead of about 22 shots shown three times each.
+it away.
+
+Results are **one row per keyframe**. This used to be one row per scene, on the theory that seven near-identical
+frames of the same shot were a waste of a page. Turns out that was throwing away the most useful thing on the screen:
+if the ten best keyframes are all the same shot, that shot is almost certainly the answer, and collapsing them to a
+single row hides exactly that. In an AVS session a submitted scene drops out of the results anyway, so the repetition
+costs you a page slot precisely once.
 
 <img src="readme_images/browsing.png" alt="browsing.png" width="500"/>
 
-If you click on a video you can see all the scenes. If you click one it will open up in the right bar.
+If you click on a video you can see **all of its keyframes**, not one per scene. For a 58-minute video with 33 master
+shots that is 611 tiles instead of 33 , the badge on each tile is still the shot number, so the scene structure stays
+readable while you scroll, and the timecode underneath tells two frames of the same shot apart. Showing one tile per
+scene was hiding 95% of what the pipeline had already decoded, embedded and OCR'd, which is a lot of GPU
+time to spend on frames nobody could look at. Click one and it opens in the right bar.
 
 <img src="readme_images/select_video.png" alt="select_video.png" width="500"/>
 
-Under the main video screen you cann see all keyframes to scroll through and a large submit to DRES button if you want to
-submit the current scene.
+The film tape at the bottom of the panel is **every keyframe of the whole video** in order.
+Next to it is a large submit to DRES button if you want to submit the current scene.
 Additionally there is an "VQA-Answer" field where you can enter a textual answer for a Visual Question Answering Task. 
 Two submit buttons let you choose what goes to DRES: "Submit image + text" sends your answer together with the selected scene, 
 "Submit text only" sends just the answer for tasks where DRES expects no media item. Both ask for confirmation first, double-clicking a button confirms it.
@@ -242,7 +251,7 @@ frontend/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
             VideoPlayer.jsx # Video player with segment loop
-            ShotBrowser.jsx # Filmstrip navigation
+            ShotBrowser.jsx # Filmstrip of every keyframe in the video
             KeyframeTime.jsx # editable keyframe time fields
             VideoBrowser.jsx# Browse all videos
             VqaAnswer.jsx   # VQA answer input + DRES submit buttons
@@ -747,10 +756,6 @@ this time" for one query, instead of retuning the weights for every query foreve
 The tickboxes do **not** gag `text:"..."` or `said:"..."`. Those only run because you typed them, and an is an
 instruction rather than a preference , so an explicit phrase search still works with OCR unticked, which beats
 returning nothing, because nothing cannot be submitted.
-
-Everything is per **scene**, not per keyframe. The old search returned keyframes, and since each
-scene had about seven of them, a page of 48 results was really about 22 shots shown three times
-each. Now one row means one shot.
 
 ##### Telling it exactly where to look
 

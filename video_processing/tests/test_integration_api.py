@@ -62,19 +62,52 @@ def test_worker_rejects_a_request_without_prompt(worker):
     assert any(entry.get("loc", [])[-1:] == ["prompt"] for entry in body["detail"])
 
 
-def test_worker_returns_one_row_per_scene(worker, corpus):
+def test_worker_returns_one_row_per_keyframe(worker, corpus):
+    """
+    A page is keyframes, not scenes, so the same scene may legitimately appear several times --
+    that repetition is the ranking saying it is confident. What must never repeat is a keyframe.
+    """
     body = _search(worker, "a man talking to the camera", top_k=40)
     results = body["results"]
     assert results, "no results for a generic query against a populated corpus"
 
-    scene_ids = [r["scene_id"] for r in results]
-    assert len(scene_ids) == len(set(scene_ids)), "the same scene appeared twice in one page"
+    keyframe_ids = [r["keyframe_id"] for r in results]
+    assert len(keyframe_ids) == len(set(keyframe_ids)), "the same keyframe appeared twice"
 
     for result in results:
         assert result["keyframe_id"] is not None
         assert result["video_id"]
         assert result["score"] > 0
         assert result["signals"]
+        # Every row carries its whole shot, so the strip under the player can scrub it without
+        # going back to browse.
+        assert result["keyframes"], "result carries no filmstrip"
+        assert result["keyframe_id"] in {k["keyframe_id"] for k in result["keyframes"]}
+
+
+def test_worker_does_not_pin_the_top_of_the_ranking_to_the_first_keyframe(worker, corpus):
+    """
+    Captions only exist for kf_index 0 (CAPTION_SCOPE defaults to `shot`). Fusing on keyframes
+    without expanding a caption hit across its scene hands kf 0 a second retriever's worth of
+    score that no sibling frame can earn.
+
+    Deliberately a small top_k. The bias is a matter of degree and it bites hardest at the very
+    top: measured on the skier query, before the fix the top 15 were 15/15 kf_index 0 while the
+    top 40 were only 82% -- so a 40-result sample sees "plenty of variety" and misses it entirely.
+    The top of page one is also the only part an operator reads under competition time.
+
+    kf 0 is ~40% of all keyframes in the corpus (14,345 scenes over 35,558 keyframes), so a
+    two-thirds ceiling still leaves generous headroom over chance.
+    """
+    results = _search(worker, "a skier jumping off a ramp", top_k=15)["results"]
+    assert results
+
+    first_frames = [r for r in results if r["kf_index"] == 0]
+    share = len(first_frames) / len(results)
+    assert share <= 0.67, (
+        f"kf_index 0 is {share:.0%} of the top {len(results)} "
+        f"({len(first_frames)}/{len(results)}) -- captions are pinning the ranking to it"
+    )
 
 
 def test_worker_honours_top_k(worker, corpus):
@@ -101,7 +134,7 @@ def test_worker_similar_returns_neighbours(worker, corpus, db):
     assert results, "find-similar returned nothing for a keyframe that has an embedding"
 
     assert keyframe_id not in {r["keyframe_id"] for r in results}, "a keyframe is its own neighbour"
-    assert len({r["scene_id"] for r in results}) == len(results), "the same scene twice"
+    assert len({r["keyframe_id"] for r in results}) == len(results), "the same keyframe twice"
 
     ranks = [r["signals"]["similar"] for r in results]
     assert ranks == sorted(ranks), f"neighbours out of distance order: {ranks}"
@@ -123,7 +156,7 @@ def test_backend_search_requires_q(backend):
     assert "q" in body["error"]
 
 
-def test_backend_search_pages_without_repeating_scenes(backend, corpus):
+def test_backend_search_pages_without_repeating_keyframes(backend, corpus):
     status, first = get_json(f"{backend}/climb/search?q=a+man+talking&page=1&per_page=10")
     assert status == 200, first
     if first["total"] <= 10:
@@ -137,8 +170,10 @@ def test_backend_search_pages_without_repeating_scenes(backend, corpus):
     assert first["has_more"] is True
     assert len(first["results"]) == 10
 
-    overlap = {r["scene_id"] for r in first["results"]} & {r["scene_id"] for r in second["results"]}
-    assert not overlap, f"pages 1 and 2 share scenes: {overlap}"
+    # Keyframes, not scenes: a shot can straddle the page boundary now, and should.
+    overlap = ({r["keyframe_id"] for r in first["results"]}
+               & {r["keyframe_id"] for r in second["results"]})
+    assert not overlap, f"pages 1 and 2 share keyframes: {overlap}"
 
 
 def test_backend_search_serves_the_second_call_from_cache(backend, corpus):

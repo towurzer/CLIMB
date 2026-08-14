@@ -488,7 +488,7 @@ function App() {
     }, [isAvs, avsSession?.code]);
 
     // Shot select from filmstrip - the one under video - that is why we can use the same video id
-    const handleShotSelect = useCallback((shot) => {
+    const handleShotSelect = useCallback((shot, clicked) => {
         // of something was submitted - reseting it
         setConfirmSubmit(false);
         setSubmitStatus(null);
@@ -498,25 +498,36 @@ function App() {
             // ShotBrowser hands over a raw scene from /videos/:id/scenes, where the keyframe
             // fields sit inside `keyframes`; VideoBrowser hands over an already-flattened one.
             // Accepting both keeps the two filmstrips from needing different callbacks.
-            const keyframe = shot.keyframes?.[0] || {};
+            const keyframes = shot.keyframes || [];
+            const fallback = keyframes[Math.floor(keyframes.length / 2)] || {};
+            const keyframe = clicked || {
+                keyframe_id: shot.keyframe_id ?? fallback.keyframe_id,
+                kf_index: shot.kf_index ?? fallback.kf_index,
+                // The keyframe instant has to survive the hop: it is what prefills the submission
+                // time and where the player seeks to. Dropping it here left both empty.
+                frame_number: shot.frame_number ?? fallback.frame_number,
+                keyframe_time_ms: shot.keyframe_time_ms ?? fallback.keyframe_time_ms,
+                thumbnail_url: shot.thumbnail_url ?? fallback.thumbnail_url,
+                keyframe_url: shot.keyframe_url ?? fallback.keyframe_url,
+            };
             return {
                 video_id: prev?.video_id || shot.video_id,
                 scene_id: shot.scene_id,
-                keyframe_id: shot.keyframe_id ?? keyframe.keyframe_id,
-                kf_index: shot.kf_index ?? keyframe.kf_index,
+                keyframe_id: keyframe.keyframe_id,
+                kf_index: keyframe.kf_index,
+                keyframes,
                 score: prev?.score || 0,
                 start_frame: shot.start_frame,
                 end_frame: shot.end_frame,
                 fps: fps,
-                // The keyframe instant has to survive the hop: it is what prefills the submission
-                // time and where the player seeks to. Dropping it here left both empty.
-                frame_number: shot.frame_number ?? keyframe.frame_number,
-                keyframe_time_ms: shot.keyframe_time_ms ?? keyframe.keyframe_time_ms,
+                frame_number: keyframe.frame_number,
+                keyframe_time_ms: keyframe.keyframe_time_ms,
                 // we need to recalculate, because DRES is usinf ms not frames.
                 // these are the bounds of the whole scene, what we submit comes from the keyframe time fields
                 start_time_ms: Math.round((shot.start_frame / fps) * 1000),
                 end_time_ms: Math.round((shot.end_frame / fps) * 1000),
-                thumbnail_url: shot.thumbnail_url,
+                thumbnail_url: keyframe.thumbnail_url,
+                keyframe_url: keyframe.keyframe_url,
                 video_url: shot.video_url || prev?.video_url,
             };
         });
@@ -909,7 +920,7 @@ function App() {
                                     </div>
                                 )}
                             </div>
-                            {/*  film tape under the video */}
+                            {/*  film tape under the video, every keyframe of the video */}
                             <ShotBrowser
                                 videoId={selectedResult.video_id}
                                 currentKeyframeId={selectedResult.keyframe_id}

@@ -24,6 +24,16 @@ pool.on('error', (err) => console.error('Postgres pool error:', err.message));
  * The worker returns scenes; every URL is derived from (video_id, shot_index, kf_index) rather
  * than read out of the database.
  */
+/** One keyframe of a scene, in the shape the filmstrip wants. Shared by search and browse. */
+const toKeyframe = (videoId, shotIndex, kf) => ({
+    keyframe_id: kf.keyframe_id,
+    kf_index: kf.kf_index,
+    frame_number: kf.frame_number,
+    keyframe_time_ms: kf.ts_ms ?? kf.keyframe_time_ms,
+    thumbnail_url: media.thumbnailUrl(videoId, shotIndex, kf.kf_index),
+    keyframe_url: media.keyframeUrl(videoId, shotIndex, kf.kf_index)
+});
+
 const toResult = (hit) => ({
     scene_id: hit.scene_id,
     keyframe_id: hit.keyframe_id,
@@ -44,6 +54,7 @@ const toResult = (hit) => ({
     thumbnail_url: media.thumbnailUrl(hit.video_id, hit.shot_index, hit.kf_index),
     keyframe_url: media.keyframeUrl(hit.video_id, hit.shot_index, hit.kf_index),
     video_url: media.videoUrl(hit.video_id),
+    keyframes: (hit.keyframes || []).map((kf) => toKeyframe(hit.video_id, hit.shot_index, kf)),
     ...(hit.temporal_partners ? {
         temporal_partners: hit.temporal_partners.map(toResult),
         temporal_gaps_ms: hit.temporal_gaps_ms
@@ -112,7 +123,7 @@ module.exports = {
                 FROM scenes s
                          JOIN keyframes k ON k.scene_id = s.scene_id
                 WHERE s.video_id = v.video_id
-                ORDER BY s.shot_index, k.kf_index
+                ORDER BY s.shot_index, abs(k.ts_ms - (s.start_ms + s.end_ms) / 2)
                 LIMIT 1) cover ON TRUE
             ORDER BY v.video_id
             LIMIT $1 OFFSET $2;
@@ -186,16 +197,17 @@ module.exports = {
                    k.ts_ms
             FROM page p
                      LEFT JOIN keyframes k ON k.scene_id = p.scene_id
-            ORDER BY p.shot_index, k.kf_index;
+            ORDER BY p.shot_index, k.ts_ms;
         `;
 
         const [scenesRes, countRes, videoRes] = await Promise.all([
             pool.query(scenesSql, usePagination ? [videoId, perPage, offset] : [videoId]),
             pool.query(`SELECT COUNT(*)::int AS total FROM scenes WHERE video_id = $1;`, [videoId]),
-            pool.query(`SELECT fps FROM videos WHERE video_id = $1`, [videoId])
+            pool.query(`SELECT fps, duration_ms FROM videos WHERE video_id = $1`, [videoId])
         ]);
 
-        const fps = videoRes.rows.length > 0 ? videoRes.rows[0].fps : 25.0;
+        const video = videoRes.rows[0] || {};
+        const fps = video.fps ?? 25.0;
 
         // Collapse the scene/keyframe join into one entry per scene.
         const byScene = new Map();
@@ -213,23 +225,24 @@ module.exports = {
                 });
             }
             if (row.keyframe_id !== null) {
-                byScene.get(row.scene_id).keyframes.push({
-                    keyframe_id: row.keyframe_id,
-                    kf_index: row.kf_index,
-                    frame_number: row.frame_number,
-                    keyframe_time_ms: row.ts_ms,
-                    thumbnail_url: media.thumbnailUrl(videoId, row.shot_index, row.kf_index),
-                    keyframe_url: media.keyframeUrl(videoId, row.shot_index, row.kf_index)
-                });
+                byScene.get(row.scene_id).keyframes.push(
+                    toKeyframe(videoId, row.shot_index, row)
+                );
             }
         }
 
         const scenes = [...byScene.values()].map((scene) => ({
             ...scene,
-            thumbnail_url: scene.keyframes[0]?.thumbnail_url || null
+            thumbnail_url:
+                scene.keyframes[Math.floor(scene.keyframes.length / 2)]?.thumbnail_url || null
         }));
-
-        return {total: countRes.rows[0].total || 0, scenes};
+        
+        return {
+            total: countRes.rows[0].total || 0,
+            fps,
+            duration_sec: Math.round((video.duration_ms || 0) / 1000),
+            scenes
+        };
     },
 
     /** Frame range of a scene, so a submission can be recorded against it. */

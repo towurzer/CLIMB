@@ -64,20 +64,28 @@ def _ends_transaction(method):
 
     return wrapper
 
-# One round trip for everything the UI needs about the fused scenes.
+# One round trip for everything the UI needs about the fused keyframes.
+#
+# Keyed on keyframe, not scene: results are one row per keyframe now, so the row *is* the frame
+# that matched. `strip` still carries the whole scene, because the panel under the player lets the
+# operator scrub the rest of the shot without going back to browse.
 ENRICH = """
-    SELECT s.scene_id, s.video_id, s.shot_index, s.start_frame, s.end_frame, s.start_ms, s.end_ms,
+    SELECT k.keyframe_id, k.kf_index, k.frame_number, k.ts_ms,
+           s.scene_id, s.video_id, s.shot_index, s.start_frame, s.end_frame, s.start_ms, s.end_ms,
            v.fps, v.duration_ms, v.damaged,
-           k.keyframe_id, k.kf_index, k.frame_number, k.ts_ms
-    FROM scenes s
+           strip.keyframes
+    FROM keyframes k
+             JOIN scenes s ON s.scene_id = k.scene_id
              JOIN videos v ON v.video_id = s.video_id
              LEFT JOIN LATERAL (
-        SELECT kk.keyframe_id, kk.kf_index, kk.frame_number, kk.ts_ms
+        SELECT json_agg(json_build_object(
+                'keyframe_id', kk.keyframe_id,
+                'kf_index', kk.kf_index,
+                'frame_number', kk.frame_number,
+                'ts_ms', kk.ts_ms) ORDER BY kk.ts_ms) AS keyframes
         FROM keyframes kk
-        WHERE kk.scene_id = s.scene_id
-        ORDER BY (kk.keyframe_id = ANY (%(preferred)s)) DESC, kk.kf_index
-        LIMIT 1) k ON TRUE
-    WHERE s.scene_id = ANY (%(scene_ids)s);
+        WHERE kk.scene_id = s.scene_id) strip ON TRUE
+    WHERE k.keyframe_id = ANY (%(keyframe_ids)s);
 """
 
 
@@ -351,30 +359,31 @@ class SearchEngine:
             exclude or [], collection or None, top_k)
         timings = {"similar": round((time.monotonic() - started) * 1000, 1)}
 
-        fused = [fusion.FusedResult(scene_id=scene_id, score=1.0 / (rank + 1),
+        fused = [fusion.FusedResult(keyframe_id=kf, scene_id=scene_id, score=1.0 / (rank + 1),
                                     signals={"similar": rank + 1},
-                                    contributions={"similar": 1.0 / (rank + 1)}, keyframe_id=kf)
-                 for rank, (scene_id, kf) in enumerate(pairs) if kf != keyframe_id][:top_k]
+                                    contributions={"similar": 1.0 / (rank + 1)})
+                 for rank, (scene_id, kf) in enumerate(pairs)
+                 if kf is not None and kf != keyframe_id][:top_k]
         return SearchResult(results=self._enrich(fused), timings=timings,
                             signals_used=["similar"])
 
     def _enrich(self, fused):
         if not fused:
             return []
-        scene_ids = [f.scene_id for f in fused]
-        preferred = [f.keyframe_id for f in fused if f.keyframe_id is not None]
+        keyframe_ids = [f.keyframe_id for f in fused]
 
         with self.conn.cursor() as cur:
-            cur.execute(ENRICH, {"scene_ids": scene_ids, "preferred": preferred or [-1]})
+            cur.execute(ENRICH, {"keyframe_ids": keyframe_ids})
             rows = {r[0]: r for r in cur.fetchall()}
 
         out = []
         for item in fused:
-            row = rows.get(item.scene_id)
+            row = rows.get(item.keyframe_id)
             if row is None:
                 continue
-            (scene_id, video_id, shot_index, start_frame, end_frame, start_ms, end_ms,
-             fps, duration_ms, damaged, keyframe_id, kf_index, frame_number, ts_ms) = row
+            (keyframe_id, kf_index, frame_number, ts_ms,
+             scene_id, video_id, shot_index, start_frame, end_frame, start_ms, end_ms,
+             fps, duration_ms, damaged, keyframes) = row
             out.append({
                 "scene_id": scene_id,
                 "keyframe_id": keyframe_id,
@@ -389,6 +398,7 @@ class SearchEngine:
                 "ts_ms": ts_ms,
                 "fps": fps,
                 "damaged": damaged,
+                "keyframes": keyframes or [],
                 "score": round(item.score, 6),
                 "signals": item.signals,
                 "contributions": item.contributions,

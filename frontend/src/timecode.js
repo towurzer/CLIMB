@@ -15,6 +15,16 @@ export function formatTimecode(ms) {
     return hours > 0 ? `${hours}:${base}` : base;
 }
 
+// seconds -> "58m 42s", for video lengths rather than moments in a video.
+export function formatDuration(seconds) {
+    const total = Math.max(0, Math.round(seconds || 0));
+    if (total < 60) return `${total}s`;
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    if (hours > 0) return `${hours}h ${pad2(minutes)}m`;
+    return `${minutes}m ${pad2(total % 60)}s`;
+}
+
 // hour and the fraction are optional, a comma works just as well as a dot
 const TIMECODE_PATTERN = /^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?$/;
 

@@ -1230,15 +1230,38 @@ body {
     display: block;
 }
 
+/* The strip is one thumb per keyframe, so a gap is what tells scenes apart. */
+.shot-thumb.scene-start {
+    margin-left: 10px;
+}
+
+.shot-strip > .shot-thumb:first-child {
+    margin-left: 0;
+}
+
+/* Shot index on top, keyframe time below it -- both fit in an 80px thumb only if they
+   sit in opposite corners, and an over-an-hour timecode is 10 characters wide. */
 .shot-label {
     position: absolute;
-    bottom: 2px;
+    top: 2px;
     left: 2px;
     font-size: 9px;
     color: #ccc;
     background: rgba(0, 0, 0, 0.7);
     padding: 1px 4px;
     border-radius: 2px;
+}
+
+.shot-time {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    font-size: 9px;
+    color: #ccc;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-variant-numeric: tabular-nums;
 }
 
 .shot-browser-loading {
@@ -1483,6 +1506,20 @@ body {
     font-weight: 600;
     padding: 2px 6px;
     border-radius: 4px;
+}
+
+/* The grid is keyframe-level, so the shot number alone no longer identifies a tile.
+The timecode is what tells them apart. */
+.browse-card-time {
+    position: absolute;
+    bottom: 4px;
+    left: 4px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #ccc;
+    font-size: 10px;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-variant-numeric: tabular-nums;
 }
 
 .browse-card-label {

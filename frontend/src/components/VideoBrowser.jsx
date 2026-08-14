@@ -1,5 +1,6 @@
 import {useState, useEffect, useCallback} from "react";
 import {sceneKey} from "../sceneKey";
+import {formatDuration, formatTimecode} from "../timecode";
 
 const SHOTS_PER_PAGE = 60;
 
@@ -161,8 +162,8 @@ function VideoBrowser({
                 setShotsTotal(data.total ?? null);
                 setSelectedVideo({
                     video_id: openVideoId,
-                    fps: fetchedShots[0]?.fps || 25,
-                    duration_sec: 0,
+                    fps: data.fps || fetchedShots[0]?.fps || 25,
+                    duration_sec: data.duration_sec || 0,
                 });
                 setShotsLoading(false);
                 onOpenVideoHandled?.();
@@ -190,16 +191,17 @@ function VideoBrowser({
 
     // When user clicks a shot, convert to result format and pass up.
     // keyframe_time_ms has to come along, it is the time we submit to DRES
-    const handleShotClick = (shot) => {
+    const handleShotClick = (shot, clicked) => {
         const fps = shot.fps || selectedVideo.fps || 25;
-        // A scene tile carries its keyframes; the first one represents it.
-        const keyframe = shot.keyframes?.[0] || {};
+        const keyframes = shot.keyframes || [];
+        const keyframe = clicked || keyframes[Math.floor(keyframes.length / 2)] || {};
         onSelectShot({
             scene_id: shot.scene_id,
             keyframe_id: keyframe.keyframe_id,
             video_id: selectedVideo.video_id,
             shot_index: shot.shot_index,
             kf_index: keyframe.kf_index,
+            keyframes,
             score: 0,
             start_frame: shot.start_frame,
             end_frame: shot.end_frame,
@@ -208,7 +210,7 @@ function VideoBrowser({
             start_time_ms: shot.start_time_ms,
             end_time_ms: shot.end_time_ms,
             keyframe_time_ms: keyframe.keyframe_time_ms,
-            thumbnail_url: shot.thumbnail_url,
+            thumbnail_url: keyframe.thumbnail_url || shot.thumbnail_url,
             keyframe_url: keyframe.keyframe_url,
             // The player builds no URLs of its own; the sharded path comes from the API.
             video_url: selectedVideo.video_url,
@@ -228,7 +230,7 @@ function VideoBrowser({
                     <span className="browse-video-title">
             {selectedVideo.video_id}
                         <span className="browse-video-meta">
-              {shotsTotal ?? shots.length} shots · {Math.round(selectedVideo.duration_sec)}s · {selectedVideo.fps}fps
+              {shotsTotal ?? shots.length} shots · {formatDuration(selectedVideo.duration_sec)} · {selectedVideo.fps}fps
             </span>
           </span>
                 </div>
@@ -236,23 +238,29 @@ function VideoBrowser({
                     <div className="browse-loading">Loading shots...</div>
                 ) : (
                     <>
+                        {/* Every keyframe, not one per scene.*/}
                         <div className="browse-grid">
-                            {shots.map((shot) => {
+                            {shots.flatMap((shot) => {
                                 const submitted = submittedScenes.has(sceneKey(shot.scene_id));
                                 const covered = coveredVideos.has(selectedVideo.video_id);
-                                return (
+                                return (shot.keyframes || []).map((keyframe) => (
                                     <div
-                                        key={shot.scene_id}
+                                        key={keyframe.keyframe_id}
                                         className={`browse-card ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
-                                        onClick={() => handleShotClick(shot)}
+                                        onClick={() => handleShotClick(shot, keyframe)}
                                     >
                                         <div className="browse-card-thumb">
-                                            <img src={shot.thumbnail_url} alt={`Scene ${shot.scene_id}`} loading="lazy"/>
+                                            <img src={keyframe.thumbnail_url}
+                                                 alt={`Scene ${shot.scene_id} keyframe ${keyframe.kf_index}`}
+                                                 loading="lazy"/>
                                             <span className="browse-card-badge">#{shot.shot_index}</span>
+                                            <span className="browse-card-time">
+                                                {formatTimecode(keyframe.keyframe_time_ms)}
+                                            </span>
                                             {submitted && <span className="submitted-badge">✓</span>}
                                         </div>
                                     </div>
-                                );
+                                ));
                             })}
                         </div>
                         <div ref={shotsSentinelRef} className="browse-sentinel"/>
@@ -292,7 +300,7 @@ function VideoBrowser({
                         </div>
                         <div className="browse-card-label">
                             <span className="browse-card-id">{video.video_id}</span>
-                            <span className="browse-card-meta">{Math.round(video.duration_sec)}s</span>
+                            <span className="browse-card-meta">{formatDuration(video.duration_sec)}</span>
                         </div>
                     </div>
                     );

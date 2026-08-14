@@ -1,10 +1,14 @@
 """
-The four retrievers. Each returns [(scene_id, keyframe_id | None)] in rank order.
+The four retrievers. Each returns [(scene_id, keyframe_id)] in rank order.
 
-Everything is scene-level. The old search returned keyframes, and since a scene had ~7 of them a
-48-result page collapsed to roughly 22 distinct scenes -- half the grid was the same shot again.
-One row per scene is the fix, and it comes for free from fusing on scene_id.
+Everything is keyframe-level. Results used to collapse to one row per scene, so a page of 48 was
+48 distinct shots; now it is 48 keyframes, and a shot whose frames fill the top of the page is
+telling you it is the answer. The scene-level retrievers (transcript, which matches a time range
+rather than a frame) expand across their scene's keyframes so they can fuse on the same key --
+see _expand_to_keyframes().
 """
+
+from collections import defaultdict
 
 from config import Config
 
@@ -137,8 +141,22 @@ def _phrase_tsquery(phrase: str) -> str | None:
     return " <-> ".join(tokens) if tokens else None
 
 
+SCENE_KEYFRAMES = """
+    SELECT scene_id, keyframe_id
+    FROM keyframes
+    WHERE scene_id = ANY (%(scene_ids)s)
+    ORDER BY scene_id, ts_ms;
+"""
+
+
 def _resolve_scenes(conn, ordered_ids, exclude, collection, limit):
-    """Filters an already-ranked keyframe list and attaches scene ids, preserving rank order."""
+    """
+    Filters an already-ranked keyframe list and attaches scene ids, preserving rank order.
+
+    Every ranked keyframe survives, no collapsing to one row per scene. Ten keyframes of the
+    same shot in the top of the list is the retriever saying the same thing ten times, and that
+    repetition is the confidence signal.
+    """
     if not ordered_ids:
         return []
     with conn.cursor() as cur:
@@ -146,16 +164,40 @@ def _resolve_scenes(conn, ordered_ids, exclude, collection, limit):
                                     "collection": collection})
         scene_of = dict(cur.fetchall())
 
-    seen, out = set(), []
+    out = []
     for keyframe_id in ordered_ids:
         scene_id = scene_of.get(keyframe_id)
-        # One row per scene: the highest-ranked keyframe of a scene represents it.
-        if scene_id is None or scene_id in seen:
+        if scene_id is None:  # excluded video, or filtered out by collection
             continue
-        seen.add(scene_id)
         out.append((scene_id, keyframe_id))
         if len(out) >= limit:
             break
+    return out
+
+
+def _expand_to_keyframes(conn, scene_rows, limit):
+    """
+    Turns a scene-level ranked list into a keyframe-level one.
+
+    Transcripts match a time range, not a frame, so a hit applies to the whole shot equally,
+    every keyframe of it inherits the scene's rank. Fusion keys on keyframes, so without this a
+    transcript hit would score nothing at all.
+    """
+    scene_ids = [scene_id for scene_id, _ in scene_rows]
+    if not scene_ids:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(SCENE_KEYFRAMES, {"scene_ids": scene_ids})
+        by_scene = defaultdict(list)
+        for scene_id, keyframe_id in cur.fetchall():
+            by_scene[scene_id].append(keyframe_id)
+
+    out = []
+    for scene_id, _ in scene_rows:
+        for keyframe_id in by_scene.get(scene_id, ()):
+            out.append((scene_id, keyframe_id))
+            if len(out) >= limit:
+                return out
     return out
 
 
@@ -239,11 +281,21 @@ def similar_to_keyframe(conn, keyframe_id, model_id, dims, exclude, collection, 
 
 
 def caption(conn, query_vector, model_id, dims, exclude, collection, limit):
+    """
+    Captions describe the shot, not the frame, so a hit expands across the scene's keyframes.
+
+    This is not cosmetic. CAPTION_SCOPE defaults to `shot`, so only kf_index 0 is ever captioned
+    and only kf 0 has a caption_embedding row. Fusion keys on keyframes, so without the expansion
+    kf 0 would be the only frame of any shot able to collect a caption contribution, a second
+    retriever's worth of score that none of its siblings can earn. Measured before this was added,
+    that pinned kf_index 0 to all 15 of the top 15 results.
+    """
     with conn.cursor() as cur:
         cur.execute(CAPTION_SEARCH, {"model_id": model_id, "dims": dims,
                                      "query": query_vector, "limit": limit * 4})
         ranked = [row[0] for row in cur.fetchall()]
-    return _resolve_scenes(conn, ranked, exclude, collection, limit)
+    scenes = _resolve_scenes(conn, ranked, exclude, collection, limit)
+    return _expand_to_keyframes(conn, scenes, limit)
 
 
 def transcript(conn, query_vector, model_id, dims, exclude, collection, limit):
@@ -252,7 +304,8 @@ def transcript(conn, query_vector, model_id, dims, exclude, collection, limit):
         cur.execute(ASR_SEARCH, {"model_id": model_id, "dims": dims, "query": query_vector,
                                  "exclude": exclude, "collection": collection, "limit": limit,
                                  "segment_limit": conf.ASR_SEGMENT_LIMIT})
-        return [(row[0], row[1]) for row in cur.fetchall()]
+        scenes = [(row[0], row[1]) for row in cur.fetchall()]
+    return _expand_to_keyframes(conn, scenes, limit)
 
 
 def transcript_phrase(conn, phrase, exclude, collection, limit):
@@ -262,4 +315,5 @@ def transcript_phrase(conn, phrase, exclude, collection, limit):
     with conn.cursor() as cur:
         cur.execute(ASR_PHRASE_SEARCH, {"tsquery": tsquery, "exclude": exclude,
                                         "collection": collection, "limit": limit})
-        return [(row[0], row[1]) for row in cur.fetchall()]
+        scenes = [(row[0], row[1]) for row in cur.fetchall()]
+    return _expand_to_keyframes(conn, scenes, limit)

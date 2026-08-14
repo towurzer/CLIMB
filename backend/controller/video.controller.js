@@ -32,6 +32,6 @@ exports.getVideoScenes = async (req, res) => {
         ? Math.min(Math.max(parseInt(req.query.per_page || '60', 10), 1), 200)
         : null;
 
-    const {total, scenes} = await queries.getVideoScenes(video_id, page, perPage);
-    res.status(200).json({video_id, scenes, total});
+    const {total, scenes, fps, duration_sec} = await queries.getVideoScenes(video_id, page, perPage);
+    res.status(200).json({video_id, scenes, total, fps, duration_sec});
 };
