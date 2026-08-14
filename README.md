@@ -968,11 +968,16 @@ one included, browser based wise I like to use
 ## Scaling up to the full V3C dataset
 
 The version of CLIMB that won the course competition indexed 200 videos and 25 hours. VBS 2027 runs against all of V3C:
-**28,450 videos, 3,800 hours, 4.14 million master shots and about 4.7 TB of video**, plus the marine (MVK) and GynSurg
-datasets. That is roughly 150x more video , and, more to the point, **289x more master shots**, because our 200-video
+**28,450 videos, 3,800 hours, 4.14 million master shots and 8.7 TB of video**, plus the marine (MVK) and medical (LHE75)
+datasets. That is roughly 150x more video, and, more to the point, **289x more master shots**, because our 200-video
 set runs about 550 shots per hour where V3C overall runs about 1,090. It is cut roughly twice as densely as we are, so
-sizing anything off hours alone quietly halves the answer. Either way it is the kind of number where "it works, just
-slowly" stops being true and things simply fall over instead.
+sizing anything off hours alone quietly halves the answer.
+
+And then there is a third number, which is the one that hurts: **1,285x more bytes**. The 200 videos we were handed had
+already been shrunk to 480x270 at 0.6 Mbit/s, a courtesy we cheerfully mistook for a video collection. Real V3C averages
+5 Mbit/s, and V3C3 alone is 3.3 TB. So the same "150x" job is 150x by the clock, 289x by the shot, and 1,285x by the
+byte, and every measurement we ever took on the course subset was taken on video that had been pre-shrunk for us.
+Either way it is the kind of number where "it works, just slowly" stops being true and things simply fall over instead.
 
 So the offline pipeline is being rebuilt. The shape of it:
 
