@@ -123,6 +123,32 @@ def test_worker_exclude_drops_that_video(worker, corpus):
     assert all(r["video_id"] != victim for r in filtered["results"])
 
 
+def test_worker_excludes_every_video_written_into_the_prompt(worker, corpus):
+    """
+    The exclude button appends `--exclude: 00083, 00140, 00004` to the query text, and for a long
+    time that suffix was the only carrier -- so this is the path that actually ran in the UI.
+
+    `--exclude:\\s*([^\\s]*)` stopped at the first space: video one was excluded, videos two and
+    three were dropped, and their ids stayed in the query where they reached the text embedding and
+    came back as OCR tokens. Excluding a second video did not merely fail, it moved the results.
+    Three videos, because a one-video list passed the old pattern perfectly.
+    """
+    query = "a man talking to the camera"
+    victims = []
+    for result in _search(worker, query, top_k=40)["results"]:
+        if result["video_id"] not in victims:
+            victims.append(result["video_id"])
+        if len(victims) == 3:
+            break
+    assert len(victims) == 3, "corpus has fewer than three videos in the top 40"
+
+    suffix = ", ".join(victims)
+    filtered = _search(worker, f"{query} --exclude: {suffix}", top_k=40)["results"]
+
+    survivors = {r["video_id"] for r in filtered} & set(victims)
+    assert not survivors, f"excluded {victims} but {sorted(survivors)} came back"
+
+
 def test_worker_similar_returns_neighbours(worker, corpus, db):
     with db.cursor() as cur:
         cur.execute("SELECT keyframe_id FROM keyframe_embedding ORDER BY keyframe_id LIMIT 1;")

@@ -86,6 +86,11 @@ function App() {
         sourcesRef.current = sources;
     }, [sources]);
 
+    const excludedRef = useRef(excludedVideos);
+    useEffect(() => {
+        excludedRef.current = excludedVideos;
+    }, [excludedVideos]);
+
     const isAvs = taskMode === "avs";
 
     // The submitted time is the keyframe, not the scene, so both fields start out on the keyframe
@@ -183,8 +188,11 @@ function App() {
             const sourcesParam = picked.length < ALL_SOURCE_KEYS.length
                 ? `&sources=${picked.join(",")}`
                 : "";
+
+            const excluded = excludedRef.current;
+            const excludeParam = excluded.length ? `&exclude=${excluded.join(",")}` : "";
             const res = await fetch(
-                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}${sourcesParam}`
+                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}${sourcesParam}${excludeParam}`
             );
             const data = await res.json();
             const pageResults = data.results || [];
@@ -237,6 +245,7 @@ function App() {
         setConfirmSubmit(false);
         setSearchHasMore(false);
         setSearchPage(1);
+        excludedRef.current = [];
         setExcludedVideos([]);
         setSimilarSource(null);
         setSearchHistory((prev) => {
@@ -274,27 +283,37 @@ function App() {
 
     // Find similar refines what we are already looking at, so exclusions carry over
     const handleFindSimilar = useCallback(async (result) => {
+        const excluded = excludedRef.current;
         setLoading(true);
         setMode("search");
-        setQuery(similarLabel(result.video_id, result.keyframe_id, excludedVideos));
+        setQuery(similarLabel(result.video_id, result.keyframe_id, excluded));
         setSimilarSource({video_id: result.video_id, keyframe_id: result.keyframe_id});
         setSelectedResult(null);
         setConfirmSubmit(false);
         try {
-            await fetchSimilarPage(result.keyframe_id, excludedVideos);
+            await fetchSimilarPage(result.keyframe_id, excluded);
         } finally {
             setLoading(false);
         }
-    }, [excludedVideos, fetchSimilarPage]);
+    }, [fetchSimilarPage]);
 
     // Exclude video from search
     const handleExcludeVideo = useCallback(async (result) => {
-        const baseQuery = query.split(" --exclude:")[0].trim();
-        // nothing has been searched yet, so there is no result set to exclude from - ignore it
-        if (!baseQuery) return;
-
-        const updatedExcluded = [...new Set([...excludedVideos, result.video_id])];
+        const updatedExcluded = [...new Set([...excludedRef.current, result.video_id])];
+        excludedRef.current = updatedExcluded;
         setExcludedVideos(updatedExcluded);
+
+        const baseQuery = query.split(" --exclude:")[0].trim();
+        if (!baseQuery) {
+            setSnackbar({
+                visible: true,
+                message: `${result.video_id} excluded - it will be left out of your next search`,
+                type: "info",
+                raw: null,
+            });
+            setTimeout(() => setSnackbar((s) => ({...s, visible: false})), 4000);
+            return;
+        }
 
         // re-run whichever kind of search produced the current results (similarity search / text search)
         const isSimilar = Boolean(similarSource);
@@ -321,7 +340,7 @@ function App() {
         } finally {
             setLoading(false);
         }
-    }, [query, excludedVideos, similarSource, fetchSearchPage, fetchSimilarPage]);
+    }, [query, similarSource, fetchSearchPage, fetchSimilarPage]);
 
     const handleDresLogin = useCallback(async () => {
         if (!dresUsername.trim() || !dresPassword.trim()) {
@@ -622,7 +641,7 @@ function App() {
         try {
             // ask for next page, endpoint depends on search type
             if (similarSource) {
-                await fetchSimilarPage(similarSource.keyframe_id, excludedVideos, nextPage, true);
+                await fetchSimilarPage(similarSource.keyframe_id, excludedRef.current, nextPage, true);
             } else {
                 await fetchSearchPage(query, nextPage, true);
             }
@@ -631,7 +650,7 @@ function App() {
         } finally {
             setSearchLoadingMore(false);
         }
-    }, [searchHasMore, loading, searchLoadingMore, searchPage, query, similarSource, excludedVideos, fetchSearchPage, fetchSimilarPage]);
+    }, [searchHasMore, loading, searchLoadingMore, searchPage, query, similarSource, fetchSearchPage, fetchSimilarPage]);
 
     useEffect(() => {
         if (!searchSentinel || !resultsPanel || !searchHasMore) return;

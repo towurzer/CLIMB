@@ -768,6 +768,10 @@ returning nothing, because nothing cannot be submitted.
 | `a dog >> a man on a bike` | one thing, then the other, in the same video              |
 | `a dog >>(d120) a man on a bike` | the same, but within 120 seconds                          |
 
+The x on a result card does the same thing without typing: it drops that video and re-runs the search on the spot. It
+appends its list to the box as `--exclude: 00083, 00140, 00004` so you can see what you have thrown away, and it sends
+that list as its own parameter, which is the one that counts.
+
 ##### Searching for things that happen in order
 
 Sometimes you do not remember a shot, you remember a *sequence* , the interview, then the building. `>>` chains

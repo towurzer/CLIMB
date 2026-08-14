@@ -76,6 +76,29 @@ def test_legacy_exclude_syntax_still_understood():
     assert parsed.free_text == "a dog"
 
 
+def test_legacy_exclude_list_is_separated_by_comma_and_space():
+    # The exact string the exclude button writes -- `join(", ")`, spaces and all. This test used to
+    # exist only in the no-space form, which is a form the frontend has never produced: the pattern
+    # stopped at the first space, so only 00083 was excluded and the other two stayed in the query.
+    parsed = parse("a skier doing a backflip --exclude: 00083, 00140, 00004")
+    assert parsed.exclude_videos == ["00083", "00140", "00004"]
+    # And the ids must not survive as search terms: as free text they reach the text embedding, and
+    # `00004` is a token the OCR retriever will happily go looking for.
+    assert parsed.free_text == "a skier doing a backflip"
+
+
+def test_legacy_exclude_leaves_the_rest_of_the_query_alone():
+    parsed = parse("a dog --exclude: 00191, 00042 chasing a car")
+    assert parsed.exclude_videos == ["00191", "00042"]
+    assert parsed.free_text == "a dog chasing a car"
+
+
+def test_legacy_exclude_marker_without_a_list_is_not_a_search_term():
+    parsed = parse("a dog --exclude:")
+    assert parsed.exclude_videos == []
+    assert parsed.free_text == "a dog"
+
+
 # --- distinctive tokens ------------------------------------------------------------------------
 
 def test_proper_nouns_win_when_present():
@@ -219,3 +242,11 @@ def test_exclusion_on_one_stage_applies_to_the_whole_sequence():
 def test_exclusions_from_several_stages_are_merged_and_deduped():
     query = temporal("a -video:00191 >> b -video:00042 >> c -video:00191")
     assert query.exclude_videos == ["00191", "00042"]
+
+
+def test_legacy_exclusions_survive_a_sequence_query():
+    # The exclude button appends its list to whatever is in the box, sequence syntax included, so
+    # the suffix lands on the last stage and still has to apply to all of them.
+    query = temporal("a dog >> a car --exclude: 00191, 00042")
+    assert query.exclude_videos == ["00191", "00042"]
+    assert [stage.free_text for stage in query.stages] == ["a dog", "a car"]

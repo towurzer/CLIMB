@@ -30,7 +30,9 @@ TEXT_PREFIX = re.compile(r'\btext:"([^"]*)"', re.I)
 SAID_PREFIX = re.compile(r'\bsaid:"([^"]*)"', re.I)
 EXCLUDE_PREFIX = re.compile(r'-video:([A-Za-z0-9_]+)')
 # Legacy syntax the frontend still appends; kept so an old client does not silently search for it.
-LEGACY_EXCLUDE = re.compile(r'--exclude:\s*([^\s]*)')
+#
+# The list is comma separated *with spaces*, the frontend writes `--exclude: 00083, 00140, 00004`.
+LEGACY_EXCLUDE = re.compile(r'--exclude:\s*([A-Za-z0-9_]*(?:\s*,\s*[A-Za-z0-9_]+)*)')
 
 WORD = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
 
@@ -143,7 +145,7 @@ def parse(query: str) -> ParsedQuery:
     remainder = EXCLUDE_PREFIX.sub(" ", remainder)
 
     for match in LEGACY_EXCLUDE.finditer(remainder):
-        exclude.extend(v for v in match.group(1).split(",") if v)
+        exclude.extend(v for v in (p.strip() for p in match.group(1).split(",")) if v)
     remainder = LEGACY_EXCLUDE.sub(" ", remainder)
 
     return ParsedQuery(
