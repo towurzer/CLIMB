@@ -770,7 +770,7 @@ lexical pass falls back to ORing every content word, so `a snowboarder doing a b
 subtitles say "backflip", and eight of those sit above the first actual snowboarder. Unticking OCR is how you say "not
 this time" for one query, instead of retuning the weights for every query forever.
 
-The tickboxes do **not** gag `text:"..."` or `said:"..."`. Those only run because you typed them, and an is an
+The tickboxes do **not** gag `text:...` or `said:...`. Those only run because you typed them, and an is an
 instruction rather than a preference , so an explicit phrase search still works with OCR unticked, which beats
 returning nothing, because nothing cannot be submitted.
 
@@ -779,11 +779,18 @@ returning nothing, because nothing cannot be submitted.
 | You type | What happens                                              |
 |----------|-----------------------------------------------------------|
 | `a red car on a bridge` | everything searches                                       |
-| `text:"BOULANGERIE"` | on-screen text only, as an exact phrase (typos tolerated) |
-| `said:"after the earthquake"` | spoken words only                                         |
+| `text:BOULANGERIE` | on-screen text only, as an exact phrase (typos tolerated) |
+| `said: after the earthquake` | spoken words only                                         |
 | `-video:00191` | leave that video out (repeatable)                         |
 | `a dog >> a man on a bike` | one thing, then the other, in the same video              |
 | `a dog >>(d120) a man on a bike` | the same, but within 120 seconds                          |
+
+The quotes are optional , the colon is what makes it an operator, and a space after it is fine. Unquoted, the phrase
+runs to the end of the stage or to the next operator, so `text:BANK said:we are live` is two phrases and
+`said: after the earthquake` is one. Quote it when you want plain words on the same stage: `text:"Dupont" a man walks
+past` searches for both, where `text:Dupont a man walks past` is one long and rather optimistic phrase. This used to
+fail silently , typing `said: after the earthquake` searched for the *word* "said" on signs, at four times the weight
+of the picture, and cheerfully returned something.
 
 The x on a result card does the same thing without typing: it drops that video and re-runs the search on the spot. It
 appends its list to the box as `--exclude: 00083, 00140, 00004` so you can see what you have thrown away, and it sends

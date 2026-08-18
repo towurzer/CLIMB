@@ -51,6 +51,65 @@ def test_prefix_alongside_free_text_is_not_targeted():
     assert not parsed.targeted
 
 
+# --- unquoted operators ------------------------------------------------------------------------
+#
+# The colon is what makes it an operator. Before this, `said: after the earthquake` parsed as free
+# text with `said` among its distinctive tokens, which sent the word to the lexical retriever at
+# four times the visual weight -- a wrong search that still returned results.
+
+@pytest.mark.parametrize("query", [
+    'said:"perfect execution"',
+    'said: "perfect execution"',
+    "said:perfect execution",
+    "said: perfect execution",
+    "SAID: perfect execution",
+])
+def test_said_takes_the_phrase_with_or_without_quotes(query):
+    parsed = parse(query)
+    assert parsed.asr_phrase == "perfect execution"
+    assert parsed.free_text == ""
+
+
+def test_bare_text_operator_takes_the_rest_of_the_stage():
+    parsed = parse("text:Boulangerie Dupont")
+    assert parsed.ocr_phrase == "Boulangerie Dupont"
+    assert parsed.free_text == ""
+
+
+def test_a_bare_phrase_stops_at_the_next_operator():
+    parsed = parse("text:BANK said:we are live")
+    assert parsed.ocr_phrase == "BANK"
+    assert parsed.asr_phrase == "we are live"
+    assert parsed.free_text == ""
+
+
+def test_a_bare_phrase_stops_at_an_exclusion():
+    parsed = parse("said: hello -video:00191")
+    assert parsed.asr_phrase == "hello"
+    assert parsed.exclude_videos == ["00191"]
+    assert parsed.free_text == ""
+
+
+def test_quotes_are_still_how_a_phrase_and_free_text_share_a_stage():
+    """The bare form is greedy by design, so quoting is what keeps the two apart."""
+    assert parse('text:"Dupont" a man walks past').free_text == "a man walks past"
+    assert parse("text:Dupont a man walks past").ocr_phrase == "Dupont a man walks past"
+
+
+@pytest.mark.parametrize("query", ["text:", "said:", "text: ", "said:  "])
+def test_an_operator_with_no_phrase_is_not_a_search_term(query):
+    parsed = parse(query)
+    assert parsed.ocr_phrase is None
+    assert parsed.asr_phrase is None
+    assert not parsed.has_content
+
+
+def test_a_bare_phrase_does_not_swallow_the_next_stage():
+    query = temporal("said: he is leaving >> text:EXIT")
+    assert [stage.asr_phrase for stage in query.stages] == ["he is leaving", None]
+    assert [stage.ocr_phrase for stage in query.stages] == [None, "EXIT"]
+
+
 def test_empty_query_has_no_content():
     assert not parse("").has_content
     assert not parse("   ").has_content

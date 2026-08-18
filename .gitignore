@@ -228,8 +228,9 @@ __pycache__/
 .DS_Store
 .env
 dist/
-/papers/
+/papers/demo-paper/out
 
 
 # database dump
 climb_db_backup.dump
+papers/demo-paper/Instructions+for+Authors+PDF.pdf

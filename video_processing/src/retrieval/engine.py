@@ -354,8 +354,11 @@ class SearchEngine:
                                      + (time.monotonic() - started) * 1000, 1)
             return vector
 
-        # Visual first, so its keyframe is the one shown -- it is the frame that actually matched,
-        # where OCR and ASR only identify the scene.
+        # Order below carries no meaning: fusion sums per keyframe and breaks ties on keyframe_id,
+        # so which retriever runs first changes neither the ranking nor which frame is shown. It
+        # used to, back when results collapsed to one row per scene and the first retriever to
+        # reach a scene decided its frame. They do not collapse any more -- the scene-level signals
+        # expand across the shot instead, see retrievers._expand_to_keyframes().
         visual_spec = self.visual_model_for(collection)
         if parsed.has_free_text and visual_spec:
             if enabled("visual"):

@@ -12,11 +12,19 @@ like and proper nouns are exactly what OCR contributes that nothing else can.
 
 Syntax:
     plain words              every retriever
-    text:"..."               OCR only, matched as a phrase
-    said:"..."               transcripts only, matched as a phrase
+    text:"..." / text:...    OCR only, matched as a phrase
+    said:"..." / said:...    transcripts only, matched as a phrase
     -video:00191             exclude a video (repeatable)
     A >> B                   A, then B within the default window, in the same video
     A >>(d120) B             the same, with a 120 second window
+
+The quotes are optional: the colon is what makes it an operator. Unquoted, the phrase runs to the
+end of the stage or to the next operator, so `said: after the earthquake` is the whole sentence and
+`text:BANK said:we are live` is two phrases. Quotes are still the way to put a phrase and free text
+on the *same* stage -- `text:"Dupont" a man walks past` searches for both, where `text:Dupont a man
+walks past` is one long phrase. Typing an operator and getting a free-text search instead was a
+silent failure: the word `said` went to the lexical retriever, at four times the weight of the
+visual one, and hunted for signs reading "said".
 
 `>>` chains: `A >> B >> C` is three stages and two independent windows. Each stage is a complete
 query in its own right -- `text:"Boulangerie" >> a dog runs past` is a legal sequence -- because a
@@ -26,8 +34,24 @@ stage is scored by the full fused search, not by the visual retriever alone.
 import re
 from dataclasses import dataclass, field
 
-TEXT_PREFIX = re.compile(r'\btext:"([^"]*)"', re.I)
-SAID_PREFIX = re.compile(r'\bsaid:"([^"]*)"', re.I)
+# Where an unquoted phrase has to stop: the next operator, or the end of the stage. `>>` never
+# appears here because stages are split before parse() sees them.
+_NEXT_OPERATOR = r'(?=\s+(?:text:|said:|-video:|--exclude:)|$)'
+
+
+def _phrase_prefix(keyword: str):
+    """
+    `keyword:"a phrase"` or the bare `keyword:a phrase`.
+
+    The quoted branch is first and deliberately carries no terminator: it already knows where it
+    ends, so `text:"Dupont" a man walks past` leaves the rest as free text. The bare branch cannot
+    contain a quote, which is what keeps the two from fighting over the same string.
+    """
+    return re.compile(rf'\b{keyword}:\s*(?:"([^"]*)"|([^"]*?){_NEXT_OPERATOR})', re.I)
+
+
+TEXT_PREFIX = _phrase_prefix("text")
+SAID_PREFIX = _phrase_prefix("said")
 EXCLUDE_PREFIX = re.compile(r'-video:([A-Za-z0-9_]+)')
 # Legacy syntax the frontend still appends; kept so an old client does not silently search for it.
 #
@@ -127,17 +151,23 @@ def _dedupe(values) -> list:
     return out
 
 
+def _phrase(match) -> str | None:
+    """The quoted group or the bare one, whichever branch fired."""
+    if not match:
+        return None
+    quoted, bare = match.group(1), match.group(2)
+    return (quoted if quoted is not None else bare).strip()
+
+
 def parse(query: str) -> ParsedQuery:
     raw = query or ""
     remainder = raw
     exclude = []
 
-    ocr_match = TEXT_PREFIX.search(remainder)
-    ocr_phrase = ocr_match.group(1).strip() if ocr_match else None
+    ocr_phrase = _phrase(TEXT_PREFIX.search(remainder))
     remainder = TEXT_PREFIX.sub(" ", remainder)
 
-    said_match = SAID_PREFIX.search(remainder)
-    asr_phrase = said_match.group(1).strip() if said_match else None
+    asr_phrase = _phrase(SAID_PREFIX.search(remainder))
     remainder = SAID_PREFIX.sub(" ", remainder)
 
     for match in EXCLUDE_PREFIX.finditer(remainder):
