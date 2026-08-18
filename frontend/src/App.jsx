@@ -731,7 +731,7 @@ function App() {
             <header className="app-header">
                 <div className="app-header-left">
                     <h1>
-                        CLIMB, Keyframe-Level Multi-Signal Retrieval with Collaborative Ad-Hoc Search
+                        CLIMB, Multi-Signal Keyframe Retrieval with Collaborative Ad-Hoc Search
                         <br/>
                         Made with love from the <a href="https://www.aau.at">AAU</a> students <a href="https://github.com/towurzer">Wurzer</a> and <a
                         href="https://github.com/sesnr">Eisner</a>.
