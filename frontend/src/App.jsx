@@ -732,9 +732,6 @@ function App() {
                 <div className="app-header-left">
                     <h1>
                         CLIMB, Multi-Signal Keyframe Retrieval with Collaborative Ad-Hoc Search
-                        <br/>
-                        Made with love from the <a href="https://www.aau.at">AAU</a> students <a href="https://github.com/towurzer">Wurzer</a> and <a
-                        href="https://github.com/sesnr">Eisner</a>.
                     </h1>
                 </div>
 
