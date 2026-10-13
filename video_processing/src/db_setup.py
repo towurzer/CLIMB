@@ -29,7 +29,7 @@ def get_container_command():
 
     # The vector/pg_trgm/unaccent extensions used to need a manual psql invocation here.
     # Migration 001 creates them, so the only follow-up step is running the migrations.
-    print("\n\nThen create the schema by running:\n\n    python src/main.py --migrate")
+    print("\n\nThen create the schema by running:\n\n    python main.py migrate")
 
     print(
         f"\n\nNote: {conf.DB_IMAGE} is PostgreSQL 17. A data volume written by the previous "

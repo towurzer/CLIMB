@@ -29,6 +29,7 @@ from pathlib import Path
 import custom_logger
 from config import Config
 from pipeline import paths
+from tqdm import tqdm
 
 STAGES = ["PENDING", "FETCHED", "DECODED", "SELECTED", "EMBEDDED",
           "OCR_DONE", "CAPTIONED", "ASR_DONE", "LOADED", "PURGED", "FAILED"]
@@ -169,23 +170,24 @@ def fetch(conn, limit=None, collection=None) -> int:
         return 0
 
     fetched = []
-    for video_id, _, source_uri in jobs:
-        destination = paths.ensure_parent(paths.raw_video_path(video_id, Path(source_uri).suffix or ".mp4"))
-        if destination.exists():
-            fetched.append(video_id)
-            continue
+    with tqdm(jobs, desc="Fetching videos", unit="video") as progress:
+        for video_id, _, source_uri in progress:
+            destination = paths.ensure_parent(paths.raw_video_path(video_id, Path(source_uri).suffix or ".mp4"))
+            if destination.exists():
+                fetched.append(video_id)
+                continue
 
-        command = conf.FETCH_COMMAND.format(source=shlex.quote(source_uri),
-                                            dest=shlex.quote(str(destination)))
-        try:
-            subprocess.run(command, shell=True, check=True, capture_output=True)
-            fetched.append(video_id)
-        except subprocess.CalledProcessError as e:
-            error = e.stderr.decode("utf-8", errors="ignore").strip()[-300:]
-            logger.error(f"{video_id}: fetch failed ({error})")
-            with conn.cursor() as cur:
-                cur.execute(SET_FAILED, (error, video_id))
-            conn.commit()
+            command = conf.FETCH_COMMAND.format(source=shlex.quote(source_uri),
+                                                dest=shlex.quote(str(destination)))
+            try:
+                subprocess.run(command, shell=True, check=True, capture_output=True)
+                fetched.append(video_id)
+            except subprocess.CalledProcessError as e:
+                error = e.stderr.decode("utf-8", errors="ignore").strip()[-300:]
+                logger.error(f"{video_id}: fetch failed ({error})")
+                with conn.cursor() as cur:
+                    cur.execute(SET_FAILED, (error, video_id))
+                conn.commit()
 
     if fetched:
         with conn.cursor() as cur:
@@ -223,19 +225,21 @@ def purge(conn, collection=None, keep_raw=False) -> PurgeResult:
     # Raw video: safe as soon as decode produced its outputs. Verified on disk rather than from a
     # stage flag, so a half-finished decode cannot lose the only copy of the source.
     if not keep_raw:
-        for raw in sorted(Path(paths._work_root() / "raw").glob("*")) if (paths._work_root() / "raw").exists() else []:
+        raw_files = sorted(Path(paths._work_root() / "raw").glob("*")) \
+            if (paths._work_root() / "raw").exists() else []
+        for raw in tqdm(raw_files, desc="Purging raw videos", unit="video"):
             video_id = raw.name.split(".")[0]
             if paths.web_video_path(video_id).exists() and paths.candidate_frames(video_id):
                 result.bytes_freed += _remove(raw)
                 result.raw += 1
 
-    for video_id in candidates_done:
+    for video_id in tqdm(candidates_done, desc="Purging candidates", unit="video"):
         directory = paths.candidate_dir(video_id)
         if directory.exists():
             result.bytes_freed += _remove(directory)
             result.candidates += 1
 
-    for video_id in audio_done:
+    for video_id in tqdm(audio_done, desc="Purging audio", unit="video"):
         audio = paths.audio_path(video_id)
         if audio.exists():
             result.bytes_freed += _remove(audio)

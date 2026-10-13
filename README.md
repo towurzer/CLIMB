@@ -557,8 +557,10 @@ A few things worth knowing:
   put the output on your external SSD rather than filling up your laptop.
 - **NVENC is used automatically if your GPU can actually do it.** Note the "actually": the old check just asked FFmpeg
   whether it knew what NVENC *was*, which every distro build cheerfully says yes to, GPU or no GPU. It now tries to
-  encode a single tiny frame and believes the result. If a GPU encode fails mid-run (consumer cards limit how many
-  NVENC sessions you can have at once) that video quietly falls back to the CPU.
+  encode a single tiny frame and believes the result. When NVENC is selected, the same path also uses CUDA hardware
+  decoding and CUDA scaling; candidate JPEGs are downloaded back to system memory because JPEG encoding is CPU-based.
+  If hardware processing fails mid-run (consumer cards limit how many NVENC sessions you can have at once), that video
+  quietly falls back to the CPU.
 
 - **Broken videos get indexed anyway.** V3C1_200 contains two videos (00016 and 00024) whose H.264 streams are damaged
   , the container promises 23,120 and 47,289 frames, the bitstream delivers about 84% of that and a great deal of

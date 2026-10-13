@@ -11,6 +11,7 @@ from psycopg2.extras import execute_values
 import custom_logger
 from config import Config
 from pipeline import paths
+from tqdm import tqdm
 from pipeline.decode import candidate_stride
 
 SELECT_SCENES = """
@@ -278,16 +279,17 @@ def select_from_database(conn, collection=None, limit=None, force=False, workers
     with ProcessPoolExecutor(max_workers=workers,
                              initializer=custom_logger.setup_worker_logging) as executor:
         futures = {executor.submit(_selection_worker, job): job[0] for job in jobs}
-        for future in as_completed(futures):
-            result, rows = future.result()
-            results.append(result)
-            if not result.ok:
-                logger.error(f"{result.video_id}: {result.error}")
-                continue
-            if rows:
-                with conn.cursor() as cur:
-                    execute_values(cur, INSERT_KEYFRAMES, rows, page_size=1000)
-                conn.commit()
+        with tqdm(total=len(futures), desc="Selecting keyframes", unit="video") as progress:
+            for future in as_completed(futures):
+                result, rows = future.result()
+                results.append(result)
+                if not result.ok:
+                    logger.error(f"{result.video_id}: {result.error}")
+                elif rows:
+                    with conn.cursor() as cur:
+                        execute_values(cur, INSERT_KEYFRAMES, rows, page_size=1000)
+                    conn.commit()
+                progress.update()
 
     ok = [r for r in results if r.ok]
     logger.info(

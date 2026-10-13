@@ -11,6 +11,7 @@ from pathlib import Path
 import custom_logger
 from config import Config
 from pipeline import paths
+from tqdm import tqdm
 
 # Fraction of the expected candidate frames that must actually be on disk. Container durations are
 # not always exact, so this is not 1.0
@@ -59,7 +60,7 @@ def has_nvenc() -> bool:
     try:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error",
-             "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+             "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1,format=yuv420p",
              "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-"],
             capture_output=True, timeout=60,
         )
@@ -108,19 +109,32 @@ def build_command(video_id, source_path, fps, use_gpu=False, with_audio=True) ->
 
     # min(H,ih) never upscales. The course's V3C1_200 videos are already 480x270, and blowing them
     # up to 360 lines would cost bitrate for no additional detail.
-    web_scale = f"scale=-2:min({conf.WEB_VIDEO_HEIGHT}\\,ih)"
-    candidate_scale = f"scale=-2:min({conf.CANDIDATE_HEIGHT}\\,ih)"
+    web_scale = (
+        f"scale_cuda=-2:min({conf.WEB_VIDEO_HEIGHT}\\,ih)"
+        if use_gpu else f"scale=-2:min({conf.WEB_VIDEO_HEIGHT}\\,ih)"
+    )
+    candidate_scale = (
+        f"scale_cuda=-2:min({conf.CANDIDATE_HEIGHT}\\,ih)"
+        if use_gpu else f"scale=-2:min({conf.CANDIDATE_HEIGHT}\\,ih)"
+    )
     # select on the frame counter, not the fps filter -- see candidate_source_frame().
     filtergraph = (
         f"[0:v]split=2[web][cand];"
         f"[web]{web_scale}[w];"
-        f"[cand]select='not(mod(n\\,{stride}))',{candidate_scale}[c]"
+        f"[cand]select='not(mod(n\\,{stride}))',{candidate_scale}"
+        f"{',hwdownload,format=nv12' if use_gpu else ''}[c]"
     )
 
     command = [
         "ffmpeg", "-y",
         "-nostdin",          # many of these run at once; none of them may eat the terminal
         "-loglevel", "error",
+    ]
+    if use_gpu:
+        # Keep decoded frames in CUDA memory for the CUDA filters and NVENC. The candidate branch
+        # downloads frames again because the image2 JPEG muxer is CPU-based.
+        command += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    command += [
         "-threads", str(conf.FFMPEG_THREADS),
         "-i", str(source_path),
         "-filter_complex", filtergraph,
@@ -228,7 +242,13 @@ def decode_video(video_id, source_path, fps, duration_ms=None, use_gpu=False, wi
             # Clean up a partial transcode so a resumed run does not mistake it for a finished one.
             web_out.unlink(missing_ok=True)
             if attempt_index < len(attempts) - 1:
-                logger.warning(f"{video_id}: GPU encode failed, retrying on CPU ({stderr[-160:]})")
+                for partial in paths.candidate_frames(video_id):
+                    partial.unlink()
+                if with_audio:
+                    paths.audio_path(video_id).unlink(missing_ok=True)
+                logger.warning(
+                    f"{video_id}: GPU decode/encode failed, retrying on CPU ({stderr[-160:]})"
+                )
                 continue
             return DecodeResult(video_id, False, error=stderr[-500:] or "ffmpeg failed")
 
@@ -309,18 +329,20 @@ def decode_batch(jobs, use_gpu=None, force=False, workers=None):
     with ProcessPoolExecutor(max_workers=workers,
                              initializer=custom_logger.setup_worker_logging) as executor:
         futures = {executor.submit(_decode_worker, item): item[0] for item in payload}
-        for future in as_completed(futures):
-            video_id = futures[future]
-            try:
-                result = future.result()
-            except Exception as e:
-                result = DecodeResult(video_id, False, error=f"worker crashed: {e}")
+        with tqdm(total=len(futures), desc="Decoding videos", unit="video") as progress:
+            for future in as_completed(futures):
+                video_id = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    result = DecodeResult(video_id, False, error=f"worker crashed: {e}")
 
-            results.append(result)
-            if result.ok:
-                logger.debug(f"{video_id}: {result.candidate_count} candidate frames")
-            else:
-                logger.error(f"{video_id}: {result.error}")
+                results.append(result)
+                if result.ok:
+                    logger.debug(f"{video_id}: {result.candidate_count} candidate frames")
+                else:
+                    logger.error(f"{video_id}: {result.error}")
+                progress.update()
 
     succeeded = sum(1 for r in results if r.ok)
     damaged = sum(1 for r in results if r.damaged)

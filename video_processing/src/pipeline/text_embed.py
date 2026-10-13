@@ -8,6 +8,7 @@ import custom_logger
 from config import Config
 from pipeline import device
 from psycopg2.extras import execute_values
+from tqdm import tqdm
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
 
@@ -94,23 +95,24 @@ def to_pgvector(values) -> str:
     return "[" + ",".join(f"{v:.6f}" for v in values) + "]"
 
 
-def _run(conn, select_sql, insert_sql, model_id, params, tokenizer, model, dev, batch_size, label):
+def _run(conn, select_sql, insert_sql, model_id, params, tokenizer, model, dev, batch_size,
+         label, total):
     logger = custom_logger.get_logger("text_embed")
     done = 0
-    while True:
-        with conn.cursor() as cur:
-            cur.execute(select_sql, {**params, "model_id": model_id, "limit": batch_size})
-            rows = cur.fetchall()
-        if not rows:
-            break
-        vectors = encode([as_passage(text) for _, text in rows], tokenizer, model, dev)
-        payload = [(key, model_id, to_pgvector(v)) for (key, _), v in zip(rows, vectors)]
-        with conn.cursor() as cur:
-            execute_values(cur, insert_sql, payload, page_size=500)
-        conn.commit()
-        done += len(payload)
-        if done % (batch_size * 20) == 0:
-            logger.info(f"  {label}: {done} embedded")
+    with tqdm(total=total, desc=f"Embedding {label}", unit="item") as progress:
+        while True:
+            with conn.cursor() as cur:
+                cur.execute(select_sql, {**params, "model_id": model_id, "limit": batch_size})
+                rows = cur.fetchall()
+            if not rows:
+                break
+            vectors = encode([as_passage(text) for _, text in rows], tokenizer, model, dev)
+            payload = [(key, model_id, to_pgvector(v)) for (key, _), v in zip(rows, vectors)]
+            with conn.cursor() as cur:
+                execute_values(cur, insert_sql, payload, page_size=500)
+            conn.commit()
+            done += len(payload)
+            progress.update(len(payload))
     return done
 
 
@@ -136,10 +138,30 @@ def embed_text_pending(conn, collection=None, batch_size=None, shard=0, shards=1
     params = {"collection": collection, "shard": shard, "shards": shards}
     result = TextEmbedResult()
 
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM transcript_segment s JOIN videos v ON v.video_id = s.video_id "
+            "WHERE s.text <> '' AND NOT EXISTS (SELECT 1 FROM transcript_embedding e "
+            "WHERE e.segment_id = s.segment_id AND e.model_id = %s) "
+            "AND (%s IS NULL OR v.collection = %s) AND mod(s.segment_id, %s) = %s",
+            (model_id, collection, collection, shards, shard),
+        )
+        transcript_total = cur.fetchone()[0]
+        cur.execute(
+            "SELECT count(*) FROM keyframe_caption c JOIN keyframes k ON k.keyframe_id = c.keyframe_id "
+            "JOIN videos v ON v.video_id = k.video_id WHERE c.caption <> '' "
+            "AND NOT EXISTS (SELECT 1 FROM caption_embedding e "
+            "WHERE e.keyframe_id = c.keyframe_id AND e.model_id = %s) "
+            "AND (%s IS NULL OR v.collection = %s) AND mod(c.keyframe_id, %s) = %s",
+            (model_id, collection, collection, shards, shard),
+        )
+        caption_total = cur.fetchone()[0]
+
     result.transcript = _run(conn, SELECT_PENDING_TRANSCRIPT, INSERT_TRANSCRIPT, model_id,
-                             params, tokenizer, model, dev, batch_size, "transcript")
+                             params, tokenizer, model, dev, batch_size, "transcript",
+                             transcript_total)
     result.caption = _run(conn, SELECT_PENDING_CAPTION, INSERT_CAPTION, model_id,
-                          params, tokenizer, model, dev, batch_size, "caption")
+                          params, tokenizer, model, dev, batch_size, "caption", caption_total)
 
     logger.info(f"Embedded {result.transcript} transcript segment(s) and "
                 f"{result.caption} caption(s)")

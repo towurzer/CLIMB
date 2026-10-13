@@ -12,6 +12,7 @@ import custom_logger
 from config import Config
 from pipeline import device, paths
 from psycopg2.extras import execute_values
+from tqdm import tqdm
 
 SELECT_PENDING = """
     SELECT v.video_id
@@ -96,32 +97,33 @@ def asr_pending(conn, collection=None, limit=None, shard=0, shards=1,
     model = load_model(dev)
     result = AsrResult()
 
-    for video_id in videos:
-        audio = paths.audio_path(video_id)
-        if not audio.exists():
-            logger.warning(f"{video_id}: no audio at {audio}")
-            result.skipped += 1
-            continue
-        try:
-            segments, language = transcribe(model, audio)
-        except Exception as e:
-            logger.warning(f"{video_id}: transcription failed ({e})")
-            result.skipped += 1
-            continue
+    with tqdm(videos, desc="Transcribing videos", unit="video") as progress:
+        for video_id in progress:
+            audio = paths.audio_path(video_id)
+            if not audio.exists():
+                logger.warning(f"{video_id}: no audio at {audio}")
+                result.skipped += 1
+                continue
+            try:
+                segments, language = transcribe(model, audio)
+            except Exception as e:
+                logger.warning(f"{video_id}: transcription failed ({e})")
+                result.skipped += 1
+                continue
 
-        with conn.cursor() as cur:
-            if segments:
-                execute_values(cur, INSERT_SEGMENTS,
-                               [(video_id, s, e, t, language) for s, e, t in segments],
-                               page_size=500)
-                result.segments += len(segments)
-            else:
-                # An empty marker row, so a video that genuinely has no speech is not retried on
-                # every run. It contributes nothing to the tsvector index.
-                cur.execute(MARK_EMPTY, (video_id,))
-                result.silent += 1
-        conn.commit()
-        result.videos += 1
+            with conn.cursor() as cur:
+                if segments:
+                    execute_values(cur, INSERT_SEGMENTS,
+                                   [(video_id, s, e, t, language) for s, e, t in segments],
+                                   page_size=500)
+                    result.segments += len(segments)
+                else:
+                    # An empty marker row, so a video that genuinely has no speech is not retried on
+                    # every run. It contributes nothing to the tsvector index.
+                    cur.execute(MARK_EMPTY, (video_id,))
+                    result.silent += 1
+            conn.commit()
+            result.videos += 1
 
     logger.info(f"Transcribed {result.videos} video(s): {result.segments} segment(s), "
                 f"{result.silent} with no speech, {result.skipped} skipped")

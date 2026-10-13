@@ -17,6 +17,7 @@ import custom_logger
 from config import Config
 from pipeline import device, paths
 from psycopg2.extras import execute_values
+from tqdm import tqdm
 
 SELECT_PENDING = """
     SELECT k.keyframe_id, k.video_id, s.shot_index, k.kf_index
@@ -164,39 +165,42 @@ def ocr_pending(conn, collection=None, batch_size=None, limit=None, shard=0, sha
     result = OcrResult()
     remaining = limit if limit else pending
 
-    while remaining > 0:
-        with conn.cursor() as cur:
-            cur.execute(SELECT_PENDING, {**params, "limit": min(batch_size, remaining)})
-            rows = cur.fetchall()
-        if not rows:
-            break
-
-        payload = []
-        for keyframe_id, video_id, shot_index, kf_index in rows:
-            path = paths.keyframe_path(video_id, shot_index, kf_index)
-            if not path.exists():
-                logger.warning(f"keyframe {keyframe_id}: missing {path}")
-                result.skipped += 1
-                continue
-            try:
-                text = extract_text(reader, path)
-            except Exception as e:
-                logger.warning(f"keyframe {keyframe_id}: OCR failed ({e})")
-                result.skipped += 1
-                continue
-            # Empty results are stored too. Without a row the keyframe stays "pending" forever
-            # and every run would re-OCR the same textless frames.
-            payload.append((keyframe_id, text))
-            result.processed += 1
-            if text:
-                result.with_text += 1
-
-        if payload:
+    progress_total = min(pending, limit) if limit else pending
+    with tqdm(total=progress_total, desc="Reading OCR", unit="keyframe") as progress:
+        while remaining > 0:
             with conn.cursor() as cur:
-                execute_values(cur, INSERT_TEXT, payload, page_size=500)
-            conn.commit()
+                cur.execute(SELECT_PENDING, {**params, "limit": min(batch_size, remaining)})
+                rows = cur.fetchall()
+            if not rows:
+                break
 
-        remaining -= len(rows)
+            payload = []
+            for keyframe_id, video_id, shot_index, kf_index in rows:
+                path = paths.keyframe_path(video_id, shot_index, kf_index)
+                if not path.exists():
+                    logger.warning(f"keyframe {keyframe_id}: missing {path}")
+                    result.skipped += 1
+                    continue
+                try:
+                    text = extract_text(reader, path)
+                except Exception as e:
+                    logger.warning(f"keyframe {keyframe_id}: OCR failed ({e})")
+                    result.skipped += 1
+                    continue
+                # Empty results are stored too. Without a row the keyframe stays "pending" forever
+                # and every run would re-OCR the same textless frames.
+                payload.append((keyframe_id, text))
+                result.processed += 1
+                if text:
+                    result.with_text += 1
+
+            if payload:
+                with conn.cursor() as cur:
+                    execute_values(cur, INSERT_TEXT, payload, page_size=500)
+                conn.commit()
+
+            remaining -= len(rows)
+            progress.update(len(rows))
 
     logger.info(f"OCR done: {result.processed} processed, {result.with_text} contained text, "
                 f"{result.skipped} skipped")

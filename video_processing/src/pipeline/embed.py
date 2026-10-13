@@ -13,6 +13,7 @@ import custom_logger
 from config import Config
 from pipeline import device, paths
 from psycopg2.extras import execute_values
+from tqdm import tqdm
 
 SELECT_PENDING = """
     SELECT k.keyframe_id, k.video_id, s.shot_index, k.kf_index
@@ -131,45 +132,46 @@ def embed_pending(conn, model_name=None, collection=None, batch_size=None, limit
     processor, vision = load_model(registered_name, dev)
     result = EmbedResult()
     remaining = limit if limit else pending
+    progress_total = min(pending, limit) if limit else pending
 
-    while remaining > 0:
-        take = min(batch_size, remaining)
-        with conn.cursor() as cur:
-            cur.execute(SELECT_PENDING, {**params, "limit": take})
-            rows = cur.fetchall()
-        if not rows:
-            break
-
-        images, ids = [], []
-        for keyframe_id, video_id, shot_index, kf_index in rows:
-            path = paths.keyframe_path(video_id, shot_index, kf_index)
-            try:
-                from PIL import Image
-                images.append(Image.open(path).convert("RGB"))
-                ids.append(keyframe_id)
-            except Exception as e:
-                # A missing keyframe file must not stall the stage; it stays pending and will be
-                # picked up again once selection has been re-run for that video.
-                logger.warning(f"keyframe {keyframe_id}: cannot read {path} ({e})")
-                result.skipped += 1
-
-        if images:
-            vectors = embed_images(images, processor, vision, dev)
-            if vectors.shape[1] != dims:
-                raise ValueError(
-                    f"{registered_name} produced {vectors.shape[1]} dimensions, "
-                    f"but embedding_model says {dims}"
-                )
-            payload = [(kid, model_id, to_pgvector(v)) for kid, v in zip(ids, vectors)]
+    with tqdm(total=progress_total, desc="Embedding keyframes", unit="keyframe") as progress:
+        while remaining > 0:
+            take = min(batch_size, remaining)
             with conn.cursor() as cur:
-                execute_values(cur, INSERT_EMBEDDINGS, payload, page_size=500)
-            conn.commit()
-            result.embedded += len(payload)
-            result.batches += 1
+                cur.execute(SELECT_PENDING, {**params, "limit": take})
+                rows = cur.fetchall()
+            if not rows:
+                break
 
-        remaining -= len(rows)
-        if result.batches and result.batches % 20 == 0:
-            logger.info(f"  {result.embedded}/{pending} embedded")
+            images, ids = [], []
+            for keyframe_id, video_id, shot_index, kf_index in rows:
+                path = paths.keyframe_path(video_id, shot_index, kf_index)
+                try:
+                    from PIL import Image
+                    images.append(Image.open(path).convert("RGB"))
+                    ids.append(keyframe_id)
+                except Exception as e:
+                    # A missing keyframe file must not stall the stage; it stays pending and will be
+                    # picked up again once selection has been re-run for that video.
+                    logger.warning(f"keyframe {keyframe_id}: cannot read {path} ({e})")
+                    result.skipped += 1
+
+            if images:
+                vectors = embed_images(images, processor, vision, dev)
+                if vectors.shape[1] != dims:
+                    raise ValueError(
+                        f"{registered_name} produced {vectors.shape[1]} dimensions, "
+                        f"but embedding_model says {dims}"
+                    )
+                payload = [(kid, model_id, to_pgvector(v)) for kid, v in zip(ids, vectors)]
+                with conn.cursor() as cur:
+                    execute_values(cur, INSERT_EMBEDDINGS, payload, page_size=500)
+                conn.commit()
+                result.embedded += len(payload)
+                result.batches += 1
+
+            remaining -= len(rows)
+            progress.update(len(rows))
 
     logger.info(f"Embedded {result.embedded} keyframe(s), skipped {result.skipped}")
     return result

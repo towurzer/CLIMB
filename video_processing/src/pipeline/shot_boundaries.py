@@ -15,7 +15,7 @@ from pathlib import Path
 import custom_logger
 from psycopg2.extras import execute_values
 
-from pipeline.probe import probe_video, ProbeError
+from tqdm import tqdm
 
 # HH:MM:SS(.mmm) or MM:SS(.mmm)
 TIMECODE_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?([.,]\d{1,6})?$")
@@ -327,18 +327,19 @@ def ingest_directory(conn, video_dir, boundary_dir, collection, replace=False, l
     logger.info(f"Ingesting master shots for {len(paired)} video(s) from {collection}")
 
     results, failures = [], []
-    for video_id in paired:
-        try:
-            result = ingest_video(
-                conn, videos[video_id], boundaries[video_id], collection,
-                video_id=video_id, replace=replace,
-            )
-            conn.commit()
-            results.append(result)
-        except (ProbeError, BoundaryParseError) as e:
-            conn.rollback()
-            logger.error(f"{video_id}: {e}")
-            failures.append((video_id, str(e)))
+    with tqdm(paired, desc="Ingesting shots", unit="video") as progress:
+        for video_id in progress:
+            try:
+                result = ingest_video(
+                    conn, videos[video_id], boundaries[video_id], collection,
+                    video_id=video_id, replace=replace,
+                )
+                conn.commit()
+                results.append(result)
+            except (ProbeError, BoundaryParseError) as e:
+                conn.rollback()
+                logger.error(f"{video_id}: {e}")
+                failures.append((video_id, str(e)))
 
     total_scenes = sum(r.scenes_inserted for r in results)
     logger.info(

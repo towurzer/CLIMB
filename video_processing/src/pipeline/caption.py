@@ -13,6 +13,7 @@ import custom_logger
 from config import Config
 from pipeline import device, paths
 from psycopg2.extras import execute_values
+from tqdm import tqdm
 
 SELECT_PENDING = """
     SELECT k.keyframe_id, k.video_id, s.shot_index, k.kf_index
@@ -114,35 +115,38 @@ def caption_pending(conn, collection=None, batch_size=None, limit=None, shard=0,
     result = CaptionResult()
     remaining = limit if limit else pending
 
-    while remaining > 0:
-        with conn.cursor() as cur:
-            cur.execute(SELECT_PENDING, {**params, "limit": min(batch_size, remaining)})
-            rows = cur.fetchall()
-        if not rows:
-            break
+    progress_total = min(pending, limit) if limit else pending
+    with tqdm(total=progress_total, desc="Captioning keyframes", unit="keyframe") as progress:
+        while remaining > 0:
+            with conn.cursor() as cur:
+                cur.execute(SELECT_PENDING, {**params, "limit": min(batch_size, remaining)})
+                rows = cur.fetchall()
+            if not rows:
+                break
 
-        from PIL import Image
-        images, ids = [], []
-        for keyframe_id, video_id, shot_index, kf_index in rows:
-            path = paths.keyframe_path(video_id, shot_index, kf_index)
-            try:
-                images.append(Image.open(path).convert("RGB"))
-                ids.append(keyframe_id)
-            except Exception as e:
-                logger.warning(f"keyframe {keyframe_id}: cannot read {path} ({e})")
-                result.skipped += 1
+            from PIL import Image
+            images, ids = [], []
+            for keyframe_id, video_id, shot_index, kf_index in rows:
+                path = paths.keyframe_path(video_id, shot_index, kf_index)
+                try:
+                    images.append(Image.open(path).convert("RGB"))
+                    ids.append(keyframe_id)
+                except Exception as e:
+                    logger.warning(f"keyframe {keyframe_id}: cannot read {path} ({e})")
+                    result.skipped += 1
 
-        if images:
-            captions = caption_images(images, processor, model, dev)
-            payload = [(kid, text, conf.CAPTION_MODEL)
-                       for kid, text in zip(ids, captions) if text]
-            if payload:
-                with conn.cursor() as cur:
-                    execute_values(cur, INSERT_CAPTIONS, payload, page_size=200)
-                conn.commit()
-                result.captioned += len(payload)
+            if images:
+                captions = caption_images(images, processor, model, dev)
+                payload = [(kid, text, conf.CAPTION_MODEL)
+                           for kid, text in zip(ids, captions) if text]
+                if payload:
+                    with conn.cursor() as cur:
+                        execute_values(cur, INSERT_CAPTIONS, payload, page_size=200)
+                    conn.commit()
+                    result.captioned += len(payload)
 
-        remaining -= len(rows)
+            remaining -= len(rows)
+            progress.update(len(rows))
 
     logger.info(f"Captioned {result.captioned} keyframe(s), skipped {result.skipped}")
     return result
