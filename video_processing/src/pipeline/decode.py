@@ -1,16 +1,20 @@
 """
-Single-pass decode: one ffmpeg invocation per video, three outputs.
+Single-pass decode: one ffmpeg invocation per video, two outputs -- candidate frames for keyframe
+selection, and audio for ASR.
+
+There is no web copy any more. The sources are already 480x270 H.264, so the frontend plays them
+directly (backend/datasets.js finds them) and transcoding them again would only cost time.
 """
 
 import math
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
-from pathlib import Path
 
 import custom_logger
 from config import Config
 from pipeline import paths
+from pipeline.datasets import find_source_video
 from tqdm import tqdm
 
 # Fraction of the expected candidate frames that must actually be on disk. Container durations are
@@ -22,7 +26,6 @@ CANDIDATE_COUNT_TOLERANCE = 0.98
 class DecodeResult:
     video_id: str
     ok: bool
-    web_video: str | None = None
     candidate_count: int = 0
     audio: str | None = None
     error: str | None = None
@@ -44,31 +47,6 @@ DECODER_ERROR_SIGNATURES = (
 
 def looks_damaged(stderr: str) -> bool:
     return any(signature in stderr for signature in DECODER_ERROR_SIGNATURES)
-
-
-_nvenc_available = None
-
-
-def has_nvenc() -> bool:
-    """
-    Checks whether NVENC can actually encode, by encoding something..
-    """
-    global _nvenc_available
-    if _nvenc_available is not None:
-        return _nvenc_available
-
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error",
-             "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1,format=yuv420p",
-             "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-"],
-            capture_output=True, timeout=60,
-        )
-        _nvenc_available = result.returncode == 0
-    except Exception:
-        _nvenc_available = False
-
-    return _nvenc_available
 
 
 def candidate_stride(fps: float) -> int:
@@ -94,76 +72,42 @@ def expected_candidate_count(duration_ms: int, fps: float) -> int:
     return math.ceil(frames / candidate_stride(fps))
 
 
-def build_command(video_id, source_path, fps, use_gpu=False, with_audio=True) -> list:
+def build_command(video_id, source_path, fps, with_audio=True) -> list:
     """
-    Assembles the three-output ffmpeg command.
+    Assembles the ffmpeg command.
 
     Kept as a pure function so the command can be inspected and unit-tested without decoding
     anything
     """
     conf = Config()
 
-    web_out = paths.ensure_parent(paths.web_video_path(video_id))
     candidate_out = paths.ensure_parent(paths.candidate_pattern(video_id))
     stride = candidate_stride(fps)
-
-    # min(H,ih) never upscales. The course's V3C1_200 videos are already 480x270, and blowing them
-    # up to 360 lines would cost bitrate for no additional detail.
-    web_scale = (
-        f"scale_cuda=-2:min({conf.WEB_VIDEO_HEIGHT}\\,ih)"
-        if use_gpu else f"scale=-2:min({conf.WEB_VIDEO_HEIGHT}\\,ih)"
-    )
-    candidate_scale = (
-        f"scale_cuda=-2:min({conf.CANDIDATE_HEIGHT}\\,ih)"
-        if use_gpu else f"scale=-2:min({conf.CANDIDATE_HEIGHT}\\,ih)"
-    )
-    # select on the frame counter, not the fps filter -- see candidate_source_frame().
-    filtergraph = (
-        f"[0:v]split=2[web][cand];"
-        f"[web]{web_scale}[w];"
-        f"[cand]select='not(mod(n\\,{stride}))',{candidate_scale}"
-        f"{',hwdownload,format=nv12' if use_gpu else ''}[c]"
-    )
 
     command = [
         "ffmpeg", "-y",
         "-nostdin",          # many of these run at once; none of them may eat the terminal
         "-loglevel", "error",
-    ]
-    if use_gpu:
-        # Keep decoded frames in CUDA memory for the CUDA filters and NVENC. The candidate branch
-        # downloads frames again because the image2 JPEG muxer is CPU-based.
-        command += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-    command += [
         "-threads", str(conf.FFMPEG_THREADS),
         "-i", str(source_path),
-        "-filter_complex", filtergraph,
     ]
 
-    # Output 1: web-playable video. -threads again here because the value before -i sets decoder
-    # threads only; without this x264 would default to "use every core" in each of N workers.
-    command += ["-map", "[w]", "-threads", str(conf.FFMPEG_THREADS)]
-    if use_gpu:
-        command += ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(conf.WEB_VIDEO_CRF)]
-    else:
-        command += ["-c:v", "libx264", "-preset", conf.WEB_VIDEO_PRESET, "-crf", str(conf.WEB_VIDEO_CRF)]
-    if with_audio:
-        command += ["-map", "0:a:0", "-c:a", "aac", "-b:a", conf.WEB_AUDIO_BITRATE]
-    command += ["-movflags", "+faststart", str(web_out)]
-
-    # Output 2: candidate frames for keyframe selection. fps_mode=passthrough is required --
-    # without it ffmpeg re-times the selected frames to a constant rate and duplicates frames to
-    # fill the gaps, which would break the exact candidate-to-source-frame correspondence.
+    # Output 1: candidate frames for keyframe selection. Selected on the frame counter rather than
+    # with the fps filter -- see candidate_source_frame(). min(H,ih) never upscales.
+    # fps_mode=passthrough is required: without it ffmpeg re-times the selected frames to a
+    # constant rate and duplicates frames to fill the gaps, which would break the exact
+    # candidate-to-source-frame correspondence.
     command += [
-        "-map", "[c]",
+        "-map", "0:v:0",
+        "-vf", f"select='not(mod(n\\,{stride}))',scale=-2:min({conf.CANDIDATE_HEIGHT}\\,ih)",
         "-fps_mode", "passthrough",
         "-q:v", str(conf.CANDIDATE_JPEG_QUALITY),
         str(candidate_out),
     ]
 
-    # Output 3: audio for ASR. Skipped entirely when the probe found no audio stream -- asking
-    # ffmpeg to map a stream that does not exist fails the whole command, taking the other two
-    # outputs down with it.
+    # Output 2: audio for ASR. Skipped entirely when the probe found no audio stream -- asking
+    # ffmpeg to map a stream that does not exist fails the whole command, taking the candidate
+    # frames down with it.
     if with_audio:
         audio_out = paths.ensure_parent(paths.audio_path(video_id))
         command += [
@@ -176,10 +120,17 @@ def build_command(video_id, source_path, fps, use_gpu=False, with_audio=True) ->
     return command
 
 
-def decode_video(video_id, source_path, fps, duration_ms=None, use_gpu=False, with_audio=True,
-                 force=False, known_damaged=False) -> DecodeResult:
+def _clear_outputs(video_id, with_audio):
+    for frame in paths.candidate_frames(video_id):
+        frame.unlink()
+    if with_audio:
+        paths.audio_path(video_id).unlink(missing_ok=True)
+
+
+def decode_video(video_id, source_path, fps, duration_ms=None, with_audio=True, force=False,
+                 known_damaged=False) -> DecodeResult:
     """
-    Decodes one video into its three outputs. Idempotent unless `force` is set.
+    Decodes one video into its two outputs. Idempotent unless `force` is set.
 
     When `duration_ms` is supplied the candidate frames are counted against what the video's
     length implies, and a short extraction fails the video. ffmpeg does not always tell you: with
@@ -189,11 +140,9 @@ def decode_video(video_id, source_path, fps, duration_ms=None, use_gpu=False, wi
     """
     logger = custom_logger.get_logger("decode")
 
-    web_out = paths.web_video_path(video_id)
-    candidate_directory = paths.candidate_dir(video_id)
-
-    if not force and web_out.exists() and any(paths.candidate_frames(video_id)):
-        existing = len(list(paths.candidate_frames(video_id)))
+    existing = len(paths.candidate_frames(video_id))
+    audio_ready = not with_audio or paths.audio_path(video_id).exists()
+    if not force and existing and audio_ready:
         # "Outputs exist" is not the same as "outputs are complete". A run killed by a full disk
         # leaves exactly this state behind, and accepting it here would make the damage permanent:
         # every subsequent run would skip the video and no stage downstream can tell that half its
@@ -206,7 +155,7 @@ def decode_video(video_id, source_path, fps, duration_ms=None, use_gpu=False, wi
         )
         if adequate:
             logger.debug(f"{video_id}: already decoded ({existing} candidates), skipping")
-            return DecodeResult(video_id, True, str(web_out), existing,
+            return DecodeResult(video_id, True, existing,
                                 str(paths.audio_path(video_id)) if with_audio else None,
                                 damaged=known_damaged)
         logger.warning(
@@ -214,45 +163,27 @@ def decode_video(video_id, source_path, fps, duration_ms=None, use_gpu=False, wi
             f"{expected_candidate_count(duration_ms, fps)} -- re-decoding"
         )
 
-    # Clear stale candidates first. ffmpeg overwrites by number, so re-decoding a video that now
+    # Clear stale outputs first. ffmpeg overwrites by number, so re-decoding a video that now
     # yields fewer frames would silently leave the tail of the previous run behind, and selection
     # would happily pick keyframes from a video that no longer exists in that form.
-    if candidate_directory.exists():
-        for stale in paths.candidate_frames(video_id):
-            stale.unlink()
+    _clear_outputs(video_id, with_audio)
 
-    # Consumer NVIDIA cards cap concurrent NVENC sessions (historically 2-3, more on newer
-    # drivers), and we run DECODE_WORKERS encodes at once. Rather than capping the worker count to
-    # the least capable card, let a GPU encode fail and fall back to libx264 for that one video.
-    attempts = [True, False] if use_gpu else [False]
+    command = build_command(video_id, source_path, fps, with_audio=with_audio)
+    try:
+        completed = subprocess.run(command, check=True, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        return DecodeResult(video_id, False, error="ffmpeg not found on PATH")
+    except subprocess.CalledProcessError as e:
+        # A failed run leaves partial outputs, and partial candidates are what the skip check
+        # above would otherwise have to tell apart from finished ones.
+        _clear_outputs(video_id, with_audio)
+        stderr = e.stderr.decode("utf-8", errors="ignore").strip()
+        return DecodeResult(video_id, False, error=stderr[-500:] or "ffmpeg failed")
+    # Kept even on success: ffmpeg reports a damaged bitstream on stderr and still exits 0.
+    decode_stderr = completed.stderr.decode("utf-8", errors="ignore")
 
-    decode_stderr = ""
-    for attempt_index, gpu in enumerate(attempts):
-        command = build_command(video_id, source_path, fps, use_gpu=gpu, with_audio=with_audio)
-        try:
-            completed = subprocess.run(command, check=True, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.PIPE)
-            # Kept even on success: ffmpeg reports a damaged bitstream on stderr and still exits 0.
-            decode_stderr = completed.stderr.decode("utf-8", errors="ignore")
-            break
-        except FileNotFoundError:
-            return DecodeResult(video_id, False, error="ffmpeg not found on PATH")
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr.decode("utf-8", errors="ignore").strip()
-            # Clean up a partial transcode so a resumed run does not mistake it for a finished one.
-            web_out.unlink(missing_ok=True)
-            if attempt_index < len(attempts) - 1:
-                for partial in paths.candidate_frames(video_id):
-                    partial.unlink()
-                if with_audio:
-                    paths.audio_path(video_id).unlink(missing_ok=True)
-                logger.warning(
-                    f"{video_id}: GPU decode/encode failed, retrying on CPU ({stderr[-160:]})"
-                )
-                continue
-            return DecodeResult(video_id, False, error=stderr[-500:] or "ffmpeg failed")
-
-    candidate_count = len(list(paths.candidate_frames(video_id)))
+    candidate_count = len(paths.candidate_frames(video_id))
     if candidate_count == 0:
         return DecodeResult(video_id, False, error="ffmpeg produced no candidate frames")
 
@@ -283,7 +214,6 @@ def decode_video(video_id, source_path, fps, duration_ms=None, use_gpu=False, wi
 
     return DecodeResult(
         video_id, True,
-        web_video=str(web_out),
         candidate_count=candidate_count,
         audio=str(paths.audio_path(video_id)) if with_audio else None,
         damaged=damaged,
@@ -291,19 +221,19 @@ def decode_video(video_id, source_path, fps, duration_ms=None, use_gpu=False, wi
 
 
 def _decode_worker(args):
-    video_id, source_path, fps, duration_ms, use_gpu, with_audio, force, known_damaged = args
-    return decode_video(video_id, source_path, fps, duration_ms=duration_ms, use_gpu=use_gpu,
+    video_id, source_path, fps, duration_ms, with_audio, force, known_damaged = args
+    return decode_video(video_id, source_path, fps, duration_ms=duration_ms,
                         with_audio=with_audio, force=force, known_damaged=known_damaged)
 
 
-def decode_batch(jobs, use_gpu=None, force=False, workers=None):
+def decode_batch(jobs, force=False, workers=None):
     """
     Decodes a batch of videos in parallel.
 
-    `jobs` is an iterable of (video_id, source_path, fps, duration_ms, has_audio, known_damaged),
-    the first five of which
-    come from the probe performed during shot boundary ingest, so this stage never re-inspects the
-    file. duration_ms is what makes the truncated-extraction check possible.
+    `jobs` is an iterable of (video_id, source_path, fps, duration_ms, has_audio, known_damaged).
+    fps, duration_ms and has_audio come from the probe performed during scene ingest, so this
+    stage never re-inspects the file. duration_ms is what makes the truncated-extraction check
+    possible.
     """
     conf = Config()
     logger = custom_logger.get_logger("decode")
@@ -313,16 +243,13 @@ def decode_batch(jobs, use_gpu=None, force=False, workers=None):
         logger.warning("No videos to decode.")
         return []
 
-    if use_gpu is None:
-        use_gpu = has_nvenc()
     workers = workers or conf.DECODE_WORKERS
 
     logger.info(
-        f"Decoding {len(jobs)} video(s) with {workers} worker(s) x {conf.FFMPEG_THREADS} threads, "
-        f"encoder={'h264_nvenc' if use_gpu else 'libx264'}"
+        f"Decoding {len(jobs)} video(s) with {workers} worker(s) x {conf.FFMPEG_THREADS} threads"
     )
 
-    payload = [(vid, path, fps, dur, use_gpu, has_audio, force, dmg)
+    payload = [(vid, path, fps, dur, has_audio, force, dmg)
                for vid, path, fps, dur, has_audio, dmg in jobs]
     results = []
 
@@ -355,7 +282,7 @@ def decode_batch(jobs, use_gpu=None, force=False, workers=None):
 
 
 SELECT_DECODABLE = """
-    SELECT v.video_id, v.fps, v.duration_ms, v.has_audio, v.damaged,
+    SELECT v.video_id, v.collection, v.fps, v.duration_ms, v.has_audio, v.damaged,
            EXISTS (SELECT 1 FROM keyframes k WHERE k.video_id = v.video_id) AS has_keyframes
     FROM videos v
     WHERE (%s IS NULL OR v.collection = %s)
@@ -364,33 +291,29 @@ SELECT_DECODABLE = """
 """
 
 
-def decode_from_database(conn, source_dir, collection=None, limit=None, force=False, workers=None):
+def decode_from_database(conn, collection=None, limit=None, force=False, workers=None):
     """
-    Decodes videos that shot boundary ingest has already probed.
+    Decodes videos that scene ingest has already probed.
 
     Driving this off `videos` rather than a directory listing means the audio flag comes from the
-    probe instead of being guessed, and it guarantees we only decode videos whose master shots are
+    probe instead of being guessed, and it guarantees we only decode videos whose scenes are
     already loaded -- decoding a video with no scenes produces candidate frames nothing will ever
     select from.
     """
     logger = custom_logger.get_logger("decode")
-    source_dir = Path(source_dir)
 
     with conn.cursor() as cur:
         cur.execute(SELECT_DECODABLE, (collection, collection, limit))
         rows = cur.fetchall()
 
     jobs, missing, finished = [], [], 0
-    for video_id, fps, duration_ms, has_audio, damaged, has_keyframes in rows:
-
-        if has_keyframes and paths.web_video_path(video_id).exists():
+    for video_id, video_collection, fps, duration_ms, has_audio, damaged, has_keyframes in rows:
+        # Selected means decoded: selection consumes the candidates and purge may already have
+        # deleted them.
+        if has_keyframes and not force:
             finished += 1
             continue
-        # work/raw first, since that is where fetch puts downloaded videos; source_dir second, so
-        # a locally present dataset still works without going through fetch at all.
-        candidates = [paths.raw_video_path(video_id, ext) for ext in Config.VIDEO_EXTENSIONS]
-        candidates += [source_dir / f"{video_id}{ext}" for ext in Config.VIDEO_EXTENSIONS]
-        source = next((p for p in candidates if p.exists()), None)
+        source = find_source_video(video_id, video_collection)
         if source is None:
             missing.append(video_id)
             continue

@@ -8,15 +8,18 @@ without any bookkeeping. Two things cannot work that way, and those are what ing
   * purge has to know when a file is safe to delete
 
 Purging is deliberately per-artifact rather than one "all done" gate, because the working set is
-what the 1 TB budget is spent on:
+what the disk budget is spent on:
 
-    raw video    -> once decode has produced the web copy and candidate frames
+    raw video    -> once keyframe selection is done for that video
     candidates   -> once every scene of that video has at least one keyframe
     audio        -> once the video has transcript rows, or has no audio at all
 
-The raw file is the biggest and can go first, right after decode. Nothing downstream reads it:
-selection uses the candidate frames and the web copy, and every model stage reads the persistent
-keyframes.
+Only files under work/ are ever deleted. The collections on CLIMB_SOURCE_ROOT are read, never
+purged; work/raw only holds what fetch downloaded.
+
+The raw file has to survive selection, which pulls the middle frame of scenes too short to have a
+candidate straight out of the source. After that nothing reads it: every model stage reads the
+persistent keyframes.
 """
 
 import os
@@ -70,6 +73,13 @@ CANDIDATES_DONE = """
                       FROM scenes s
                       WHERE s.video_id = v.video_id
                         AND NOT EXISTS (SELECT 1 FROM keyframes k WHERE k.scene_id = s.scene_id));
+"""
+
+# Keyframe selection has run, so nothing needs the source video any more.
+SELECTED = """
+    SELECT DISTINCT k.video_id
+    FROM keyframes k JOIN videos v USING (video_id)
+    WHERE (%(collection)s IS NULL OR v.collection = %(collection)s);
 """
 
 # Transcribed, or never had audio to transcribe.
@@ -221,15 +231,16 @@ def purge(conn, collection=None, keep_raw=False) -> PurgeResult:
         candidates_done = [r[0] for r in cur.fetchall()]
         cur.execute(AUDIO_DONE, {"collection": collection})
         audio_done = [r[0] for r in cur.fetchall()]
+        cur.execute(SELECTED, {"collection": collection})
+        selected = {r[0] for r in cur.fetchall()}
 
-    # Raw video: safe as soon as decode produced its outputs. Verified on disk rather than from a
-    # stage flag, so a half-finished decode cannot lose the only copy of the source.
+    # Raw video: safe once selection has run, see the module docstring.
     if not keep_raw:
         raw_files = sorted(Path(paths._work_root() / "raw").glob("*")) \
             if (paths._work_root() / "raw").exists() else []
         for raw in tqdm(raw_files, desc="Purging raw videos", unit="video"):
             video_id = raw.name.split(".")[0]
-            if paths.web_video_path(video_id).exists() and paths.candidate_frames(video_id):
+            if video_id in selected:
                 result.bytes_freed += _remove(raw)
                 result.raw += 1
 

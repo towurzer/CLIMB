@@ -9,11 +9,12 @@ roughly a gigabyte of redundant strings and four places to get wrong. Deriving c
 cannot drift from the data.
 
 Paths are sharded on the first two characters of the video id -- V3C runs 00001..28450, so that is
-~29 directories of ~1,000 videos each, instead of 12.4M thumbnails in one directory where every
-readdir() becomes a small tragedy.
+~29 directories of ~1,000 videos each, instead of millions of thumbnails in one directory where
+every readdir() becomes a small tragedy. MVK and LHE ids shard on their name instead (`Am`, `LH`).
+
+The source videos are not in here: they are read where they are, see pipeline/datasets.py.
 
     media/                      persistent, survives the raw video being deleted
-        video/00/00001.mp4          360p web-playable transcode
         kf/00/00001/00042_1.webp    384px keyframe (detail panel + model input)
         thumbs/00/00001/00042_1.webp 160px keyframe (result grid)
     work/                       transient, deleted by the purge stage
@@ -46,10 +47,6 @@ def _work_root() -> Path:
 
 
 # --- persistent -------------------------------------------------------------
-
-def web_video_path(video_id: str) -> Path:
-    return _media_root() / "video" / shard_of(video_id) / f"{video_id}.mp4"
-
 
 def keyframe_dir(video_id: str) -> Path:
     return _media_root() / "kf" / shard_of(video_id) / str(video_id)

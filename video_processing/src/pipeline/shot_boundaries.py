@@ -1,18 +1,25 @@
 
 """
-Master shot boundary ingest: one `scenes` row per master shot.
+Scene ingest: one `scenes` row per scene.
+
+The scenes are the TransNet ones (`<video_id>.mp4.scenes.txt`, `start end` frame pairs), not the
+official master shot boundaries. They are longer, they worked well at the uni competition, and V3C
+has 1.97M of them against 4.14M master shots.
 
 Two boundary file formats are supported and auto-detected:
 
-  * the course's `<video_id>.mp4.scenes.txt`  -- `start end` frame pairs, whitespace or comma
+  * `<video_id>.mp4.scenes.txt`                -- `start end` frame pairs, whitespace or comma
   * the official V3C master shot boundary TSVs -- frame columns plus HH:MM:SS.mmm timecodes
 
+Where the files and videos come from is pipeline/datasets.py.
 """
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import custom_logger
+from pipeline.datasets import entry_id, is_video_file
+from pipeline.probe import probe_video, ProbeError
 from psycopg2.extras import execute_values
 
 from tqdm import tqdm
@@ -155,32 +162,32 @@ def _resolve_columns(header, rows):
     )
 
 
-def parse_shot_boundary_file(path, fps: float) -> tuple:
+def parse_shot_boundaries(text: str, name: str, fps: float) -> tuple:
     """
-    Parses a boundary file into ordered ShotBoundary records.
+    Parses the contents of a boundary file into ordered ShotBoundary records. `name` is only used
+    in error messages.
 
     Returns (boundaries, warnings). Warnings cover recoverable oddities -- overlapping shots,
     gaps, zero-length shots -- which are logged but do not stop the ingest, because a handful of
     malformed lines in one file should not block a 28,450-video collection.
     """
-    path = Path(path)
-    raw_lines = [ln.strip() for ln in path.read_text(encoding="utf-8", errors="replace").splitlines()]
+    raw_lines = [ln.strip() for ln in text.splitlines()]
     lines = [ln for ln in raw_lines if ln and not ln.startswith("#")]
 
     if not lines:
-        raise BoundaryParseError(f"{path.name} contains no usable lines")
+        raise BoundaryParseError(f"{name} contains no usable lines")
 
     rows = [_split_line(ln) for ln in lines]
     rows = [r for r in rows if len(r) >= 2]
     if not rows:
-        raise BoundaryParseError(f"{path.name} has no lines with at least two fields")
+        raise BoundaryParseError(f"{name} has no lines with at least two fields")
 
     # A first row containing a non-numeric field is a header.
     header = None
     if any(_classify(f) == "other" for f in rows[0]):
         header, rows = rows[0], rows[1:]
         if not rows:
-            raise BoundaryParseError(f"{path.name} contains only a header")
+            raise BoundaryParseError(f"{name} contains only a header")
 
     start_col, end_col, kind = _resolve_columns(header, rows)
 
@@ -228,24 +235,25 @@ def parse_shot_boundary_file(path, fps: float) -> tuple:
         previous_end = end_frame
 
     if not boundaries:
-        raise BoundaryParseError(f"{path.name} yielded no valid shots")
+        raise BoundaryParseError(f"{name} yielded no valid shots")
 
     return boundaries, warnings
 
 
-def ingest_video(conn, video_path, boundary_path, collection, video_id=None, replace=False) -> IngestResult:
+def ingest_video(conn, video_path, boundary_text, boundary_name, collection, video_id=None,
+                 replace=False) -> IngestResult:
     """
-    Probes one video and loads its master shots.
+    Probes one video and loads its scenes.
 
     Runs in the caller's transaction so a batch either lands whole or not at all: a video whose
     scenes are half-written is worse than one that was never ingested, because the gap is invisible.
     """
     logger = custom_logger.get_logger("shot_boundaries")
-    video_path, boundary_path = Path(video_path), Path(boundary_path)
-    video_id = video_id or video_path.stem.split(".")[0]
+    video_path = Path(video_path)
+    video_id = video_id or entry_id(video_path.name)
 
     metadata = probe_video(video_path, video_id=video_id)
-    boundaries, warnings = parse_shot_boundary_file(boundary_path, metadata.fps)
+    boundaries, warnings = parse_shot_boundaries(boundary_text, boundary_name, metadata.fps)
 
     # Boundaries running past the end of the video mean the file and the video disagree -- usually
     # a boundary file matched to the wrong video, which is worth shouting about.
@@ -281,58 +289,59 @@ def ingest_video(conn, video_path, boundary_path, collection, video_id=None, rep
     return IngestResult(video_id, len(boundaries), inserted, warnings)
 
 
-def _index_by_video_id(directory, patterns):
-    """Maps video_id -> path for files matching any glob, keyed on the stem up to the first dot."""
-    found = {}
-    for pattern in patterns:
-        for path in Path(directory).glob(pattern):
-            found.setdefault(path.name.split(".")[0], path)
-    return found
-
-
-def ingest_directory(conn, video_dir, boundary_dir, collection, replace=False, limit=None,
-                     video_ids=None, extra_video_dirs=()):
+def ingest_collection(conn, dataset, raw_dir=None, replace=False, limit=None, video_ids=None):
     """
-    Ingests every video in a directory that has a matching boundary file.
+    Ingests every video of one collection that has a scene file.
 
-    Videos and boundary files are paired on the leading id in the filename, so
-    `00001.mp4` matches `00001.mp4.scenes.txt` and `00001.tsv` alike.
+    Videos come from the collection's own directory, plus `raw_dir` for anything fetched; a fetched
+    copy wins. They are paired with scene files on the video id, so `00001.mp4` matches
+    `00001.mp4.scenes.txt` and `00001.tsv` alike.
     """
     logger = custom_logger.get_logger("shot_boundaries")
 
-    patterns = ("*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov")
-    videos = {}
-    for directory in (video_dir, *extra_video_dirs):
-        if directory and Path(directory).is_dir():
-            # First directory wins, so freshly fetched files take precedence over a local dataset.
-            videos = {**_index_by_video_id(directory, patterns), **videos}
-    boundaries = _index_by_video_id(boundary_dir, ("*.txt", "*.tsv", "*.csv"))
+    if dataset.scenes is None:
+        logger.error(f"{dataset.name}: no scene files found, looked in {', '.join(dataset.scene_candidates)}")
+        return [], []
 
-    paired = sorted(set(videos) & set(boundaries))
+    videos = dataset.video_files()
+    if raw_dir and Path(raw_dir).is_dir():
+        # work/raw is shared by every collection, so only ids this collection has scenes for
+        # are taken from it.
+        fetched = {entry_id(p.name): p for p in Path(raw_dir).iterdir() if is_video_file(p)}
+        videos.update(fetched)
+    scene_ids = dataset.scenes.ids()
+
     if video_ids is not None:
         # Restricted to the queued batch. Without this, a purge that empties the download
         # directory makes the next run fall back to scanning the whole local dataset and quietly
         # ingest every video in it rather than the handful actually being processed.
-        paired = [v for v in paired if v in set(video_ids)]
+        wanted = set(video_ids)
+        videos = {v: p for v, p in videos.items() if v in wanted}
+        scene_ids &= wanted
+
+    paired = sorted(set(videos) & scene_ids)
+    missing_scenes = sorted(set(videos) - scene_ids)
+    orphan_scenes = scene_ids - set(videos)
+    if missing_scenes:
+        logger.warning(f"{dataset.name}: {len(missing_scenes)} video(s) have no scene file, "
+                       f"e.g. {missing_scenes[:5]}")
+    if orphan_scenes and dataset.has_videos:
+        logger.info(f"{dataset.name}: {len(orphan_scenes)} scene file(s) have no video on this "
+                    f"machine")
     if limit:
         paired = paired[:limit]
 
-    missing_boundaries = sorted(set(videos) - set(boundaries))
-    orphan_boundaries = sorted(set(boundaries) - set(videos))
-    if missing_boundaries:
-        logger.warning(f"{len(missing_boundaries)} video(s) have no boundary file, e.g. {missing_boundaries[:5]}")
-    if orphan_boundaries:
-        logger.warning(f"{len(orphan_boundaries)} boundary file(s) have no video, e.g. {orphan_boundaries[:5]}")
-
-    logger.info(f"Ingesting master shots for {len(paired)} video(s) from {collection}")
+    logger.info(f"Ingesting scenes for {len(paired)} video(s) from {dataset.name} "
+                f"({dataset.scenes.path})")
+    texts = dataset.scenes.read_many(paired)
 
     results, failures = [], []
-    with tqdm(paired, desc="Ingesting shots", unit="video") as progress:
+    with tqdm(paired, desc=f"Ingesting scenes ({dataset.name})", unit="video") as progress:
         for video_id in progress:
             try:
                 result = ingest_video(
-                    conn, videos[video_id], boundaries[video_id], collection,
-                    video_id=video_id, replace=replace,
+                    conn, videos[video_id], texts[video_id], f"{video_id} scene file",
+                    dataset.name, video_id=video_id, replace=replace,
                 )
                 conn.commit()
                 results.append(result)

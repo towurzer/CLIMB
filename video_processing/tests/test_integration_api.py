@@ -324,7 +324,7 @@ def test_static_mounts_serve_real_images(backend, corpus):
         assert len(payload) > 500
 
 
-def test_static_mount_serves_the_web_video(backend, corpus):
+def test_backend_serves_the_source_video(backend, corpus):
     _, listing = get_json(f"{backend}/climb/videos?per_page=1")
     _, details = get_json(f"{backend}/climb/videos/{listing['videos'][0]['video_id']}")
 
@@ -337,6 +337,13 @@ def test_static_mount_serves_the_web_video(backend, corpus):
 def test_static_mount_404s_for_something_that_is_not_there(backend):
     status, _, _ = fetch_bytes(f"{backend}/kf/nope/nope/nope.jpg")
     assert status == 404
+
+
+def test_video_route_only_takes_video_ids(backend):
+    """The id becomes part of a file path, so anything that could climb out of a directory 404s."""
+    for name in ("..%2F..%2Fetc%2Fpasswd", "..%2Fdatasets.json", "nope"):
+        status, _, _ = fetch_bytes(f"{backend}/videos/{name}.mp4")
+        assert status == 404, name
 
 
 # --- fusion signals ---------------------------------------------------------------------------

@@ -1,0 +1,15 @@
+{
+  "V3C": {
+    "videos": "VBS/videos/v3c",
+    "scenes": ["V3Cmeta/scenesV3C/scenes", "V3Cmeta/scenesV3C.tgz"],
+    "info": ["V3Cmeta/info", "V3Cmeta/infoV3C.tgz"]
+  },
+  "MVK": {
+    "videos": "VBS/videos/mvk",
+    "scenes": ["MVKmeta/scenes", "MVKmeta/scenesMVK12.tgz"]
+  },
+  "LHE": {
+    "videos": "VBS/videos/lhe",
+    "scenes": ["LHEmeta/scenes", "LHEmeta/scenesLHE.tgz"]
+  }
+}

@@ -12,6 +12,7 @@ import custom_logger
 from config import Config
 from pipeline import paths
 from tqdm import tqdm
+from pipeline.datasets import find_source_video
 from pipeline.decode import candidate_stride
 
 SELECT_SCENES = """
@@ -20,7 +21,7 @@ SELECT_SCENES = """
 """
 
 SELECT_SELECTABLE = """
-    SELECT v.video_id, v.fps
+    SELECT v.video_id, v.collection, v.fps
     FROM videos v
     WHERE (%s IS NULL OR v.collection = %s)
     ORDER BY v.video_id
@@ -121,7 +122,7 @@ def select_diverse(vectors: np.ndarray, k: int) -> list:
 
 
 def extract_frame(video_path, frame_number: int, fps: float):
-    """Pulls a single frame out of the 360p web video. Returns a BGR array, or None."""
+    """Pulls a single frame out of the source video. Returns a BGR array, or None."""
     result = subprocess.run(
         ["ffmpeg", "-v", "error", "-nostdin",
          "-ss", f"{frame_number / fps:.4f}", "-i", str(video_path),
@@ -154,7 +155,7 @@ def _write_outputs(bgr, video_id, shot_index, kf_index):
                conf.THUMBNAIL_HEIGHT)
 
 
-def select_for_video(video_id, fps, scenes) -> tuple:
+def select_for_video(video_id, fps, scenes, source_video=None) -> tuple:
     """
     Selects keyframes for one video's scenes. Returns (SelectionResult, rows_to_insert).
 
@@ -171,7 +172,6 @@ def select_for_video(video_id, fps, scenes) -> tuple:
         return SelectionResult(video_id, False, error="no candidate frames on disk"), []
 
     max_candidate = max(available)
-    web_video = paths.web_video_path(video_id)
     rows = []
     short = all_degenerate = 0
 
@@ -181,11 +181,13 @@ def select_for_video(video_id, fps, scenes) -> tuple:
 
         if not numbers:
             # Shots under ~0.5s fall between candidates -- 5% of the 200-video set, all under
-            # 0.42s. Pull their middle frame straight out of the web video: one keyframe, no
+            # 0.42s. Pull their middle frame straight out of the source video: one keyframe, no
             # selection to do, and unlike borrowing a neighbouring candidate it is genuinely
             # inside the scene.
+            if source_video is None:
+                continue
             mid_frame = (start_frame + end_frame) // 2
-            bgr = extract_frame(web_video, mid_frame, fps)
+            bgr = extract_frame(source_video, mid_frame, fps)
             if bgr is None:
                 continue
             short += 1
@@ -238,9 +240,9 @@ def select_for_video(video_id, fps, scenes) -> tuple:
 
 
 def _selection_worker(args):
-    video_id, fps, scenes = args
+    video_id, fps, scenes, source_video = args
     try:
-        return select_for_video(video_id, fps, scenes)
+        return select_for_video(video_id, fps, scenes, source_video)
     except Exception as e:
         return SelectionResult(video_id, False, error=f"{type(e).__name__}: {e}"), []
 
@@ -254,8 +256,8 @@ def select_from_database(conn, collection=None, limit=None, force=False, workers
         cur.execute(SELECT_SELECTABLE, (collection, collection, limit))
         videos = cur.fetchall()
 
-    jobs = []
-    for video_id, fps in videos:
+    jobs, no_source = [], []
+    for video_id, collection_name, fps in videos:
         with conn.cursor() as cur:
             if not force:
                 cur.execute(COUNT_KEYFRAMES, (video_id,))
@@ -266,8 +268,17 @@ def select_from_database(conn, collection=None, limit=None, force=False, workers
             cur.execute(SELECT_SCENES, (video_id,))
             scenes = cur.fetchall()
         if scenes:
-            jobs.append((video_id, fps, scenes))
+            source = find_source_video(video_id, collection_name)
+            if source is None:
+                no_source.append(video_id)
+            jobs.append((video_id, fps, scenes, source))
     conn.commit()
+
+    if no_source:
+        # Selection itself only needs the candidates; the source is for scenes too short to have
+        # one. Those scenes get no keyframe rather than the whole video failing.
+        logger.warning(f"{len(no_source)} video(s) have no source file, scenes shorter than a "
+                       f"candidate interval will get no keyframe, e.g. {no_source[:5]}")
 
     if not jobs:
         logger.info("No videos need keyframe selection.")

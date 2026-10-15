@@ -20,9 +20,11 @@ segments.
 
 In order to run CLIMB, you will need to make sure that the following things are fulfilled:
 
-- You will need the processed media in `dataset/media/` , the 360p videos under `media/video/`, the keyframes under
-  `media/kf/` and `media/thumbs/`. Set `CLIMB_MEDIA_DIR` if you keep them on an external drive instead
-- (To see how to produce all of that, see the "Decoding" section under "Getting Started - Developer")
+- You will need the processed media in `dataset/media/` , the keyframes under `media/kf/` and `media/thumbs/`. Set
+  `CLIMB_MEDIA_DIR` if you keep them on an external drive instead
+- You will need the source collections mounted somewhere and `CLIMB_SOURCE_ROOT` pointing at them. The videos are
+  played straight from there, there is no separate web copy any more
+- (To see how to produce all of that, see the "Video Processing" section under "Getting Started - Developer")
 - Make sure the database exists and the migrations are applied. There is no dump to restore any more , the old
   `dataset/climb_db.dump` was from the pre-pg17 schema and would not load even if you still had it (see the word of
   warning under "The Database"). `python main.py schema` prints the podman command, `python main.py migrate` does the
@@ -189,6 +191,13 @@ AVS_SESSION_TOKEN=supersecrettoken
 CLIMB_USER=AlexHonold
 ```
 
+And one for where the source collections live (the videos, their scene files and info JSONs). The pipeline reads
+from it and the backend plays videos out of it, see "The source collections" below:
+
+```text:
+CLIMB_SOURCE_ROOT=/run/media/you/Data
+```
+
 That is the service wiring, and it is deliberately not the full list. The pipeline reads about thirty more
 `CLIMB_*` knobs, media and work directories, decode workers, batch sizes per model, OCR backend, caption model,
 the four RRF weights, the temporal query defaults. **`config.py` is the reference for those**; this file documents
@@ -202,6 +211,7 @@ the ones you need to get started rather than pretending to be complete.
 
 ```text
 .env                        # Environment variables and secrets
+datasets.json               # where each collection's videos / scenes / info live under CLIMB_SOURCE_ROOT
 start_climb.sh                # Launch ClIMB
 setup_climb.sh                # Setup CLIMB
 start_climb_using_conda.sh    # Launch CLIMB using Conda
@@ -212,6 +222,7 @@ backend/
     mock-dres-server.js     # a fake DRES to test submissions against (port 8080)
     avsSessionClient.js     # talks to the AVS session service, and mirrors it so search never waits
     serviceUrls.js          # resolves the backend / search engine / avs service base urls from env
+    datasets.js             # finds a source video to play, from datasets.json
     controller/             # Route handlers
     models/                 # Database models and queries
     routes/                 # Express routes
@@ -225,9 +236,7 @@ climb-avs-service/          # the shared AVS session bookkeeper, deployed once f
     package.json
 
 dataset/                    # local folder only
-    V3C1_200/               # Source video dataset
     media/                  # everything we keep (point CLIMB_MEDIA_DIR at your SSD instead)
-        video/              # 360p web-playable copies
         kf/                 # 384px keyframes
         thumbs/             # 160px keyframes for the result grid
     work/                   # everything we throw away again (CLIMB_WORK_DIR)
@@ -297,7 +306,8 @@ video_processing/
             caption.py         # VLM shot descriptions
             asr.py             # Whisper transcripts
             text_embed.py      # transcript + caption embeddings
-            shot_boundaries.py # parses master shot boundary files -> scenes
+            datasets.py        # finds the collections under CLIMB_SOURCE_ROOT, reads folders or .tgz alike
+            shot_boundaries.py # parses scene files -> scenes
             decode.py          # the one-pass FFmpeg stage
             keyframe_selection.py # thins candidate frames down to 2-32 per shot
             paths.py           # where everything lives on disk, derived not stored
@@ -308,8 +318,8 @@ readme_images/              # Images displayed in readme
 
 ### 1. Video Processing
 
-In order to get started you will first need to process the videos. Extract the keyframes, encode them and compress them
-down to decrease loading time in the frontend.
+In order to get started you will first need to process the videos: cut them into scenes, pick keyframes, and run every
+model over them.
 To do that go into the video processing part of CLIMB by running
 
 ```bash
@@ -362,11 +372,11 @@ python main.py <command> [options]
 |----------------|---------------------------------------------------------------------------------|
 | `schema`       | Print the podman command for the database                                       |
 | `migrate`      | Apply pending schema migrations. Run this first, always                         |
-| `enqueue`      | Load a manifest of videos into the job queue                                    |
+| `enqueue`      | Load a manifest of videos into the job queue (only if you have to download)     |
 | `fetch`        | Download queued videos                                                          |
-| `ingest-shots` | Probe the videos and load one scene per master shot                             |
-| `decode`       | One FFmpeg pass: 360p copy + candidate frames + audio                           |
-| `select`       | Pick 2-32 keyframes per shot and write the images                               |
+| `ingest-shots` | Probe the videos and load their TransNet scenes                                 |
+| `decode`       | One FFmpeg pass: candidate frames + audio                                       |
+| `select`       | Pick 2-32 keyframes per scene and write the images                              |
 | `purge`        | Delete transient files whose stage has finished                                 |
 | `embed`        | SigLIP2 vectors (GPU)                                                           |
 | `ocr`          | Read on-screen text (GPU)                                                       |
@@ -378,7 +388,8 @@ python main.py <command> [options]
 | `status`       | What is done and what is left                                                   |
 | `serve`        | Start the search engine the backend talks to                                    |
 
-Every command takes `--collection` and `--limit`. The GPU ones also take `--shard N --shards M`.
+Every command takes `--collection` (`V3C`, `MVK` or `LHE`; leave it out for all of them) and `--limit`. The GPU ones
+also take `--shard N --shards M`.
 `python main.py <command> --help` explains any of them.
 
 The whole batch in one line:
@@ -398,27 +409,43 @@ dies halfway can simply be run again, and a run with nothing left to do takes ab
 python main.py --help
 ```
 
-#### 1.2 Data Preprocessing
+#### 1.2 The source collections
 
-Download and extract your Dataset (i.e. from: "https://www2.itec.aau.at/owncloud/index.php/s/AcA1pvZIpDrOom5").
-Save it to ```/dataset/V3C1_200``` also extract the scenes and put them under ```/dataset/V3C1_200/scenes_v3c1_200```.
-If you would like to choose a different Dataset / Folder structure edit the respective parameters in
-```/video_processing/src/config.py```
+The videos, their scene files and the V3C info JSONs are read from wherever they are mounted, and never written to.
+Point `CLIMB_SOURCE_ROOT` at the root of it. The layout under it is in `datasets.json` at the repo root and looks like
+this:
+
+```text
+VBS/videos/v3c/00001.mp4
+VBS/videos/mvk/Ambon_Apr2012_0001.mp4
+VBS/videos/lhe/LHE01.mp4
+V3Cmeta/scenesV3C/scenes/00001.mp4.scenes.txt     or V3Cmeta/scenesV3C.tgz
+V3Cmeta/info/00001.json                           or V3Cmeta/infoV3C.tgz
+MVKmeta/scenes/...                                or MVKmeta/scenesMVK12.tgz
+LHEmeta/scenes/...                                or LHEmeta/scenesLHE.tgz
+```
+
+The metadata is fine either way, unpacked or still in its `.tgz`; the pipeline reads the archive directly if that is
+all there is. If you have one of these somewhere else entirely, `CLIMB_V3C_VIDEOS`, `CLIMB_MVK_SCENES`,
+`CLIMB_LHE_INFO` and friends override a single entry (absolute, or relative to `CLIMB_SOURCE_ROOT`).
+
+One trap: `MVKmeta` contains two scene archives. Use `scenesMVK12.tgz`. The other one, `mvk12scenes.tgz`, names its
+files `BigIsland1_...` where the video is `BigIsland_...`, and a scene file that matches no video is a scene file
+that quietly does nothing.
 
 Please be sure that you have FFmpeg installed under your system as CLIMB will spawn a whole lot of child-processes
 executing FFmpeg. To download FFmpeg visit: https://ffmpeg.org/download.html
 
-Video compression used to live here as its own step. It has moved into the decode stage (section 1.5), which does the
-compressing, the frame extracting and the audio ripping in a single pass, because decoding the same video three times
-was a bit silly.
+Video compression used to live here as its own step, and then inside decode. It is gone: the source videos are already
+480x270 H.264, so the frontend just plays them, and compressing something that small a second time was a bit silly.
 
 #### 1.2.1 The job queue
 
-At full V3C scale you cannot keep the videos. They live on the university server, come down a batch at a time,
-get processed, and go away again. That loop is what `enqueue` / `fetch` / `purge` are for:
+If the collections are mounted (see 1.2), skip this, there is nothing to download. If they are not, the videos come
+down a batch at a time, get processed, and go away again. That loop is what `enqueue` / `fetch` / `purge` are for:
 
 ```bash 
-python main.py enqueue --manifest videos.txt   # a list of source URIs, one per line
+python main.py enqueue --collection V3C --manifest videos.txt   # a list of source URIs, one per line
 python main.py fetch                           # pulls the next batch down
 ...                                            # decode, select, and so on
 python main.py purge                           # throws away what is no longer needed
@@ -430,8 +457,9 @@ whatever works (`rsync -a --partial {source} {dest}` by default, but scp, curl o
 `purge` is careful rather than clever. It does not wait for the whole pipeline to finish before freeing
 anything, because the working set is what your SSD is spent on:
 
-- the **downloaded video** goes as soon as decode has produced the 360p copy and the candidate frames. It is by
-  far the biggest thing and nothing afterwards reads it
+- the **downloaded video** goes once keyframe selection has run for it. Selection still needs it for scenes too short
+  to have a candidate frame, after that nothing reads it. Only downloads in `work/raw` are ever deleted, never
+  anything under `CLIMB_SOURCE_ROOT`
 - the **candidate frames** go once every scene in that video has a keyframe
 - the **audio** goes once the video has been transcribed, or if it never had any
 
@@ -448,7 +476,7 @@ captions and transcripts exist, and how much transient junk is still sitting on 
 #### 1.3 The Database
 
 Everything downstream needs a database: the frame rate of every video (so we can build the millisecond payload for the
-DRES server), the master shots, the keyframes and eventually a couple of million embeddings.
+DRES server), the scenes, the keyframes and eventually a couple of million embeddings.
 Because every sane people hates it when postgres runs locally on your machine we will spin up a podman container for
 that. The parameters
 for the database can be found and edited in ```/video_processing/src/config.py```. Sensitive information should be  
@@ -502,22 +530,26 @@ afternoon nobody asked for. Need to change something? Add a new migration.
 You no longer need to create the ```vector``` extension by hand, migration 001 does it for you (along with ```pg_trgm```
 and ```unaccent```).
 
-#### 1.4 Master shot boundaries
+#### 1.4 Scenes
 
-V3C ships with predefined *master shot boundaries*: the official list of where each shot starts and ends. That list is
-the backbone of the whole index, so it goes in before anything else touches a video.
+Every collection comes with *scene files*: where each scene starts and ends, found by TransNet. They are the backbone of
+the whole index, so they go in before anything else touches a video.
+
+We use these, not V3C's official *master shot boundaries*. The TransNet scenes are longer, they did the job at the uni
+competition, and V3C has 1.97 million of them against 4.14 million master shots, which is a lot of keyframes we do not
+have to pick, store, embed and caption.
 
 ```bash 
 python main.py ingest-shots
 ```
 
-This walks the dataset, runs ```ffprobe``` on every video (frame rate, duration, dimensions, whether there is an audio
-track at all) and writes one ```scenes``` row per master shot. Frame rates come from ffprobe rather than OpenCV, because
+This walks every collection, runs ```ffprobe``` on every video (frame rate, duration, dimensions, whether there is an
+audio track at all) and writes one ```scenes``` row per scene. Frame rates come from ffprobe rather than OpenCV, because
 OpenCV cheerfully returns 0 or NaN for a decent number of V3C files and the old code's answer to that was "eh, must be 30
 fps" , which then quietly poisons every timestamp we ever send to DRES for that video. The 200-video set alone has ten
 different frame rates in it, including such beauties as 23.000689 and 29.97003.
 
-The parser handles both the course's ```<video_id>.mp4.scenes.txt``` files and the official V3C boundary TSVs. It works
+The parser handles both the ```<video_id>.mp4.scenes.txt``` scene files and the official V3C boundary TSVs. It works
 out which columns hold the frame numbers by looking at what is actually in them instead of trusting a fixed column
 order, so it does not care whether NIST puts the frames before or after the timecodes, and it falls back to converting
 timecodes with the probed frame rate if a file has no frame columns at all. One corrupt line gets skipped with a warning
@@ -532,10 +564,8 @@ python main.py decode
 ```
 
 and go do something else for a while. For each video this spawns exactly **one** FFmpeg process which decodes it once
-and produces three things at the same time:
+and produces two things at the same time:
 
-- a 360p H.264 copy under ```media/video/``` , this is what the frontend plays, and at full V3C scale it is the only
-  copy of the video we keep once the original goes back to the server
 - candidate frames under ```work/cand/``` , one every half second, which keyframe selection will later thin down
 - a 16 kHz mono Opus track under ```work/audio/``` , food for Whisper
 
@@ -548,19 +578,15 @@ picture. It worked. It just did not need to.
 
 A few things worth knowing:
 
-- **It will not upscale.** The web copy is capped at 360 lines, so the already-small 480x270 course videos are left at
-  their own size instead of being blown up for no reason.
+- **It will not upscale.** Candidates are capped at 384 lines, so the 480x270 sources stay at their own size instead
+  of being blown up for no reason.
 - **Candidate frames are JPEG, not WebP.** They get deleted the moment selection has run, so WebP's nicer compression
   buys nothing, and it is not free: 3.1s per video versus 0.1s. The keyframes we actually *keep* are WebP.
-- **Tuning knobs**, all environment variables: ```CLIMB_DECODE_WORKERS``` (default 6), ```CLIMB_FFMPEG_THREADS```
-  (default 2) and ```CLIMB_X264_PRESET``` (default ```veryfast```). Set ```CLIMB_MEDIA_DIR``` and ```CLIMB_WORK_DIR``` to
-  put the output on your external SSD rather than filling up your laptop.
-- **NVENC is used automatically if your GPU can actually do it.** Note the "actually": the old check just asked FFmpeg
-  whether it knew what NVENC *was*, which every distro build cheerfully says yes to, GPU or no GPU. It now tries to
-  encode a single tiny frame and believes the result. When NVENC is selected, the same path also uses CUDA hardware
-  decoding and CUDA scaling; candidate JPEGs are downloaded back to system memory because JPEG encoding is CPU-based.
-  If hardware processing fails mid-run (consumer cards limit how many NVENC sessions you can have at once), that video
-  quietly falls back to the CPU.
+- **Tuning knobs**, both environment variables: ```CLIMB_DECODE_WORKERS``` (default 6) and ```CLIMB_FFMPEG_THREADS```
+  (default 2). Set ```CLIMB_MEDIA_DIR``` and ```CLIMB_WORK_DIR``` to put the output on your external SSD rather than
+  filling up your laptop.
+- **No GPU here.** There used to be an NVENC path for the web copy. With no web copy there is nothing to encode, and
+  decoding 270p on the CPU is not what anyone is waiting on.
 
 - **Broken videos get indexed anyway.** V3C1_200 contains two videos (00016 and 00024) whose H.264 streams are damaged
   , the container promises 23,120 and 47,289 frames, the bitstream delivers about 84% of that and a great deal of
@@ -579,7 +605,7 @@ is its own step:
 python main.py select
 ```
 
-Each master shot gets **2 to 32 keyframes, picked for how different they look from each other** rather than by the
+Each scene gets **2 to 32 keyframes, picked for how different they look from each other** rather than by the
 clock. The rule:
 
 1. **How many.** `k = ceil(shot_seconds / 4)`, clamped to between 2 and 32. A 3-second shot gets 2, a two-minute one

@@ -4,25 +4,34 @@ CLIMB pipeline entry point.
 Subcommands rather than the previous chain of boolean flags, which had grown to the point where
 `elif extract_keyframes is not extract_keyframes_no_db` was load-bearing.
 
-A typical batch, start to finish:
+With the collections on a mounted drive (CLIMB_SOURCE_ROOT), start to finish:
 
     python main.py migrate
-    python main.py enqueue --manifest videos.txt
-    python main.py fetch
     python main.py ingest-shots
     python main.py decode
     python main.py select
-    python main.py purge          # the raw video is dead weight from here on
+    python main.py purge
     python main.py embed
     python main.py ocr
     python main.py caption
     python main.py asr
     python main.py embed-text
     python main.py index build    # once, at the end, on a machine with RAM to spare
+
+Every stage works on all collections unless given --collection V3C|MVK|LHE.
+
+When the videos have to be downloaded instead, enqueue and fetch come first:
+
+    python main.py enqueue --collection V3C --manifest videos.txt
+    python main.py fetch
+    python main.py ingest-shots
+    python main.py decode
+    python main.py select
+    python main.py purge          # the downloaded video is dead weight from here on
+    ...
 """
 
 import argparse
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -34,14 +43,14 @@ from custom_logger import setup_logging
 from db.connection import connection_scope
 from db.index_ops import build_indexes, drop_indexes, index_status
 from db.migrate import migration_status, run_migrations
-from pipeline import runner
+from pipeline import datasets, runner
 from pipeline.asr import asr_pending
 from pipeline.caption import caption_pending
 from pipeline.decode import decode_from_database
 from pipeline.embed import embed_pending
 from pipeline.keyframe_selection import select_from_database
 from pipeline.ocr import ocr_pending
-from pipeline.shot_boundaries import ingest_directory
+from pipeline.shot_boundaries import ingest_collection
 from pipeline.text_embed import embed_text_pending
 
 # The order `run` applies stages in, regardless of the order they are listed on the command line.
@@ -51,7 +60,7 @@ RUN_ORDER = ["fetch", "ingest-shots", "decode", "select", "purge",
 
 def add_common(parser, sharded=False):
     parser.add_argument("--collection", default=None,
-                        help="restrict to one collection (default: Config.COLLECTION)")
+                        help="restrict to one collection: V3C, MVK or LHE (default: all)")
     parser.add_argument("--limit", type=int, default=None)
     if sharded:
         parser.add_argument("--shard", type=int, default=0)
@@ -73,8 +82,8 @@ def build_parser():
     enqueue.add_argument("--manifest", required=True)
 
     add_common(sub.add_parser("fetch", help="download queued videos"))
-    add_common(sub.add_parser("ingest-shots", help="probe videos and load master shot boundaries"))
-    add_common(sub.add_parser("decode", help="one FFmpeg pass: web video, candidates, audio"))
+    add_common(sub.add_parser("ingest-shots", help="probe videos and load their scenes"))
+    add_common(sub.add_parser("decode", help="one FFmpeg pass: candidate frames and audio"))
     add_common(sub.add_parser("select", help="pick keyframes and write images"))
     add_common(sub.add_parser("embed", help="SigLIP2 vectors (GPU)"), sharded=True)
     add_common(sub.add_parser("asr", help="Whisper transcripts (GPU)"), sharded=True)
@@ -100,7 +109,7 @@ def build_parser():
 
 def dispatch(args, conn=None):
     conf = Config()
-    collection = getattr(args, "collection", None) or conf.COLLECTION
+    collection = (getattr(args, "collection", None) or "").upper() or None
     limit = getattr(args, "limit", None)
     shard = getattr(args, "shard", 0)
     shards = getattr(args, "shards", 1)
@@ -109,7 +118,6 @@ def dispatch(args, conn=None):
     # stage-specific arguments like --keep-raw. Reading them directly makes `run --stages purge`
     # die with an AttributeError.
     keep_raw = getattr(args, "keep_raw", False)
-    dataset_dir = os.path.join(conf.DATA_DIR, conf.DATASET_FOLDER)
     raw_dir = str(Path(conf.WORK_DIR) / "raw")
 
     if args.command == "schema":
@@ -128,17 +136,18 @@ def dispatch(args, conn=None):
     elif args.command == "status":
         runner.status(conn, collection)
     elif args.command == "enqueue":
+        if not collection:
+            raise SystemExit("enqueue needs --collection: a manifest does not say what it holds")
         runner.enqueue(conn, getattr(args, 'manifest', None), collection)
     elif args.command == "fetch":
         runner.fetch(conn, limit=limit, collection=collection)
     elif args.command == "ingest-shots":
         run_migrations(conn)
-        ingest_directory(conn, video_dir=raw_dir, extra_video_dirs=(dataset_dir,),
-                         boundary_dir=os.path.join(dataset_dir, conf.SCENES_DIR),
-                         collection=collection, limit=limit,
-                         video_ids=runner.queued_video_ids(conn, collection))
+        for dataset in datasets.selected(collection):
+            ingest_collection(conn, dataset, raw_dir=raw_dir, limit=limit,
+                              video_ids=runner.queued_video_ids(conn, dataset.name))
     elif args.command == "decode":
-        decode_from_database(conn, source_dir=dataset_dir, collection=collection, limit=limit)
+        decode_from_database(conn, collection=collection, limit=limit)
     elif args.command == "select":
         select_from_database(conn, collection=collection, limit=limit)
     elif args.command == "embed":

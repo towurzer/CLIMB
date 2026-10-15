@@ -6,6 +6,7 @@ require('dotenv').config();
 
 const {SEARCH_ENGINE_URL} = require('./serviceUrls');
 const avsClient = require('./avsSessionClient');
+const {sourceVideoPath} = require('./datasets');
 
 const searchRoutes = require('./routes/search.routes');
 const videoRoutes = require('./routes/video.routes');
@@ -83,7 +84,8 @@ app.use('/climb/dres', dresRoutes);
 app.use('/climb/avs', avsRoutes);
 
 // Media roots. CLIMB_MEDIA_DIR is where the pipeline writes; at full V3C scale that is the
-// external SSD rather than anywhere inside the repo.
+// external SSD rather than anywhere inside the repo. Videos are not in there, they are played from
+// the source collections, see datasets.js.
 const MEDIA_DIR = process.env.CLIMB_MEDIA_DIR || path.resolve(__dirname, '../dataset/media');
 
 // Keyframes and thumbnails never change once written
@@ -91,7 +93,11 @@ const immutable = {maxAge: '365d', immutable: true};
 
 app.use('/thumbs', express.static(path.join(MEDIA_DIR, 'thumbs'), immutable));
 app.use('/kf', express.static(path.join(MEDIA_DIR, 'kf'), immutable));
-app.use('/videos', express.static(path.join(MEDIA_DIR, 'video'), {maxAge: '365d'}));
+app.get('/videos/:file', (req, res) => {
+    const file = sourceVideoPath(req.params.file.replace(/\.mp4$/, ''));
+    if (!file) return res.sendStatus(404);
+    res.sendFile(file, {maxAge: '365d'});
+});
 
 app.listen(PORT, () => {
     console.log(`Video Retrieval API running on http://localhost:${PORT}`);

@@ -18,12 +18,6 @@ class Config:
 
     # --- Decode stage ---
     VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}  # valid video extensions
-    WEB_VIDEO_EXTENSION = ".mp4"
-    WEB_VIDEO_HEIGHT: int = 360  # never upscales; a source shorter than this is left alone
-    WEB_VIDEO_CRF: int = 32
-    WEB_AUDIO_BITRATE: str = "48k"
-    # set CLIMB_X264_PRESET=superfast to trade ~23% more disk for ~1.5x faster encoding.
-    WEB_VIDEO_PRESET: str = os.getenv("CLIMB_X264_PRESET") or "veryfast"
     CANDIDATE_FPS: int = 2
     CANDIDATE_HEIGHT: int = 384  # matches SigLIP2's 384px input
     CANDIDATE_JPEG_QUALITY: int = 3  # ffmpeg -q:v scale, 2 (best) to 31 (worst)
@@ -149,15 +143,13 @@ class Config:
     FFMPEG_THREADS: int = int(os.getenv("CLIMB_FFMPEG_THREADS") or 2)
 
     # --- Paths ---
-    DATA_DIR: str = str(PROJECT_ROOT / "dataset")
-    DATASET_FOLDER: str = "V3C1_200"
-    SCENES_DIR: str = "scenes_v3c1_204/scenes_v3c1_204"
-    # Which shard the videos in DATASET_FOLDER belong to.
-    COLLECTION: str = "V3C1"
+    # Root of the source collections: videos, scene files, info JSONs. The layout under it is in
+    # /datasets.json, see pipeline/datasets.py. Nothing is ever written here.
+    SOURCE_ROOT: str = os.getenv("CLIMB_SOURCE_ROOT") or ""
     LOG_FOLDER: str = str(VIDEO_PROCESSING_ROOT / "logs")
     MIGRATIONS_DIR: str = str(VIDEO_PROCESSING_ROOT / "migrations")
 
-    #   CLIMB_MEDIA_DIR  ~510 GB, persistent -- 360p video, keyframes, thumbnails
+    #   CLIMB_MEDIA_DIR  persistent -- keyframes, thumbnails
     #   CLIMB_WORK_DIR   transient -- raw downloads, candidate frames, extracted audio
     MEDIA_DIR: str = os.getenv("CLIMB_MEDIA_DIR") or str(PROJECT_ROOT / "dataset" / "media")
     WORK_DIR: str = os.getenv("CLIMB_WORK_DIR") or str(PROJECT_ROOT / "dataset" / "work")

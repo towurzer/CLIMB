@@ -24,7 +24,7 @@ const thumbnailUrl = (videoId, shotIndex, kfIndex) =>
 const keyframeUrl = (videoId, shotIndex, kfIndex) =>
     `${BACKEND_URL}/kf/${shardOf(videoId)}/${videoId}/${keyframeName(shotIndex, kfIndex)}`;
 
-/** 360p web-playable transcode. */
-const videoUrl = (videoId) => `${BACKEND_URL}/videos/${shardOf(videoId)}/${videoId}.mp4`;
+/** The source video itself, see datasets.js. */
+const videoUrl = (videoId) => `${BACKEND_URL}/videos/${videoId}.mp4`;
 
 module.exports = {shardOf, keyframeName, thumbnailUrl, keyframeUrl, videoUrl};
