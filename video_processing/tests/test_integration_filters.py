@@ -82,6 +82,21 @@ def test_a_clip_restriction_covers_its_recording(worker, corpus, db):
     assert _videos_of(body) == set(clips)
 
 
+def test_a_clips_filmstrip_is_its_whole_recording(backend, corpus, db):
+    recording, clips = _recording(db)
+    status, body = get_json(f"{backend}/climb/videos/{clips[-1]}/scenes")
+    assert status == 200, body
+    assert body["recording_id"] == recording
+    assert [c["video_id"] for c in body["clips"]] == clips
+    offsets = [c["recording_offset_ms"] for c in body["clips"]]
+    assert offsets[0] == 0 and offsets == sorted(offsets)
+    order = [(s["video_id"], s["shot_index"]) for s in body["scenes"]]
+    assert order == sorted(order) and {v for v, _ in order} == set(clips)
+    assert body["total"] == _one(db, "SELECT count(*) FROM scenes WHERE video_id = ANY(%s)",
+                                 (clips,))[0]
+    assert all(s["video_url"].endswith(f"/videos/{s['video_id']}.mp4") for s in body["scenes"])
+
+
 def test_the_collection_restriction_holds(worker, corpus, db):
     collections = [r[0] for r in _all(db, """
         SELECT DISTINCT v.collection FROM videos v

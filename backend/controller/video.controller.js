@@ -25,7 +25,7 @@ exports.getVideoInfo = async (req, res) => {
     res.status(200).json(details);
 };
 
-/** Scenes of a video with their keyframes, what the filmstrip and shot browser render. */
+/** Scenes of a video's recording with their keyframes, what the filmstrip and shot browser render. */
 exports.getVideoScenes = async (req, res) => {
     const {video_id} = req.params;
     const hasPagination = req.query.page !== undefined || req.query.per_page !== undefined;
@@ -34,6 +34,7 @@ exports.getVideoScenes = async (req, res) => {
         ? Math.min(Math.max(parseInt(req.query.per_page || '60', 10), 1), 200)
         : null;
 
-    const {total, scenes, fps, duration_sec, video_url} = await queries.getVideoScenes(video_id, page, perPage);
-    res.status(200).json({video_id, scenes, total, fps, duration_sec, video_url});
+    const {total, recording_id, scenes, clips, fps, duration_sec, video_url} =
+        await queries.getVideoScenes(video_id, page, perPage);
+    res.status(200).json({video_id, recording_id, scenes, clips, total, fps, duration_sec, video_url});
 };

@@ -1,7 +1,7 @@
 import {useRef, useEffect, useState} from "react";
 import {formatTimecode, keyframeMs} from "../timecode";
 
-function VideoPlayer({result}) {
+function VideoPlayer({result, previousClip = null, nextClip = null, clipName, onStepClip}) {
     const videoRef = useRef(null);
     const [loopSegment, setLoopSegment] = useState(true);
 
@@ -12,6 +12,9 @@ function VideoPlayer({result}) {
     const videoUrl = result.video_url; // Always from the API: mediaPaths.js is the one place that knows the sharded layout.
     // Why the video did not load, from the backend's 404 text; null while it plays.
     const [loadError, setLoadError] = useState(null);
+    // Played to the end of the clip (only possible with the loop off). The next clip of the
+    // recording is offered, never loaded on its own: switching clips changes what is submitted.
+    const [ended, setEnded] = useState(false);
 
     const explainLoadError = async () => {
         try {
@@ -27,6 +30,7 @@ function VideoPlayer({result}) {
         const video = videoRef.current;
         if (!video) return;
         setLoadError(null);
+        setEnded(false);
 
         // Force reload when source changes
         video.load();
@@ -64,10 +68,26 @@ function VideoPlayer({result}) {
                     ref={videoRef}
                     controls
                     preload="metadata"
+                    onEnded={() => {
+                        // A segment within 5 s of the clip's end reaches the end before endSec
+                        const video = videoRef.current;
+                        if (!loopSegment || !video) return setEnded(true);
+                        video.currentTime = startSec;
+                        video.play().catch(() => {
+                        });
+                    }}
+                    onPlay={() => setEnded(false)}
                 >
                     {/* A failed <source> fires error on itself, not on the <video> */}
                     <source src={videoUrl} type="video/mp4" onError={explainLoadError}/>
                 </video>
+                {ended && nextClip && (
+                    <div className="clip-end-overlay">
+                        <button className="clip-step-btn" onClick={() => onStepClip(nextClip, true)}>
+                            Next clip {clipName(nextClip)} ▶
+                        </button>
+                    </div>
+                )}
                 {loadError && (
                     <div className="video-fallback">
                         <img src={result.keyframe_url} alt="Keyframe"/>
@@ -89,6 +109,20 @@ function VideoPlayer({result}) {
                     />
                     Loop segment
                 </label>
+                {(previousClip || nextClip) && (
+                    <div className="clip-step">
+                        <button className="clip-step-btn" disabled={!previousClip}
+                                onClick={() => onStepClip(previousClip, false)}
+                                title={previousClip ? `Select the end of clip ${previousClip.video_id}` : "First clip"}>
+                            ◀ {previousClip ? clipName(previousClip) : ""}
+                        </button>
+                        <button className="clip-step-btn" disabled={!nextClip}
+                                onClick={() => onStepClip(nextClip, true)}
+                                title={nextClip ? `Select the start of clip ${nextClip.video_id}` : "Last clip"}>
+                            {nextClip ? clipName(nextClip) : ""} ▶
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );

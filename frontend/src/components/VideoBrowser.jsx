@@ -2,6 +2,7 @@ import {useState, useEffect, useCallback} from "react";
 import {sceneKey} from "../sceneKey";
 import {formatDuration, formatTimecode} from "../timecode";
 import {COLLECTIONS} from "../sources";
+import {clipLabel} from "../useRecording";
 
 const SHOTS_PER_PAGE = 60;
 
@@ -48,6 +49,8 @@ function VideoBrowser({
     const [shotsPage, setShotsPage] = useState(1);
     const [shotsTotal, setShotsTotal] = useState(null);
     const [shotsLoadingMore, setShotsLoadingMore] = useState(false);
+    // The shot view shows the selected video's whole recording: every clip of an MVK dive.
+    const [recording, setRecording] = useState({recordingId: null, clips: []});
     const [filter, setFilter] = useState("");
     // True when the shot view was opened by a deep link (Browse in Fullscreen) rather than by
     // clicking a card in the grid. The back arrow follows the way in, so it leads back out.
@@ -103,6 +106,7 @@ function VideoBrowser({
     const handleVideoClick = (video, viaDeepLink = false) => {
         setSelectedVideo(video);
         setOpenedByDeepLink(viaDeepLink);
+        setRecording({recordingId: null, clips: []});
         setShots([]);
         setShotsPage(1);
         setShotsTotal(null);
@@ -113,6 +117,7 @@ function VideoBrowser({
             .then((data) => {
                 setShots(data.scenes || []);
                 setShotsTotal(data.total ?? null);
+                setRecording({recordingId: data.recording_id, clips: data.clips || []});
                 setSelectedVideo((prev) => prev ? {...prev, video_url: data.video_url ?? prev.video_url} : prev);
                 setShotsLoading(false);
             })
@@ -162,6 +167,7 @@ function VideoBrowser({
         let cancelled = false;
         setSelectedVideo({video_id: openVideoId, fps: 25, duration_sec: 0});
         setOpenedByDeepLink(true);
+        setRecording({recordingId: null, clips: []});
         setShots([]);
         setShotsPage(1);
         setShotsTotal(null);
@@ -174,6 +180,7 @@ function VideoBrowser({
                 const fetchedShots = data.scenes || [];
                 setShots(fetchedShots);
                 setShotsTotal(data.total ?? null);
+                setRecording({recordingId: data.recording_id, clips: data.clips || []});
                 setSelectedVideo({
                     video_id: openVideoId,
                     fps: data.fps || fetchedShots[0]?.fps || 25,
@@ -211,8 +218,8 @@ function VideoBrowser({
         setShotsTotal(null);
     };
 
-    // When user clicks a shot, convert to result format and pass up.
-    // keyframe_time_ms has to come along, it is the time we submit to DRES
+    // When user clicks a shot, convert to result format and pass up. The shot names its clip,
+    // which is what gets submitted. keyframe_time_ms has to come along, it is the time we submit to DRES
     const handleShotClick = (shot, clicked) => {
         const fps = shot.fps || selectedVideo.fps || 25;
         const keyframes = shot.keyframes || [];
@@ -220,7 +227,7 @@ function VideoBrowser({
         onSelectShot({
             scene_id: shot.scene_id,
             keyframe_id: keyframe.keyframe_id,
-            video_id: selectedVideo.video_id,
+            video_id: shot.video_id || selectedVideo.video_id,
             shot_index: shot.shot_index,
             kf_index: keyframe.kf_index,
             keyframes,
@@ -235,11 +242,12 @@ function VideoBrowser({
             thumbnail_url: keyframe.thumbnail_url || shot.thumbnail_url,
             keyframe_url: keyframe.keyframe_url,
             // The player builds no URLs of its own; the sharded path comes from the API.
-            video_url: selectedVideo.video_url,
+            video_url: shot.video_url || selectedVideo.video_url,
         });
     };
 
     const filtered = filter ? videos.filter((v) => v.video_id.includes(filter)) : videos;
+    const multiClip = recording.clips.length > 1;
 
     // ── Shot view: showing shots of a selected video ──
     if (selectedVideo) {
@@ -250,9 +258,12 @@ function VideoBrowser({
                         ← Back to {exitsToCaller ? "results" : "videos"}
                     </button>
                     <span className="browse-video-title">
-            {selectedVideo.video_id}
+            {multiClip ? recording.recordingId : selectedVideo.video_id}
                         <span className="browse-video-meta">
-              {shotsTotal ?? shots.length} shots · {formatDuration(selectedVideo.duration_sec)} · {selectedVideo.fps}fps
+              {multiClip && `${recording.clips.length} clips · `}
+              {shotsTotal ?? shots.length} shots · {formatDuration(multiClip
+                  ? recording.clips.reduce((sum, clip) => sum + clip.duration_sec, 0)
+                  : selectedVideo.duration_sec)} · {selectedVideo.fps}fps
             </span>
           </span>
                 </div>
@@ -262,10 +273,18 @@ function VideoBrowser({
                     <>
                         {/* Every keyframe, not one per scene.*/}
                         <div className="browse-grid">
-                            {shots.flatMap((shot) => {
+                            {shots.flatMap((shot, s) => {
                                 const submitted = submittedScenes.has(sceneKey(shot.scene_id));
-                                const covered = coveredVideos.has(selectedVideo.video_id);
-                                return (shot.keyframes || []).map((keyframe) => (
+                                const covered = coveredVideos.has(shot.video_id || selectedVideo.video_id);
+                                const clipStart = multiClip && (s === 0 || shots[s - 1].video_id !== shot.video_id);
+                                const clip = clipStart && recording.clips.find((c) => c.video_id === shot.video_id);
+                                const divider = clipStart ? [
+                                    <div key={`clip-${shot.video_id}`} className="browse-clip-divider">
+                                        Clip {clipLabel(recording.recordingId, shot.video_id)}
+                                        {clip && <span> · {formatDuration(clip.duration_sec)} · starts {formatTimecode(clip.recording_offset_ms)} into the dive</span>}
+                                    </div>
+                                ] : [];
+                                return [...divider, ...(shot.keyframes || []).map((keyframe) => (
                                     <div
                                         key={keyframe.keyframe_id}
                                         className={`browse-card ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
@@ -282,7 +301,7 @@ function VideoBrowser({
                                             {submitted && <span className="submitted-badge">✓</span>}
                                         </div>
                                     </div>
-                                ));
+                                ))];
                             })}
                         </div>
                         <div ref={shotsSentinelRef} className="browse-sentinel"/>

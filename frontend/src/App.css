@@ -1256,6 +1256,29 @@ body {
     margin-left: 0;
 }
 
+/* An MVK dive is several clips in one strip: a wider gap and a bar mark where a clip begins, and
+   the clips other than the selected one are dimmed slightly. */
+.shot-thumb.clip-start {
+    margin-left: 18px;
+    border-left: 3px solid #e8a035;
+}
+
+.shot-thumb.other-clip img {
+    opacity: 0.7;
+}
+
+.clip-label {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    font-size: 9px;
+    font-weight: 600;
+    color: #1a1a1a;
+    background: #e8a035;
+    padding: 1px 4px;
+    border-radius: 2px;
+}
+
 /* Shot index on top, keyframe time below it -- both fit in an 80px thumb only if they
    sit in opposite corners, and an over-an-hour timecode is 10 characters wide. */
 .shot-label {
@@ -1486,6 +1509,21 @@ body {
     gap: 10px;
 }
 
+/* Start of a clip in a multi-clip (MVK) recording: a full-width row in the shot grid */
+.browse-clip-divider {
+    grid-column: 1 / -1;
+    padding: 6px 0 2px;
+    border-bottom: 2px solid #e8a035;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e8a035;
+}
+
+.browse-clip-divider span {
+    font-weight: 400;
+    color: #888;
+}
+
 .browse-card {
     cursor: pointer;
     border-radius: 6px;
@@ -1709,8 +1747,10 @@ The timecode is what tells them apart. */
 /* ── Player Controls ── */
 .player-controls {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
+    gap: 6px;
 }
 
 .loop-toggle {
@@ -1725,6 +1765,46 @@ The timecode is what tells them apart. */
 
 .loop-toggle input {
     cursor: pointer;
+}
+
+/* Prev / next clip of an MVK dive */
+.clip-step {
+    display: flex;
+    gap: 4px;
+}
+
+.clip-step-btn {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid #444;
+    background: #2a2a2a;
+    color: #ddd;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.clip-step-btn:hover:not(:disabled) {
+    border-color: #e8a035;
+}
+
+.clip-step-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.clip-end-overlay {
+    position: absolute;
+    right: 12px;
+    bottom: 48px;
+}
+
+.clip-end-overlay .clip-step-btn {
+    font-size: 14px;
+    padding: 6px 12px;
+    background: rgba(0, 0, 0, 0.8);
+    border-color: #e8a035;
 }
 
 /* AVS (Ad-hoc Video Search) */

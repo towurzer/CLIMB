@@ -257,11 +257,12 @@ frontend/
         dresSubmission.js   # formatting of DRES submission results
         timecode.js         # timecode <-> ms <-> frame conversion
         sceneKey.js         # one canonical scene identity for grid, browser and AVS
+        useRecording.js     # all clips of the selected video's recording, prev / next clip
         components/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
-            VideoPlayer.jsx # Video player with segment loop
-            ShotBrowser.jsx # Filmstrip of every keyframe in the video
+            VideoPlayer.jsx # Video player with segment loop and prev / next clip
+            ShotBrowser.jsx # Filmstrip of every keyframe in the video's recording
             KeyframeTime.jsx # editable keyframe time fields
             VideoBrowser.jsx# Browse all videos
             VqaAnswer.jsx   # VQA answer input + DRES submit buttons
@@ -951,6 +952,19 @@ Interesting to know is:
   forward pass already owns every core and batching just makes it longer. `batch_embeddings` decides, not you.
 - **Nothing is enriched until the chains exist.** A stage runs 1000 deep and maybe 40 hits survive into a chain, so
   fetching filmstrips for the other 2960 was pure tribute. Linking only ever wanted four columns.
+
+##### MVK dives in the preview
+
+The filmstrip under the player and "Browse in Fullscreen" show the whole dive, not just the clip you clicked: every
+clip in order, each one starting at an orange mark with its number (`0002`), and the fullscreen view says how far into
+the dive each clip starts. Clicking a keyframe in another clip selects *that* clip, which is what gets submitted, since
+DRES judges clips, not dives.
+
+Next to "Loop segment" sit `◀ 0001` and `0002 ▶`. Forward lands on the next clip's first keyframe, back on the previous
+clip's last, so stepping reads as continuing the dive. The player never switches clips on its own. With the loop off
+it plays to the end of the clip and then offers "Next clip 0002 ▶", because a player that wandered into the next clip
+by itself would be showing you one clip while Submit sends another. With the loop on, a keyframe in the last five
+seconds of a clip now loops instead of running into the end and stopping.
 
 #### 1.10 Start the Search Engine
 

@@ -3,7 +3,7 @@
   "info": {
     "title": "Video Retrieval API",
     "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.\n\nv2.1.0: AVS session bookkeeping moved out of this backend into a separate service (`climb-avs-service`), so teammates running their own local stacks share one exclusion list. Every AVS route can now answer **503** when that service is unreachable, which is deliberately distinct from 404: 404 means the session is gone, 503 means we cannot tell. Snapshots carry a `collab` field, and /climb/health reports `avs_collab`. Search and DRES submission never depend on the service; search filters a local mirror. With `AVS_SESSION_SERVICE_URL` unset the store stays in-process and 503 never occurs.\n\nv2.2.0: `collection` restricts a search to V3C, MVK or LHE. Query requirements (text:, said:/spoken:, tag:, video:) combine at video level, and the response reports each in `filters`. Videos are served from the source collections.",
-    "version": "2.2.0"
+    "version": "2.3.0"
   },
   "servers": [
     {
@@ -719,8 +719,8 @@
     },
     "/climb/videos/{video_id}/scenes": {
       "get": {
-        "summary": "Get scenes (master shots) for a specific video",
-        "description": "Returns scenes in shot order, each with its keyframes. Omit both `page` and `per_page` for every scene in one response.",
+        "summary": "Get the scenes of a video's whole recording",
+        "description": "Returns the scenes of every clip in the video's recording (all clips of an MVK dive; any other video is its own recording), ordered by clip and then shot, each with its keyframes. Omit both `page` and `per_page` for every scene in one response.",
         "operationId": "getVideoScenes",
         "parameters": [
           {
@@ -766,9 +766,39 @@
                     "video_id": {
                       "type": "string"
                     },
+                    "recording_id": {
+                      "type": "string",
+                      "description": "The recording the video belongs to; the video_id itself unless it is an MVK clip"
+                    },
+                    "clips": {
+                      "type": "array",
+                      "description": "Every clip of the recording in order",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "video_id": {"type": "string"},
+                          "fps": {"type": "number"},
+                          "duration_sec": {"type": "integer"},
+                          "recording_offset_ms": {"type": "integer", "description": "Where the clip starts within its recording"},
+                          "video_url": {"type": "string"}
+                        }
+                      }
+                    },
+                    "fps": {
+                      "type": "number",
+                      "description": "The requested video's"
+                    },
+                    "duration_sec": {
+                      "type": "integer",
+                      "description": "The requested video's"
+                    },
+                    "video_url": {
+                      "type": "string",
+                      "description": "The requested video's"
+                    },
                     "total": {
                       "type": "integer",
-                      "description": "Total number of shots for this video, regardless of pagination."
+                      "description": "Total number of shots in the recording, regardless of pagination."
                     },
                     "scenes": {
                       "type": "array",
@@ -1402,6 +1432,17 @@
           "keyframe_id": {
             "type": "integer",
             "description": "Keyframe shown for the scene"
+          },
+          "video_id": {
+            "type": "string",
+            "description": "The clip the scene is in; selecting the scene selects this clip"
+          },
+          "video_url": {
+            "type": "string"
+          },
+          "recording_offset_ms": {
+            "type": "integer",
+            "description": "Where the scene's clip starts within its recording"
           }
         },
         "required": [

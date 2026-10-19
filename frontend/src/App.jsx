@@ -4,6 +4,7 @@ import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
 import ShotBrowser from "./components/ShotBrowser";
+import {clipLabel, landingInClip, neighbourClips, useRecording} from "./useRecording";
 import VideoBrowser from "./components/VideoBrowser";
 import VqaAnswer from "./components/VqaAnswer";
 import SubmissionLog from "./components/SubmissionLog";
@@ -100,6 +101,10 @@ function App() {
     }, [excludedVideos]);
 
     const isAvs = taskMode === "avs";
+
+    // The selected video's recording: every clip of an MVK dive, for the filmstrip and clip buttons
+    const recording = useRecording(selectedResult?.video_id, API_URL);
+    const {previous: previousClip, next: nextClip} = neighbourClips(recording.clips, selectedResult?.video_id);
 
     // The submitted time is the keyframe, not the scene, so both fields start out on the keyframe
     const selectedKeyframeMs = keyframeMs(selectedResult);
@@ -542,7 +547,8 @@ function App() {
         };
     }, [isAvs, avsSession?.code]);
 
-    // Shot select from filmstrip - the one under video - that is why we can use the same video id
+    // Shot select from filmstrip - the one under video. It spans the whole recording, so the
+    // scene says which clip it is in
     const handleShotSelect = useCallback((shot, clicked) => {
         // of something was submitted - reseting it
         setConfirmSubmit(false);
@@ -566,7 +572,7 @@ function App() {
                 keyframe_url: shot.keyframe_url ?? fallback.keyframe_url,
             };
             return {
-                video_id: prev?.video_id || shot.video_id,
+                video_id: shot.video_id || prev?.video_id,
                 scene_id: shot.scene_id,
                 keyframe_id: keyframe.keyframe_id,
                 kf_index: keyframe.kf_index,
@@ -587,6 +593,12 @@ function App() {
             };
         });
     }, []);
+
+    // Prev / next clip of an MVK dive: selects that clip, which is then what gets submitted
+    const handleStepClip = useCallback((clip, forward) => {
+        const landing = landingInClip(recording.scenes, clip.video_id, forward);
+        if (landing) handleShotSelect(landing.scene, landing.keyframe);
+    }, [recording.scenes, handleShotSelect]);
 
     //Submit to DRES  - calles after clicking on submit button
     // the times come from the keyframe time fields, not from the result itself
@@ -939,7 +951,13 @@ function App() {
                                     </div>
                                 </div>
                             ) : (
-                                <VideoPlayer result={selectedResult}/>
+                                <VideoPlayer
+                                    result={selectedResult}
+                                    previousClip={previousClip}
+                                    nextClip={nextClip}
+                                    clipName={(clip) => clipLabel(recording.recordingId, clip.video_id)}
+                                    onStepClip={handleStepClip}
+                                />
                             )}
                             <div className="actions">
                                 {/* what actually gets submitted - auto filled from the keyframe, editable */}
@@ -1006,9 +1024,9 @@ function App() {
                             {/*  film tape under the video, every keyframe of the video */}
                             <ShotBrowser
                                 videoId={selectedResult.video_id}
+                                recording={recording}
                                 currentKeyframeId={selectedResult.keyframe_id}
                                 onSelectShot={handleShotSelect}
-                                apiUrl={API_URL}
                                 onBrowseAll={handleBrowseAllShots}
                                 submittedScenes={isAvs ? avsSubmittedScenes : EMPTY_SET}
                                 coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}

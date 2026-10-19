@@ -199,23 +199,38 @@ module.exports = {
         };
     },
 
-    /** Scenes of a video, with their keyframes -- the filmstrip. */
+    /**
+     * Scenes of a video's whole recording, with their keyframes -- the filmstrip.
+     *
+     * For an MVK clip that is every clip of the dive, in order; every other video is its own
+     * recording. Each scene names its clip, fps and video_url, because selecting it selects that
+     * clip. fps, duration_sec and video_url at the top level are the requested clip's.
+     */
     getVideoScenes: async (videoId, page = null, perPage = null) => {
         const usePagination = page !== null && perPage !== null;
         const offset = usePagination ? (page - 1) * perPage : null;
 
+        const clipsSql = `
+            SELECT v.video_id, v.recording_id, v.fps, v.duration_ms, t.offset_ms
+            FROM videos v
+                     JOIN video_timeline t USING (video_id)
+            WHERE v.recording_id = (SELECT recording_id FROM videos WHERE video_id = $1)
+            ORDER BY v.video_id;
+        `;
         const scenesSql = `
             WITH page AS (SELECT s.scene_id,
+                                 s.video_id,
                                  s.shot_index,
                                  s.start_frame,
                                  s.end_frame,
                                  s.start_ms,
                                  s.end_ms
                           FROM scenes s
-                          WHERE s.video_id = $1
-                          ORDER BY s.shot_index
+                          WHERE s.video_id = ANY ($1)
+                          ORDER BY s.video_id, s.shot_index
                               ${usePagination ? 'LIMIT $2 OFFSET $3' : ''})
             SELECT p.scene_id,
+                   p.video_id,
                    p.shot_index,
                    p.start_frame,
                    p.end_frame,
@@ -227,36 +242,48 @@ module.exports = {
                    k.ts_ms
             FROM page p
                      LEFT JOIN keyframes k ON k.scene_id = p.scene_id
-            ORDER BY p.shot_index, k.ts_ms;
+            ORDER BY p.video_id, p.shot_index, k.ts_ms;
         `;
 
-        const [scenesRes, countRes, videoRes] = await Promise.all([
-            pool.query(scenesSql, usePagination ? [videoId, perPage, offset] : [videoId]),
-            pool.query(`SELECT COUNT(*)::int AS total FROM scenes WHERE video_id = $1;`, [videoId]),
-            pool.query(`SELECT fps, duration_ms FROM videos WHERE video_id = $1`, [videoId])
+        const clipRows = (await pool.query(clipsSql, [videoId])).rows;
+        const clipIds = clipRows.map((clip) => clip.video_id);
+        const [scenesRes, countRes] = await Promise.all([
+            pool.query(scenesSql, usePagination ? [clipIds, perPage, offset] : [clipIds]),
+            pool.query(`SELECT COUNT(*)::int AS total FROM scenes WHERE video_id = ANY ($1);`, [clipIds])
         ]);
 
-        const video = videoRes.rows[0] || {};
-        const fps = video.fps ?? 25.0;
+        const clips = clipRows.map((clip) => ({
+            video_id: clip.video_id,
+            fps: clip.fps ?? 25.0,
+            duration_sec: Math.round((clip.duration_ms || 0) / 1000),
+            recording_offset_ms: clip.offset_ms,
+            video_url: media.videoUrl(clip.video_id)
+        }));
+        const clipById = new Map(clips.map((clip) => [clip.video_id, clip]));
+        const requested = clipById.get(videoId) || {fps: 25.0, duration_sec: 0};
 
         // Collapse the scene/keyframe join into one entry per scene.
         const byScene = new Map();
         for (const row of scenesRes.rows) {
             if (!byScene.has(row.scene_id)) {
+                const clip = clipById.get(row.video_id);
                 byScene.set(row.scene_id, {
                     scene_id: row.scene_id,
+                    video_id: row.video_id,
                     shot_index: row.shot_index,
                     start_frame: row.start_frame,
                     end_frame: row.end_frame,
                     start_time_ms: row.start_ms,
                     end_time_ms: row.end_ms,
-                    fps,
+                    fps: clip.fps,
+                    recording_offset_ms: clip.recording_offset_ms,
+                    video_url: clip.video_url,
                     keyframes: []
                 });
             }
             if (row.keyframe_id !== null) {
                 byScene.get(row.scene_id).keyframes.push(
-                    toKeyframe(videoId, row.shot_index, row)
+                    toKeyframe(row.video_id, row.shot_index, row)
                 );
             }
         }
@@ -266,12 +293,14 @@ module.exports = {
             thumbnail_url:
                 scene.keyframes[Math.floor(scene.keyframes.length / 2)]?.thumbnail_url || null
         }));
-        
+
         return {
             total: countRes.rows[0].total || 0,
-            fps,
-            duration_sec: Math.round((video.duration_ms || 0) / 1000),
+            recording_id: clipRows[0]?.recording_id ?? videoId,
+            fps: requested.fps,
+            duration_sec: requested.duration_sec,
             video_url: media.videoUrl(videoId),
+            clips,
             scenes
         };
     },

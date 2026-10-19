@@ -11,6 +11,9 @@ export default defineConfig(({mode}) => {
 
     return {
         plugins: [react()],
+        // BACKEND_URL / BACKEND_PORT from the root .env reach import.meta.env in App.jsx
+        envDir: rootDir,
+        envPrefix: ["VITE_", "BACKEND_"],
         server: {
             port: parseInt(env.FRONTEND_PORT, 10) || 3000,
         },
