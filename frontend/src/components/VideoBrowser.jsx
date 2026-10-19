@@ -1,6 +1,7 @@
 import {useState, useEffect, useCallback} from "react";
 import {sceneKey} from "../sceneKey";
 import {formatDuration, formatTimecode} from "../timecode";
+import {COLLECTIONS} from "../sources";
 
 const SHOTS_PER_PAGE = 60;
 
@@ -32,6 +33,8 @@ function VideoBrowser({
     onExitBrowse,
     submittedScenes = EMPTY_SET,
     coveredVideos = EMPTY_SET,
+    collection = "",
+    onChangeCollection = () => {},
 }) {
     const [videos, setVideos] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -50,11 +53,15 @@ function VideoBrowser({
     // clicking a card in the grid. The back arrow follows the way in, so it leads back out.
     const [openedByDeepLink, setOpenedByDeepLink] = useState(false);
 
-    // Fetch first page on mount
+    // Only this dataset's videos; shares its value with the search bar's dropdown.
+    const collectionParam = collection ? `&collection=${collection}` : "";
+
+    // Fetch the first page on mount, and again whenever the dataset changes
     useEffect(() => {
         const load = async () => {
+            setLoading(true);
             try {
-                const res = await fetch(`${apiUrl}/climb/videos?page=1&per_page=${perPage}`);
+                const res = await fetch(`${apiUrl}/climb/videos?page=1&per_page=${perPage}${collectionParam}`);
                 const data = await res.json();
                 setVideos(data.videos || []);
                 setTotal(data.total ?? null);
@@ -66,7 +73,7 @@ function VideoBrowser({
             }
         };
         load();
-    }, [apiUrl, perPage]);
+    }, [apiUrl, perPage, collectionParam]);
 
     const loadMore = useCallback(async () => {
         if (loadingMore || loading) return;
@@ -75,7 +82,7 @@ function VideoBrowser({
         const next = page + 1;
         setLoadingMore(true);
         try {
-            const res = await fetch(`${apiUrl}/climb/videos?page=${next}&per_page=${perPage}`);
+            const res = await fetch(`${apiUrl}/climb/videos?page=${next}&per_page=${perPage}${collectionParam}`);
             const data = await res.json();
             setVideos((prev) => [...prev, ...(data.videos || [])]);
             setPage(next);
@@ -85,7 +92,7 @@ function VideoBrowser({
         } finally {
             setLoadingMore(false);
         }
-    }, [loadingMore, loading, total, videos.length, page, apiUrl, perPage]);
+    }, [loadingMore, loading, total, videos.length, page, apiUrl, perPage, collectionParam]);
 
     const videoSentinelRef = useSentinel(
         loadMore,
@@ -294,6 +301,16 @@ function VideoBrowser({
     return (
         <div className="browse-view">
             <div className="browse-top-bar">
+                <select
+                    className={`collection-picker${collection ? " active" : ""}`}
+                    value={collection}
+                    onChange={(e) => onChangeCollection(e.target.value)}
+                    title="Show only this dataset"
+                >
+                    {COLLECTIONS.map(({key, label}) => (
+                        <option key={key || "all"} value={key}>{label}</option>
+                    ))}
+                </select>
                 <input
                     type="text"
                     className="browse-filter"

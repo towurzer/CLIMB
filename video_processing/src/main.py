@@ -52,6 +52,8 @@ from pipeline.keyframe_selection import select_from_database
 from pipeline.ocr import ocr_pending
 from pipeline.shot_boundaries import ingest_collection
 from pipeline.text_embed import embed_text_pending
+from pipeline.preflight import run_checks
+from pipeline.video_info import ingest_info
 
 # The order `run` applies stages in, regardless of the order they are listed on the command line.
 RUN_ORDER = ["fetch", "ingest-shots", "decode", "select", "purge",
@@ -75,6 +77,7 @@ def build_parser():
 
     sub.add_parser("schema", help="print the podman command for the database")
     sub.add_parser("migrate", help="apply pending schema migrations")
+    add_common(sub.add_parser("check", help="check everything a run needs, before running it"))
     sub.add_parser("serve", help="start the search engine HTTP worker")
     add_common(sub.add_parser("status", help="what is done and what is left"))
 
@@ -82,12 +85,13 @@ def build_parser():
     enqueue.add_argument("--manifest", required=True)
 
     add_common(sub.add_parser("fetch", help="download queued videos"))
-    add_common(sub.add_parser("ingest-shots", help="probe videos and load their scenes"))
+    add_common(sub.add_parser("ingest-shots", help="probe videos, load their scenes and info"))
     add_common(sub.add_parser("decode", help="one FFmpeg pass: candidate frames and audio"))
     add_common(sub.add_parser("select", help="pick keyframes and write images"))
     add_common(sub.add_parser("embed", help="SigLIP2 vectors (GPU)"), sharded=True)
     add_common(sub.add_parser("asr", help="Whisper transcripts (GPU)"), sharded=True)
-    add_common(sub.add_parser("embed-text", help="embed transcripts and captions (GPU)"), sharded=True)
+    add_common(sub.add_parser("embed-text", help="embed transcripts, captions and video info (GPU)"),
+               sharded=True)
 
     for name, helptext in [("ocr", "read on-screen text (GPU)"),
                            ("caption", "describe each shot (GPU)")]:
@@ -124,6 +128,9 @@ def dispatch(args, conn=None):
         return db_setup.get_container_command()
     if args.command == "serve":
         return worker_http_endpoint.start()
+    if args.command == "check":
+        # Owns its database connection: an unreachable database is one of the things it reports.
+        raise SystemExit(0 if run_checks(collection) else 1)
 
     if conn is None:
         with connection_scope() as owned:
@@ -143,9 +150,14 @@ def dispatch(args, conn=None):
         runner.fetch(conn, limit=limit, collection=collection)
     elif args.command == "ingest-shots":
         run_migrations(conn)
+        # Info rides along with the scenes, so there is no separate command to forget. It only
+        # loads for videos already in `videos`, which is why it comes second.
         for dataset in datasets.selected(collection):
-            ingest_collection(conn, dataset, raw_dir=raw_dir, limit=limit,
-                              video_ids=runner.queued_video_ids(conn, dataset.name))
+            queued = runner.queued_video_ids(conn, dataset.name)
+            results, _ = ingest_collection(conn, dataset, raw_dir=raw_dir, limit=limit,
+                                           video_ids=queued)
+            ingest_info(conn, dataset, video_ids=queued if limit is None
+                        else [r.video_id for r in results])
     elif args.command == "decode":
         decode_from_database(conn, collection=collection, limit=limit)
     elif args.command == "select":
@@ -177,7 +189,18 @@ def dispatch(args, conn=None):
             raise SystemExit(f"unknown stage(s): {unknown}\nknown: {', '.join(RUN_ORDER)}")
         # Sorted into pipeline order: listing them the wrong way round should not try to select
         # keyframes from a video that has not been decoded yet.
-        for stage in sorted(stages, key=RUN_ORDER.index):
+        ordered = sorted(stages, key=RUN_ORDER.index)
+        # With both decode and select asked for, those two and purge run as one loop over batches
+        # (runner.process_in_batches) instead of each stage over every video in turn.
+        batched = {"decode", "select"} <= set(ordered)
+        for stage in ordered:
+            if batched and stage in ("decode", "select", "purge"):
+                if stage == "decode":
+                    print("--- decode, select" + (", purge" if "purge" in ordered else "")
+                          + " in batches ---")
+                    runner.process_in_batches(conn, collection=collection, limit=limit,
+                                              purge_after="purge" in ordered, keep_raw=keep_raw)
+                continue
             print(f"--- {stage} ---")
             dispatch(argparse.Namespace(**{**vars(args), "command": stage}), conn=conn)
 

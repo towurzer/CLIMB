@@ -281,17 +281,22 @@ def decode_batch(jobs, force=False, workers=None):
     return results
 
 
+# Pending means not selected yet: selection consumes the candidates and purge may already have
+# deleted them. Filtered here rather than after the LIMIT, otherwise `--limit 50` would pick the
+# same first 50 finished videos on every run and never get any further.
 SELECT_DECODABLE = """
-    SELECT v.video_id, v.collection, v.fps, v.duration_ms, v.has_audio, v.damaged,
-           EXISTS (SELECT 1 FROM keyframes k WHERE k.video_id = v.video_id) AS has_keyframes
+    SELECT v.video_id, v.collection, v.fps, v.duration_ms, v.has_audio, v.damaged
     FROM videos v
-    WHERE (%s IS NULL OR v.collection = %s)
+    WHERE (%(collection)s IS NULL OR v.collection = %(collection)s)
+      AND (%(force)s OR NOT EXISTS (SELECT 1 FROM keyframes k WHERE k.video_id = v.video_id))
+      AND NOT (v.video_id = ANY (%(exclude)s::text[]))
     ORDER BY v.video_id
-    LIMIT %s;
+    LIMIT %(limit)s;
 """
 
 
-def decode_from_database(conn, collection=None, limit=None, force=False, workers=None):
+def decode_from_database(conn, collection=None, limit=None, force=False, workers=None,
+                         exclude=()):
     """
     Decodes videos that scene ingest has already probed.
 
@@ -299,33 +304,31 @@ def decode_from_database(conn, collection=None, limit=None, force=False, workers
     probe instead of being guessed, and it guarantees we only decode videos whose scenes are
     already loaded -- decoding a video with no scenes produces candidate frames nothing will ever
     select from.
+
+    `exclude` skips videos that already failed earlier in the same run, so a batch loop does not
+    retry them forever. Videos without a source file come back as failed results for that reason.
     """
     logger = custom_logger.get_logger("decode")
 
     with conn.cursor() as cur:
-        cur.execute(SELECT_DECODABLE, (collection, collection, limit))
+        cur.execute(SELECT_DECODABLE, {"collection": collection, "force": force,
+                                       "exclude": list(exclude), "limit": limit})
         rows = cur.fetchall()
 
-    jobs, missing, finished = [], [], 0
-    for video_id, video_collection, fps, duration_ms, has_audio, damaged, has_keyframes in rows:
-        # Selected means decoded: selection consumes the candidates and purge may already have
-        # deleted them.
-        if has_keyframes and not force:
-            finished += 1
-            continue
+    jobs, missing = [], []
+    for video_id, video_collection, fps, duration_ms, has_audio, damaged in rows:
         source = find_source_video(video_id, video_collection)
         if source is None:
             missing.append(video_id)
             continue
         jobs.append((video_id, source, fps, duration_ms, has_audio, damaged))
 
-    if finished:
-        logger.info(f"{finished} video(s) already decoded and selected, skipping")
     if missing:
         logger.warning(f"{len(missing)} video(s) still need decoding but have no source file, "
                        f"e.g. {missing[:5]}")
 
     results = decode_batch(jobs, force=force, workers=workers)
+    results += [DecodeResult(video_id, False, error="no source file") for video_id in missing]
 
     damaged_ids = [r.video_id for r in results if r.damaged]
     if damaged_ids:

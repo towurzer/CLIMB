@@ -20,12 +20,17 @@ SELECT_SCENES = """
     FROM scenes WHERE video_id = %s ORDER BY shot_index;
 """
 
+# Filtered before the LIMIT, for the same reason as decode's SELECT_DECODABLE.
 SELECT_SELECTABLE = """
     SELECT v.video_id, v.collection, v.fps
     FROM videos v
-    WHERE (%s IS NULL OR v.collection = %s)
+    WHERE (%(collection)s IS NULL OR v.collection = %(collection)s)
+      AND (%(force)s OR NOT EXISTS (SELECT 1 FROM keyframes k WHERE k.video_id = v.video_id))
+      AND EXISTS (SELECT 1 FROM scenes s WHERE s.video_id = v.video_id)
+      AND NOT (v.video_id = ANY (%(exclude)s::text[]))
+      AND (%(only)s::text[] IS NULL OR v.video_id = ANY (%(only)s::text[]))
     ORDER BY v.video_id
-    LIMIT %s;
+    LIMIT %(limit)s;
 """
 
 INSERT_KEYFRAMES = """
@@ -33,7 +38,6 @@ INSERT_KEYFRAMES = """
     VALUES %s ON CONFLICT DO NOTHING
 """
 
-COUNT_KEYFRAMES = "SELECT count(*) FROM keyframes WHERE video_id = %s;"
 DELETE_KEYFRAMES = "DELETE FROM keyframes WHERE video_id = %s;"
 
 
@@ -247,23 +251,23 @@ def _selection_worker(args):
         return SelectionResult(video_id, False, error=f"{type(e).__name__}: {e}"), []
 
 
-def select_from_database(conn, collection=None, limit=None, force=False, workers=None):
+def select_from_database(conn, collection=None, limit=None, force=False, workers=None,
+                         exclude=(), video_ids=None):
+    """`video_ids` restricts selection to those videos, e.g. the ones a batch just decoded."""
     conf = Config()
     logger = custom_logger.get_logger("keyframes")
     workers = workers or conf.SELECTION_WORKERS
 
     with conn.cursor() as cur:
-        cur.execute(SELECT_SELECTABLE, (collection, collection, limit))
+        cur.execute(SELECT_SELECTABLE, {"collection": collection, "force": force,
+                                        "exclude": list(exclude), "limit": limit,
+                                        "only": None if video_ids is None else list(video_ids)})
         videos = cur.fetchall()
 
     jobs, no_source = [], []
     for video_id, collection_name, fps in videos:
         with conn.cursor() as cur:
-            if not force:
-                cur.execute(COUNT_KEYFRAMES, (video_id,))
-                if cur.fetchone()[0] > 0:
-                    continue
-            else:
+            if force:
                 cur.execute(DELETE_KEYFRAMES, (video_id,))
             cur.execute(SELECT_SCENES, (video_id,))
             scenes = cur.fetchall()

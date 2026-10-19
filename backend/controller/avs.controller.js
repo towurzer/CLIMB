@@ -1,4 +1,5 @@
 const avsClient = require('../avsSessionClient');
+const queries = require('../models/queries');
 
 // 404 and 503 mean very different things to the operator and must never be collapsed:
 //   404 - the session is genuinely gone (idled out, or the code never existed)
@@ -11,14 +12,16 @@ const UNREACHABLE = {
     hint: "Collaboration is paused. Search and DRES submission are unaffected."
 };
 
-const sendSnapshot = (res, result, okStatus = 200) => {
+const sendSnapshot = async (res, result, okStatus = 200) => {
     if (result.status === 404) {
         return res.status(404).json({error: "AVS session not found or expired.", collab: result.collab});
     }
     if (result.status === 503 || !result.snapshot) {
         return res.status(503).json({...UNREACHABLE, detail: result.detail});
     }
-    return res.status(okStatus).json({...result.snapshot, collab: result.collab});
+    // A covered MVK clip covers its whole recording, see queries.expandToRecordings.
+    const coveredVideos = await queries.expandToRecordings(result.snapshot.coveredVideos || []);
+    return res.status(okStatus).json({...result.snapshot, coveredVideos, collab: result.collab});
 };
 
 exports.createAvsSession = async (req, res) => {

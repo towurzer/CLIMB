@@ -7,19 +7,24 @@ The layout on the HDD is:
         VBS/videos/v3c/00001.mp4
         VBS/videos/mvk/Ambon_Apr2012_0001.mp4
         VBS/videos/lhe/LHE01.mp4
-        V3Cmeta/scenesV3C/scenes/00001.mp4.scenes.txt    or  V3Cmeta/scenesV3C.tgz
-        V3Cmeta/info/00001.json                          or  V3Cmeta/infoV3C.tgz
-        MVKmeta/scenes/Ambon_Apr2012_0001.mp4.scenes.txt or  MVKmeta/scenesMVK12.tgz
-        LHEmeta/scenes/LHE01.mp4.scenes.txt              or  LHEmeta/scenesLHE.tgz
+        V3Cmeta/scenesV3C.tgz        or  V3Cmeta/scenesV3C/scenes/00001.mp4.scenes.txt
+        V3Cmeta/info/00001.json      or  V3Cmeta/infoV3C.tgz
+        MVKmeta/scenesMVK12.tgz      or  MVKmeta/scenes/Ambon_Apr2012_0001.mp4.scenes.txt
+        LHEmeta/scenesLHE.tgz        or  LHEmeta/scenes/LHE01.mp4.scenes.txt
 
 The relative paths are in /datasets.json at the repo root rather than in here, because the backend
 has to find the very same video files to play them, and two copies of a layout drift.
 
-Metadata entries list an extracted directory first and the archive second, and the first one that
-exists wins. The archive is read directly, so a machine that only has the .tgz needs no unpacking.
+Each metadata entry lists candidates, and the first one that exists wins. Archives are read
+directly, so a machine that only has the .tgz needs no unpacking.
 
-MVKmeta also contains `mvk12scenes.tgz`. Do not use it: its file names do not match the videos
-(`BigIsland1_Jan2023_0009` where the video is `BigIsland_Jan2023_0009`). `scenesMVK12.tgz` does.
+For the scenes, archive and folder hold the same files, and the archive comes first because it is
+far quicker on the HDD: all 28,452 V3C scene files in 0.9 s, against ~6 ms per file from the folder
+(1 MB exFAT clusters, one seek each). For the V3C info they are different data -- the archive has
+no tags -- so there the folder comes first, see pipeline/video_info.py.
+
+MVKmeta also contains `mvk12scenes.tgz`. It holds the same 3,190 files as `scenesMVK12.tgz`, byte
+for byte, so either one works.
 
 Any path can be overridden per collection with CLIMB_<NAME>_VIDEOS / _SCENES / _INFO. An absolute
 value is used as-is, a relative one is taken relative to CLIMB_SOURCE_ROOT.
@@ -48,6 +53,18 @@ def is_video_file(path) -> bool:
     path = Path(path)
     return (path.is_file() and not path.name.startswith(".")
             and path.suffix.lower() in Config.VIDEO_EXTENSIONS)
+
+
+def decode_text(raw: bytes) -> str:
+    """
+    UTF-8, falling back to Windows-1252. 305 of the 28,450 files in V3Cmeta/info are not valid
+    UTF-8 (`Am\xe9rica`, `\x93quoted\x94`); decoding those as UTF-8 with replacement would turn
+    every accented letter in them into U+FFFD.
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace")
 
 
 def entry_id(name: str) -> str:
@@ -104,15 +121,14 @@ class MetaSource:
                 for member in self._members(archive):
                     video_id = entry_id(member.name)
                     if wanted is None or video_id in wanted:
-                        yield video_id, archive.extractfile(member).read().decode(
-                            "utf-8", errors="replace")
+                        yield video_id, decode_text(archive.extractfile(member).read())
             return
         for path in sorted(self.path.iterdir()):
             if not (path.is_file() and self._wanted(path.name)):
                 continue
             video_id = entry_id(path.name)
             if wanted is None or video_id in wanted:
-                yield video_id, path.read_text(encoding="utf-8", errors="replace")
+                yield video_id, decode_text(path.read_bytes())
 
     def read_many(self, video_ids) -> dict:
         return dict(self.items(wanted=video_ids))

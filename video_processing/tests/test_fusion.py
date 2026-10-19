@@ -11,7 +11,7 @@ that. Every entry is therefore a (scene_id, keyframe_id) pair.
 """
 
 import pytest
-from retrieval.fusion import RRF_K, FusedResult, fuse
+from retrieval.fusion import RRF_K, FusedResult, apply_video_prior, fuse
 
 # (scene, keyframe) pairs. Scene 1 owns keyframes 100/101, scene 2 owns 200, and so on, so a test
 # can talk about "two keyframes of the same shot" without repeating the arithmetic.
@@ -189,3 +189,23 @@ def test_empty_lists_yield_no_results():
 def test_results_are_fused_results():
     results = fuse({"visual": [A1]}, {"visual": 1.0})
     assert isinstance(results[0], FusedResult)
+
+
+# --- video-level prior (the info signal) ------------------------------------------------------
+
+
+def test_video_prior_reorders_but_never_adds():
+    fused = fuse({"visual": [(1, 10), (2, 20), (3, 30)]}, {"visual": 1.0})
+    video_of = {10: "a", 20: "b", 30: "c"}
+    out = apply_video_prior(fused, video_of, ["c", "zzz"], weight=1.0)
+    assert [r.keyframe_id for r in out] == [30, 10, 20]
+    assert len(out) == 3
+    assert out[0].signals["info"] == 1 and "info" not in out[1].signals
+
+
+def test_video_prior_with_no_weight_or_no_ranking_changes_nothing():
+    fused = fuse({"visual": [(1, 10), (2, 20)]}, {"visual": 1.0})
+    before = [(r.keyframe_id, r.score) for r in fused]
+    assert [(r.keyframe_id, r.score) for r in apply_video_prior(fused, {}, ["a"], 1.0)] == before
+    assert [(r.keyframe_id, r.score) for r in apply_video_prior(fused, {10: "a"}, ["a"], 0)] == before
+    assert len(apply_video_prior(fused, {}, [], 1.0, limit=1)) == 1

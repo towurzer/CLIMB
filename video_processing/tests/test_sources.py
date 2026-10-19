@@ -43,5 +43,5 @@ def test_phrase_retrievers_are_never_gated():
 
 def test_every_source_maps_somewhere():
     """The frontend's SOURCES list in frontend/src/sources.js has to line up with these keys."""
-    assert set(SOURCE_RETRIEVERS) == {"visual", "ocr", "asr", "caption"}
+    assert set(SOURCE_RETRIEVERS) == {"visual", "ocr", "asr", "caption", "info"}
     assert all(names for names in SOURCE_RETRIEVERS.values())

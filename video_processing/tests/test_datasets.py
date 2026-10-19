@@ -74,10 +74,14 @@ def test_extracted_directory_and_archive_read_the_same(source_root):
     assert mvk.scenes.read_many(["Ambon_Apr2012_0002"]) == {"Ambon_Apr2012_0002": SCENES}
 
 
-def test_extracted_directory_wins_over_the_archive(source_root):
+def test_the_first_existing_candidate_wins(source_root):
+    """datasets.json lists the MVK archive before the folder; the folder is only the fallback."""
     scenes = source_root / "MVKmeta/scenes"
     scenes.mkdir()
     (scenes / "Ambon_Apr2012_0001.mp4.scenes.txt").write_text(SCENES)
+    assert datasets.load("MVK").scenes.is_archive
+
+    (source_root / "MVKmeta/scenesMVK12.tgz").unlink()
     assert not datasets.load("MVK").scenes.is_archive
 
 

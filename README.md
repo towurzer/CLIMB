@@ -140,7 +140,8 @@ For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (n
 AVS is collaborative: click New session to get a random 4-letter code, or Join a teammate's code to work together. 
 Each shot you submit is sent as its own submission and is then hidden from everyone in the session's search results, 
 so no one on the team submits the same scene twice. Videos where you already got a correct hit are dimmed and marked 
-"covered", since extra shots from the same video barely raise the AVS score. Sessions are deleted after 2 hours of
+"covered", since extra shots from the same video barely raise the AVS score. For MVK that means the whole dive: a hit
+in one 15-second clip covers every clip of the same recording. Sessions are deleted after 2 hours of
 inactivity, which is meant to comfortably outlive a task block rather than punish you for thinking.
 
 Sessions are shared through a small separate service (see [2.6](#26-avs-collaboration-across-machines)), so
@@ -200,7 +201,7 @@ CLIMB_SOURCE_ROOT=/run/media/you/Data
 
 That is the service wiring, and it is deliberately not the full list. The pipeline reads about thirty more
 `CLIMB_*` knobs, media and work directories, decode workers, batch sizes per model, OCR backend, caption model,
-the four RRF weights, the temporal query defaults. **`config.py` is the reference for those**; this file documents
+the RRF weights, the temporal query defaults. **`config.py` is the reference for those**; this file documents
 the ones you need to get started rather than pretending to be complete.
 
 ---
@@ -289,7 +290,7 @@ video_processing/
         worker_http_endpoint.py # Search Engine HTTP interface
         retrieval/
             query_parser.py    # search box string -> structured query
-            retrievers.py      # the four signals, all scene-level
+            retrievers.py      # the signals, plus the Scope every one of them filters by
             temporal.py        # `A >> B` chains: linking stages across time
             fusion.py          # reciprocal rank fusion
             engine.py          # ties them together
@@ -325,6 +326,43 @@ To do that go into the video processing part of CLIMB by running
 ```bash
 cd video_processing
 ```
+
+#### 1.0 The whole collection on a GPU server, the short version
+
+For whoever is kind enough to run this somewhere with GPUs. Everything below is explained in the sections that follow;
+this is just the order.
+
+1. **Install.** Python 3.13 or older (PaddleOCR has no wheel for 3.14 and OCR quietly falls back to a worse engine),
+   `pip install -r requirements.txt`, and FFmpeg with the `libopus` encoder.
+2. **Database.** `python main.py schema` prints the podman command. Keep the `--shm-size=8g` in it, without it the
+   index build at the end crawls.
+3. **`.env`** in the repo root: the `POSTGRES_*` / `DB_*` lines from "Environment Variables", plus
+
+   ```text
+   CLIMB_SOURCE_ROOT=/where/the/collections/are   # VBS/videos/..., V3Cmeta/..., MVKmeta/..., LHEmeta/...
+   CLIMB_MEDIA_DIR=/big/disk/climb/media           # keyframes we keep, ~33 MB per hour of video
+   CLIMB_WORK_DIR=/big/disk/climb/work             # scratch, a few GB at a time
+   ```
+4. **Check, then run.** From `video_processing/src`:
+
+   ```bash
+   python main.py migrate
+   python main.py check          # fix every FAIL before going on
+   python main.py run            # ingest + decode/select/purge in batches, CPU only
+   python main.py embed
+   python main.py ocr
+   python main.py caption
+   python main.py asr
+   python main.py embed-text
+   python main.py index build
+   ```
+
+   Every stage resumes where it stopped, so a crash or a Ctrl-C costs nothing but the batch in flight.
+5. **More than one GPU.** One process uses one GPU. Start one per GPU, each with its own slice:
+   `CUDA_VISIBLE_DEVICES=0 python main.py embed --shard 0 --shards 2` and
+   `CUDA_VISIBLE_DEVICES=1 python main.py embed --shard 1 --shards 2`, same for the other model stages.
+6. **Hand back** the media directory and a dump of the database:
+   `podman exec climb pg_dump -U postgres -Fc <POSTGRES_DB_NAME> > climb.dump`.
 
 #### 1.1 Installation
 
@@ -372,9 +410,10 @@ python main.py <command> [options]
 |----------------|---------------------------------------------------------------------------------|
 | `schema`       | Print the podman command for the database                                       |
 | `migrate`      | Apply pending schema migrations. Run this first, always                         |
+| `check`        | Check everything a run needs, before spending any compute on it                 |
 | `enqueue`      | Load a manifest of videos into the job queue (only if you have to download)     |
 | `fetch`        | Download queued videos                                                          |
-| `ingest-shots` | Probe the videos and load their TransNet scenes                                 |
+| `ingest-shots` | Probe the videos, load their TransNet scenes and (V3C) info                     |
 | `decode`       | One FFmpeg pass: candidate frames + audio                                       |
 | `select`       | Pick 2-32 keyframes per scene and write the images                              |
 | `purge`        | Delete transient files whose stage has finished                                 |
@@ -382,7 +421,7 @@ python main.py <command> [options]
 | `ocr`          | Read on-screen text (GPU)                                                       |
 | `caption`      | Describe each shot (GPU)                                                        |
 | `asr`          | Transcribe the audio with Whisper (GPU)                                         |
-| `embed-text`   | Encode transcripts and captions for meaning-based search (GPU)                  |
+| `embed-text`   | Encode transcripts, captions and video info for meaning-based search (GPU)      |
 | `index`        | `build`, `drop` or `status` for the search indexes                              |
 | `run`          | Several stages in one go, always in pipeline order                              |
 | `status`       | What is done and what is left                                                   |
@@ -402,12 +441,32 @@ which is `fetch,ingest-shots,decode,select,purge` , pick your own with `--stages
 they get sorted into pipeline order regardless, so you cannot accidentally ask it to select keyframes from a
 video it has not decoded yet.
 
+When `decode` and `select` are both in there, `run` does not decode everything and then select everything. It goes
+round in batches: decode 200 videos, select them, purge their candidate frames, next 200. Candidate frames are about
+130 MB per hour of video, so decoding the whole of V3C before selecting any of it would park ~350 GB of JPEGs in
+`work/` for no reason. `CLIMB_PROCESS_BATCH` sets the batch size. A video that fails is skipped for the rest of
+that run (the log says why) and retried by the next one, so one broken file cannot stall everything behind it.
+
 Everything is resumable. Every stage works out what is still outstanding by asking the database, so a run that
 dies halfway can simply be run again, and a run with nothing left to do takes about five seconds.
 
 ```bash:
 python main.py --help
 ```
+
+#### Before you run anything: `check`
+
+```bash
+python main.py check
+```
+
+goes through everything a run needs and tells you what is wrong *before* anyone spends a GPU-day on it: FFmpeg and
+its encoders, the Python packages, the GPU, whether the models are cached or at least downloadable, the source
+collections (and whether each collection's scene files actually belong to its videos, by comparing a few against the
+real frame count), the info files, the database and its schema, and whether the output directories are writable,
+big enough, and not accidentally inside the sources. `FAIL` means a stage would crash or quietly produce rubbish,
+`WARN` means it will run, just slower or without something. It exits non-zero on any `FAIL`, so you can put it in
+front of a script.
 
 #### 1.2 The source collections
 
@@ -419,19 +478,19 @@ this:
 VBS/videos/v3c/00001.mp4
 VBS/videos/mvk/Ambon_Apr2012_0001.mp4
 VBS/videos/lhe/LHE01.mp4
-V3Cmeta/scenesV3C/scenes/00001.mp4.scenes.txt     or V3Cmeta/scenesV3C.tgz
-V3Cmeta/info/00001.json                           or V3Cmeta/infoV3C.tgz
-MVKmeta/scenes/...                                or MVKmeta/scenesMVK12.tgz
-LHEmeta/scenes/...                                or LHEmeta/scenesLHE.tgz
+V3Cmeta/scenesV3C.tgz           or V3Cmeta/scenesV3C/scenes/00001.mp4.scenes.txt
+V3Cmeta/info/00001.json         or V3Cmeta/infoV3C.tgz
+MVKmeta/scenesMVK12.tgz         or MVKmeta/scenes/...
+LHEmeta/scenesLHE.tgz           or LHEmeta/scenes/...
 ```
 
-The metadata is fine either way, unpacked or still in its `.tgz`; the pipeline reads the archive directly if that is
-all there is. If you have one of these somewhere else entirely, `CLIMB_V3C_VIDEOS`, `CLIMB_MVK_SCENES`,
+The scene files are fine either way, unpacked or still in their `.tgz`. The archive is actually preferred: on the HDD
+it reads all 28,452 V3C scene files in under a second, where the unpacked folder takes about 6 ms *per file*. For the
+info files it is the other way round, see 1.4.1. If you have one of these somewhere else entirely, `CLIMB_V3C_VIDEOS`, `CLIMB_MVK_SCENES`,
 `CLIMB_LHE_INFO` and friends override a single entry (absolute, or relative to `CLIMB_SOURCE_ROOT`).
 
-One trap: `MVKmeta` contains two scene archives. Use `scenesMVK12.tgz`. The other one, `mvk12scenes.tgz`, names its
-files `BigIsland1_...` where the video is `BigIsland_...`, and a scene file that matches no video is a scene file
-that quietly does nothing.
+`MVKmeta` contains two scene archives, `scenesMVK12.tgz` and `mvk12scenes.tgz`. They are the same 3,190 files byte for
+byte, so it does not matter which one you have.
 
 Please be sure that you have FFmpeg installed under your system as CLIMB will spawn a whole lot of child-processes
 executing FFmpeg. To download FFmpeg visit: https://ffmpeg.org/download.html
@@ -554,6 +613,21 @@ out which columns hold the frame numbers by looking at what is actually in them 
 order, so it does not care whether NIST puts the frames before or after the timecodes, and it falls back to converting
 timecodes with the probed frame rate if a file has no frame columns at all. One corrupt line gets skipped with a warning
 rather than taking the whole video down with it.
+
+##### 1.4.1 Video info
+
+V3C also comes with an info file per video: title, what the uploader wrote about it, tags and categories. Nobody
+describes their own video better than the person who filmed it (well, usually), so `ingest-shots` loads those too, into
+`video_info`, and `embed-text` turns title + tags + description into one vector per video.
+
+There are two versions of these files and **they are not the same data**. The extracted `V3Cmeta/info/` folder is a
+Vimeo scrape with tags and categories. `V3Cmeta/infoV3C.tgz` is a yt-dlp dump with no tags in any of its 28,450 files,
+and where a video has no description it holds Vimeo's page filler instead ("This is ... on Vimeo, the home for high
+quality videos and the people who love them."). Both are read, the filler is thrown away, and the folder wins. If only
+the archive is there you get a warning, because otherwise you would just quietly have no tags.
+
+Some tags arrive with a `?` where a non-ASCII character used to be (`vid?o`, `v?lo`). That damage is in the source
+files, not something we did.
 
 #### 1.5 Decoding
 
@@ -788,9 +862,16 @@ sorting the badges by rank would cheerfully credit the wrong one. Sequence hits 
 
 ##### Turning a signal off
 
-Under the search box are four tickboxes , Visual, Caption, OCR, ASR , and all four start ticked. Untick one and it is
-not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
+Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and all five start ticked. Untick one and
+it is not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
 embedded.
+
+**Info** is the odd one out. It matches your words against what the uploader wrote about the whole video (title, tags,
+description, see 1.4.1), so it cannot say *which frame*. Instead of adding frames it re-orders the ones the other
+signals found: a frame gets a bonus for how well its video's description matches, the same weight / (60 + rank) as any
+other signal (`CLIMB_W_INFO`, 1.0 for now, unmeasured). Only V3C has info files, so in an all-datasets search a V3C
+frame can earn a bonus an MVK frame never can. With the dataset dropdown on MVK or LHE it simply does nothing, and the
+tickbox is there for when it gets in the way.
 
 This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
 match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the
@@ -807,11 +888,31 @@ returning nothing, because nothing cannot be submitted.
 | You type | What happens                                              |
 |----------|-----------------------------------------------------------|
 | `a red car on a bridge` | everything searches                                       |
-| `text:BOULANGERIE` | on-screen text only, as an exact phrase (typos tolerated) |
-| `said: after the earthquake` | spoken words only                                         |
-| `-video:00191` | leave that video out (repeatable)                         |
+| `text:BOULANGERIE` | the video must show that text, as a phrase (typos tolerated) |
+| `said: after the earthquake` | the video must have someone say that (`spoken:` works too) |
+| `tag:bmx` / `tag:"short film"` | the video's uploader tagged it that (V3C only)  |
+| `video:00191` | only this video; for MVK, the whole recording (`video:Ambon_Apr2012` or any of its clips) |
+| `-video:00191` | leave that video out (repeatable; for MVK, the whole recording) |
 | `a dog >> a man on a bike` | one thing, then the other, in the same video              |
 | `a dog >>(d120) a man on a bike` | the same, but within 120 seconds                          |
+
+**They combine, at video level.** `said:"hello darling" text:"and they kissed"` finds the videos where *both* hold,
+each possibly in a different scene, because the speech and the caption on screen rarely line up to the second. Every
+`text:`, `said:` and `tag:` is a requirement and you can use as many as you like, `text:BANK text:EXIT` included (the
+second one used to be dropped without a word). Plain words never exclude anything, they only decide the order within
+whatever the requirements left over. Each requirement is applied inside what the previous ones left, and the results
+header shows the funnel, `text:"they kissed" → 12 videos · said:"hello darling" → 3 videos`, so an empty page tells you
+*which* requirement emptied it instead of looking like a broken search.
+
+When the requirements leave only a handful of videos (300 or fewer, `CLIMB_EXACT_SCOPE_MAX_VIDEOS`), the picture,
+caption and speech searches rank by exact distance over just those videos instead of going through the index, because
+the index answers for the whole collection and `video:00191 a red car` would otherwise keep whichever of the global top
+1000 happened to be in 00191, which is usually none of them. A query that is *only* requirements, say `video:00191` or
+`tag:bmx`, lists the scenes of what is left in order.
+
+The dataset dropdown next to the sources does what it says: search only V3C, MVK or LHE. At VBS the task tells you which
+collection it is from, and there is no point in letting the other two put look-alikes on the page. Browse has the same
+dropdown, sharing the same setting, so switching to MVK there lists only the MVK clips.
 
 The quotes are optional , the colon is what makes it an operator, and a space after it is fine. Unquoted, the phrase
 runs to the end of the stage or to the next operator, so `text:BANK said:we are live` is two phrases and
@@ -820,7 +921,9 @@ past` searches for both, where `text:Dupont a man walks past` is one long and ra
 fail silently , typing `said: after the earthquake` searched for the *word* "said" on signs, at four times the weight
 of the picture, and cheerfully returned something.
 
-The x on a result card does the same thing without typing: it drops that video and re-runs the search on the spot. It
+The x on a result card does the same thing without typing: it drops that video and re-runs the search on the spot. On an
+MVK clip it drops the whole recording, because the other clips of the same dive look exactly like the one you just
+threw away. It
 appends its list to the box as `--exclude: 00083, 00140, 00004` so you can see what you have thrown away, and it sends
 that list as its own parameter, which is the one that counts.
 
@@ -833,6 +936,9 @@ stage: `(d120)` and `(120)` are both 120 seconds, `(d500ms)` is half a second, a
 
 The splitting is quote-aware, so `text:"a >> b"` stays one phrase rather than becoming a sequence. An empty stage is
 not a stage either , `A >>` is just a search for A, not a sequence missing its second half.
+
+MVK recordings count as one video here too: an MVK dive is cut into 10-40 second clips, so `a turtle >> a diver` links
+across clip boundaries on the recording's own clock, and the result still points at the right clip for DRES.
 
 Interesting to know is: 
 
@@ -872,9 +978,11 @@ pytest                        # all 157, including the 67 that need a live DB an
 ```
 
 The pure ones cover the query parser (`>>` splitting outside quotes, the `(d120)` / `(500ms)` gap syntax, dropped
-empty stages, global `-video:` exclusions), the temporal DP, the RRF arithmetic and both OCR backend adapters. The
-integration ones drive the worker and the backend over HTTP, check that all four RRF signals actually contribute, run
-the temporal cases end to end, `EXPLAIN` the ANN query to confirm the planner really picks HNSW rather than quietly
+empty stages, global `-video:` exclusions, the requirement operators), how requirements narrow at video level, the
+temporal DP, the RRF arithmetic, both OCR backend adapters, the dataset layout and info file parsing, and the batched
+`run` loop. The integration ones drive the worker and the backend over HTTP, check that the RRF signals actually
+contribute, check `video:`, `tag:`, combined `text:` + `said:`, MVK recordings and the dataset restriction against
+whatever corpus is loaded, run the temporal cases end to end, `EXPLAIN` the ANN query to confirm the planner really picks HNSW rather than quietly
 falling back to a sequential scan, and exercise the whole DRES/AVS submission path against the mock server below.
 
 If the integration ones skip rather than run, that means the services are not up , they need the database, the worker

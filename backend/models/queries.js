@@ -38,6 +38,8 @@ const toResult = (hit) => ({
     scene_id: hit.scene_id,
     keyframe_id: hit.keyframe_id,
     video_id: hit.video_id,
+    recording_id: hit.recording_id ?? hit.video_id,
+    recording_offset_ms: hit.recording_offset_ms ?? 0,
     shot_index: hit.shot_index,
     kf_index: hit.kf_index,
     score: hit.score,
@@ -72,17 +74,19 @@ module.exports = {
      * Returns the whole payload rather than a bare array because `temporal` describes the result
      * set, not any one row, and it has to survive the controller's cache along with it.
      */
-    searchByText: async (queryText, exclude = [], depth = 500, sources = []) => {
+    searchByText: async (queryText, exclude = [], depth = 500, sources = [], collection = null) => {
         const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search`, {
             prompt: queryText,
             exclude,
             top_k: depth,
+            collection,
             // Empty means "every source"; the worker treats null and [] the same way.
             ...(sources.length ? {sources} : {})
         });
         return {
             results: (res.data.results || []).map(toResult),
-            temporal: res.data.temporal || null
+            temporal: res.data.temporal || null,
+            filters: res.data.filters || null
         };
     },
 
@@ -92,20 +96,44 @@ module.exports = {
      * Also the worker's job: it owns the one implementation of oversample-then-rerank, and a
      * second copy here would drift silently into a sequential scan.
      */
-    findSimilarByKeyframe: async (keyframeId, exclude = [], depth = 500) => {
+    findSimilarByKeyframe: async (keyframeId, exclude = [], depth = 500, collection = null) => {
         const res = await axios.post(`${SEARCH_ENGINE_URL}/api/similar`, {
             keyframe_id: keyframeId,
             exclude,
-            top_k: depth
+            top_k: depth,
+            collection
         });
         // Same payload shape as searchByText; find-similar is never a sequence.
         return {results: (res.data.results || []).map(toResult), temporal: null};
     },
 
-    getAllVideos: async (page = 1, perPage = 20) => {
+    /**
+     * Every clip of the recordings the given clips belong to.
+     *
+     * An MVK dive is cut into 10-40 s clips, and a teammate's correct hit in one clip covers the
+     * whole dive, not just that clip. The AVS service only knows clips, so the widening happens
+     * here, on the way to the frontend. If the lookup fails the clips come back unchanged: dimming
+     * too little is better than the session view breaking.
+     */
+    expandToRecordings: async (videoIds = []) => {
+        if (!videoIds.length) return videoIds;
+        try {
+            const res = await pool.query(
+                `SELECT video_id FROM videos
+                 WHERE recording_id IN (SELECT recording_id FROM videos WHERE video_id = ANY ($1))`,
+                [videoIds]);
+            return [...new Set([...videoIds, ...res.rows.map((row) => row.video_id)])];
+        } catch (error) {
+            console.warn("Could not widen covered videos to their recordings:", error.message);
+            return videoIds;
+        }
+    },
+
+    getAllVideos: async (page = 1, perPage = 20, collection = null) => {
         const offset = (page - 1) * perPage;
 
-        const countSql = `SELECT COUNT(*)::int AS total FROM videos;`;
+        const countSql = `SELECT COUNT(*)::int AS total FROM videos
+                          WHERE ($1::text IS NULL OR collection = $1);`;
         // One representative keyframe per video: the first keyframe of its first shot.
         const videosSql = `
             SELECT v.video_id,
@@ -125,13 +153,14 @@ module.exports = {
                 WHERE s.video_id = v.video_id
                 ORDER BY s.shot_index, abs(k.ts_ms - (s.start_ms + s.end_ms) / 2)
                 LIMIT 1) cover ON TRUE
+            WHERE ($3::text IS NULL OR v.collection = $3)
             ORDER BY v.video_id
             LIMIT $1 OFFSET $2;
         `;
 
         const [countRes, videosRes] = await Promise.all([
-            pool.query(countSql),
-            pool.query(videosSql, [perPage, offset])
+            pool.query(countSql, [collection]),
+            pool.query(videosSql, [perPage, offset, collection])
         ]);
 
         const videos = videosRes.rows.map((row) => ({

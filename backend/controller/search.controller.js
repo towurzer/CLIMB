@@ -11,8 +11,9 @@ const CACHE_TTL_SECONDS = parseInt(process.env.SEARCH_CACHE_TTL_SECONDS || '300'
 
 // Bump when the cached payload's shape changes. v2 caches {results, temporal}
 // v3 adds video_url to every result;
-// v4 adds contributions (per-signal share of the fused score) 
-const CACHE_VERSION = 'v4';
+// v4 adds contributions (per-signal share of the fused score)
+// v5 adds filters (each text:/said:/tag:/video: requirement and how many videos met it)
+const CACHE_VERSION = 'v5';
 
 const cacheKey = (kind, parts) =>
     `search:${CACHE_VERSION}:${kind}:${crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex')}`;
@@ -58,6 +59,9 @@ function paginate(results, page, perPage) {
     };
 }
 
+// Which collection to search: V3C, MVK or LHE. Absent or empty means all of them.
+const parseCollection = (req) => (req.query.collection || '').trim().toUpperCase() || null;
+
 const parsePaging = (req) => ({
     page: Math.max(parseInt(req.query.page || '1', 10), 1),
     perPage: Math.min(Math.max(parseInt(req.query.per_page || '24', 10), 1), 100)
@@ -76,8 +80,10 @@ exports.searchVideos = async (req, res) => {
         const sources = (req.query.sources || '').split(',').map((v) => v.trim().toLowerCase())
             .filter(Boolean).sort();
 
-        const {payload, cached} = await deepResults('text', [q, exclude, sources], () =>
-            queries.searchByText(q, exclude, RESULT_DEPTH, sources));
+        const collection = parseCollection(req);
+
+        const {payload, cached} = await deepResults('text', [q, exclude, sources, collection], () =>
+            queries.searchByText(q, exclude, RESULT_DEPTH, sources, collection));
 
         // Anchors, for a sequence query -
         const filtered = applyAvsFilter(payload.results, avs_session);
@@ -95,6 +101,8 @@ exports.searchVideos = async (req, res) => {
             has_more: hasMore,
             cached,
             temporal: payload.temporal,
+            filters: payload.filters,
+            collection,
             results: pageResults
         });
     } catch (error) {
@@ -113,8 +121,9 @@ exports.findSimilar = async (req, res) => {
         const {page, perPage} = parsePaging(req);
         const exclude = (req.query.exclude || '').split(',').map((v) => v.trim()).filter(Boolean);
 
-        const {payload, cached} = await deepResults('similar', [keyframeId, exclude], () =>
-            queries.findSimilarByKeyframe(keyframeId, exclude, RESULT_DEPTH));
+        const collection = parseCollection(req);
+        const {payload, cached} = await deepResults('similar', [keyframeId, exclude, collection], () =>
+            queries.findSimilarByKeyframe(keyframeId, exclude, RESULT_DEPTH, collection));
 
         const filtered = applyAvsFilter(payload.results, req.query.avs_session);
         const {page: pageResults, hasMore} = paginate(filtered, page, perPage);

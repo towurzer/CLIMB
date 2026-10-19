@@ -1,18 +1,24 @@
 import {useState, useRef, useEffect} from "react";
-import {SOURCES} from "../sources";
+import {COLLECTIONS, SOURCES} from "../sources";
 
 // The query syntax has nowhere else to be discovered, so it hangs off the input as a tooltip.
 const SYNTAX_HELP = [
     "plain words          search everything",
-    "text:Boulangerie     on-screen text only, as a phrase",
-    "said:good evening    transcripts only, as a phrase",
+    "text:Boulangerie     on-screen text, as a phrase",
+    "said:good evening    speech, as a phrase (or spoken:)",
+    "tag:bmx              uploader tags (V3C)",
     'text:"Dupont" a man  quote it to add plain words after',
-    "-video:00191         exclude a video",
+    "video:00191          only this video / MVK recording",
+    "-video:00191         exclude a video / MVK recording",
     "A >> B               A, then B within 1min, same video",
     "A >>(d120) B         ...within 120s instead",
+    "",
+    "text:, said: and tag: combine: every one must hold",
+    "somewhere in the same video.",
 ].join("\n");
 
-function SearchBar({onSearch, loading, history, sources, onToggleSource}) {
+function SearchBar({onSearch, loading, history, sources, onToggleSource, collection,
+                       onChangeCollection}) {
     const [input, setInput] = useState("");
     const [showHistory, setShowHistory] = useState(false);
     const inputRef = useRef(null);
@@ -76,10 +82,23 @@ function SearchBar({onSearch, loading, history, sources, onToggleSource}) {
                 </button>
             </form>
 
-            {/* All four on by default. Untick one and it is not searched at all -- OCR is pure
+            {/* All on by default. Untick one and it is not searched at all -- OCR is pure
                 noise on a query like "a snowboarder doing a backflip", and this is how you say so
                 for one query without retuning the weights for every query. */}
             <div className="source-picker">
+                {/* At VBS the task names its collection; searching only that one keeps the other
+                    collections' look-alikes off the page. */}
+                <select
+                    className={`collection-picker${collection ? " active" : ""}`}
+                    value={collection}
+                    disabled={loading}
+                    onChange={(e) => onChangeCollection(e.target.value)}
+                    title="Search only this dataset"
+                >
+                    {COLLECTIONS.map(({key, label}) => (
+                        <option key={key || "all"} value={key}>{label}</option>
+                    ))}
+                </select>
                 <span className="source-picker-label">Sources</span>
                 {SOURCES.map(({key, label, title}) => {
                     const active = sources.includes(key);

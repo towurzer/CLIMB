@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Video Retrieval API",
-    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.\n\nv2.1.0: AVS session bookkeeping moved out of this backend into a separate service (`climb-avs-service`), so teammates running their own local stacks share one exclusion list. Every AVS route can now answer **503** when that service is unreachable, which is deliberately distinct from 404: 404 means the session is gone, 503 means we cannot tell. Snapshots carry a `collab` field, and /climb/health reports `avs_collab`. Search and DRES submission never depend on the service; search filters a local mirror. With `AVS_SESSION_SERVICE_URL` unset the store stays in-process and 503 never occurs.",
-    "version": "2.1.0"
+    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.\n\nv2.1.0: AVS session bookkeeping moved out of this backend into a separate service (`climb-avs-service`), so teammates running their own local stacks share one exclusion list. Every AVS route can now answer **503** when that service is unreachable, which is deliberately distinct from 404: 404 means the session is gone, 503 means we cannot tell. Snapshots carry a `collab` field, and /climb/health reports `avs_collab`. Search and DRES submission never depend on the service; search filters a local mirror. With `AVS_SESSION_SERVICE_URL` unset the store stays in-process and 503 never occurs.\n\nv2.2.0: `collection` restricts a search to V3C, MVK or LHE. Query requirements (text:, said:/spoken:, tag:, video:) combine at video level, and the response reports each in `filters`. Videos are served from the source collections.",
+    "version": "2.2.0"
   },
   "servers": [
     {
@@ -166,7 +166,7 @@
             "name": "q",
             "in": "query",
             "required": true,
-            "description": "Text query for search. To exclude specific videos from results, append ' --exclude: videoId1, videoId2, ...' to the query. Example: 'person running --exclude: V3C1_001, V3C1_002'",
+            "description": "Text query for search. To exclude specific videos from results, append ' --exclude: videoId1, videoId2, ...' to the query. Example: 'person running --exclude: V3C1_001, V3C1_002' Requirements, all at video level: text:\"...\" (on-screen text), said:\"...\" or spoken:\"...\" (speech), tag:... (uploader tags), video:ID (only this clip or MVK recording). A result's video must satisfy every one; plain words only rank. -video:ID excludes a clip or recording.",
             "schema": {
               "type": "string"
             }
@@ -212,6 +212,20 @@
               "type": "string",
               "example": "visual,caption,asr"
             }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "description": "Search only this collection: V3C, MVK or LHE. Absent means all of them. At VBS the task names its collection, and restricting to it keeps the other collections' false hits off the page.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "V3C",
+                "MVK",
+                "LHE"
+              ]
+            }
           }
         ],
         "responses": {
@@ -254,7 +268,23 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "description": "List only this collection: V3C, MVK or LHE. Absent means all of them.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "V3C",
+                "MVK",
+                "LHE"
+              ]
+            }
+          }
+        ]
       }
     },
     "/climb/videos/{video_id}": {
@@ -800,6 +830,20 @@
               "maximum": 100,
               "default": 24
             }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "description": "Search only this collection: V3C, MVK or LHE. Absent means all of them. At VBS the task names its collection, and restricting to it keeps the other collections' false hits off the page.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "V3C",
+                "MVK",
+                "LHE"
+              ]
+            }
           }
         ],
         "responses": {
@@ -943,6 +987,32 @@
             "items": {
               "$ref": "#/components/schemas/SearchResult"
             }
+          },
+          "filters": {
+            "type": "array",
+            "nullable": true,
+            "description": "Null unless the query had requirements. Each requirement in the order applied, and how many videos were left after it, so an empty page names the requirement that emptied it.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "filter": {
+                  "type": "string",
+                  "example": "said:\"hello darling\""
+                },
+                "videos": {
+                  "type": "integer"
+                },
+                "stage": {
+                  "type": "integer",
+                  "description": "Which stage of a sequence query it belongs to; absent for a plain query"
+                }
+              }
+            }
+          },
+          "collection": {
+            "type": "string",
+            "nullable": true,
+            "description": "The collection searched, or null for all"
           }
         },
         "required": [

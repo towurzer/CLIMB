@@ -56,6 +56,10 @@ INSERT_SCENES = """
 
 DELETE_SCENES = "DELETE FROM scenes WHERE video_id = %s;"
 
+SELECT_INGESTED = """
+    SELECT DISTINCT s.video_id FROM scenes s JOIN videos v USING (video_id) WHERE v.collection = %s;
+"""
+
 
 @dataclass(frozen=True)
 class ShotBoundary:
@@ -320,6 +324,16 @@ def ingest_collection(conn, dataset, raw_dir=None, replace=False, limit=None, vi
         scene_ids &= wanted
 
     paired = sorted(set(videos) & scene_ids)
+    if not replace:
+        # Probing is the slow part (~15 videos/s off the HDD), so a rerun after a crash at 90%
+        # should not redo the 90%.
+        with conn.cursor() as cur:
+            cur.execute(SELECT_INGESTED, (dataset.name,))
+            ingested = {r[0] for r in cur.fetchall()}
+        if ingested & set(paired):
+            logger.info(f"{dataset.name}: {len(ingested & set(paired)):,} video(s) already "
+                        f"ingested, skipping them")
+            paired = [v for v in paired if v not in ingested]
     missing_scenes = sorted(set(videos) - scene_ids)
     orphan_scenes = scene_ids - set(videos)
     if missing_scenes:

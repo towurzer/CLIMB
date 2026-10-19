@@ -140,7 +140,8 @@ def test_worker_excludes_every_video_written_into_the_prompt(worker, corpus):
             victims.append(result["video_id"])
         if len(victims) == 3:
             break
-    assert len(victims) == 3, "corpus has fewer than three videos in the top 40"
+    if len(victims) < 3:
+        pytest.skip("corpus has fewer than three videos in the top 40")
 
     suffix = ", ".join(victims)
     filtered = _search(worker, f"{query} --exclude: {suffix}", top_k=40)["results"]
@@ -446,7 +447,9 @@ def test_two_stage_sequence_returns_chains(worker, corpus):
     for chain in body["results"]:
         assert len(chain["temporal_partners"]) == 1
         assert len(chain["temporal_gaps_ms"]) == 1
-        assert chain["temporal_partners"][0]["video_id"] == chain["video_id"]
+        # Same recording, not necessarily the same clip: an MVK dive is linked on its own clock
+        # across its 10-40 s clips. Everywhere else the recording is the video.
+        assert chain["temporal_partners"][0]["recording_id"] == chain["recording_id"]
 
 
 def test_sequence_partners_are_in_time_order(worker, corpus):
@@ -454,7 +457,9 @@ def test_sequence_partners_are_in_time_order(worker, corpus):
     if not body["results"]:
         pytest.skip("no two-stage chain in this corpus")
     for chain in body["results"]:
-        times = [chain["start_ms"]] + [p["start_ms"] for p in chain["temporal_partners"]]
+        # On the recording's clock: a chain may cross from one MVK clip into the next.
+        times = [hit["recording_offset_ms"] + hit["start_ms"]
+                 for hit in [chain] + chain["temporal_partners"]]
         assert times == sorted(times), f"chain out of order: {times}"
         assert all(gap > 0 for gap in chain["temporal_gaps_ms"])
 
@@ -478,7 +483,9 @@ def test_three_stage_chain(worker, corpus):
     for chain in body["results"]:
         assert len(chain["temporal_partners"]) == 2
         assert len(chain["temporal_gaps_ms"]) == 2
-        times = [chain["start_ms"]] + [p["start_ms"] for p in chain["temporal_partners"]]
+        # On the recording's clock: a chain may cross from one MVK clip into the next.
+        times = [hit["recording_offset_ms"] + hit["start_ms"]
+                 for hit in [chain] + chain["temporal_partners"]]
         assert times == sorted(times)
 
 
@@ -641,7 +648,7 @@ def test_visual_raises_ef_search_to_cover_the_oversample(db, corpus):
 
     conf = Config()
     spy = _RecordingConnection(db)
-    retrievers.visual(spy, _off_corpus_vector(dims, 0), model_id, dims, [], None, limit=20)
+    retrievers.visual(spy, _off_corpus_vector(dims, 0), model_id, dims, retrievers.Scope(), limit=20)
     db.rollback()
 
     sets = [(sql, params) for sql, params in spy.statements if "ef_search" in sql.lower()]
@@ -685,10 +692,10 @@ def test_the_ann_path_agrees_with_exhaustive_search(db, corpus):
                 ORDER BY embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s)
             """, {"dims": dims, "query": vector})
             exact_ids = [r[0] for r in cur.fetchall()]
-        exact20 = [s for s, _ in retrievers._resolve_scenes(db, exact_ids, [], None, 20)]
+        exact20 = [s for s, _ in retrievers._resolve_scenes(db, exact_ids, retrievers.Scope(), 20)]
         db.rollback()
 
-        got20 = [s for s, _ in retrievers.visual(db, vector, model_id, dims, [], None, limit=20)]
+        got20 = [s for s, _ in retrievers.visual(db, vector, model_id, dims, retrievers.Scope(), limit=20)]
         db.rollback()
         scores.append(len(set(got20) & set(exact20)))
 
@@ -702,7 +709,7 @@ def test_the_ann_path_agrees_with_exhaustive_search(db, corpus):
             cur.execute(VISUAL_RERANK,
                         {"ids": ids, "model_id": model_id, "dims": dims, "query": vector})
             broken_ids = [r[0] for r in cur.fetchall()]
-        broken20 = [s for s, _ in retrievers._resolve_scenes(db, broken_ids, [], None, 20)]
+        broken20 = [s for s, _ in retrievers._resolve_scenes(db, broken_ids, retrievers.Scope(), 20)]
         db.rollback()
         broken.append(len(set(broken20) & set(exact20)))
 

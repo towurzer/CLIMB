@@ -13,6 +13,7 @@ def get_container_command():
             -e POSTGRES_USER={conf.db_user} \\
             -v postgres_data:{conf.DB_CONTAINER_MOUNT_PATH} \\
             -p {conf.db_port}:5432 \\
+            --shm-size={conf.DB_SHM_SIZE} \\
             -d {conf.DB_IMAGE} \\
             postgres \\
               -c shared_buffers={conf.PG_SERVE_SHARED_BUFFERS} \\

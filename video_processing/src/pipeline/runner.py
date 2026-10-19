@@ -32,6 +32,8 @@ from pathlib import Path
 import custom_logger
 from config import Config
 from pipeline import paths
+from pipeline.decode import decode_from_database
+from pipeline.keyframe_selection import select_from_database
 from tqdm import tqdm
 
 STAGES = ["PENDING", "FETCHED", "DECODED", "SELECTED", "EMBEDDED",
@@ -263,6 +265,47 @@ def purge(conn, collection=None, keep_raw=False) -> PurgeResult:
     return result
 
 
+def process_in_batches(conn, collection=None, limit=None, purge_after=True, keep_raw=False,
+                       batch=None) -> set:
+    """
+    decode -> select -> purge, one batch of videos at a time, until nothing is pending.
+
+    Decoding everything before selecting anything puts every candidate frame of the collection on
+    disk at once: measured ~130 MB per hour of video, so ~350 GB for the 2,685 hours of V3C on the
+    HDD. A batch at a time keeps work/ at one batch's worth.
+
+    A video that fails is left out of every later batch of this run, so it cannot be retried
+    forever or block the batch it sits in. The next run tries it again. Returns the failed ids.
+    """
+    logger = custom_logger.get_logger("runner")
+    batch = batch or Config.PROCESS_BATCH
+    failed, selected_total, round_number = set(), 0, 0
+
+    while limit is None or selected_total < limit:
+        round_number += 1
+        size = batch if limit is None else min(batch, limit - selected_total)
+        decoded = decode_from_database(conn, collection=collection, limit=size, exclude=failed)
+        if not decoded:
+            break
+        failed |= {r.video_id for r in decoded if not r.ok}
+        # Exactly what this batch decoded. "The next N pending" would, after a batch that failed
+        # to decode, be N videos that were never decoded at all.
+        ready = [r.video_id for r in decoded if r.ok]
+        selected = select_from_database(conn, collection=collection, video_ids=ready,
+                                        exclude=failed) if ready else []
+        failed |= {r.video_id for r in selected if not r.ok}
+        if purge_after:
+            purge(conn, collection=collection, keep_raw=keep_raw)
+        selected_total += sum(1 for r in selected if r.ok)
+        logger.info(f"Batch {round_number}: {selected_total} video(s) selected so far, "
+                    f"{len(failed)} failed")
+
+    if failed:
+        logger.warning(f"{len(failed)} video(s) failed and were skipped, e.g. {sorted(failed)[:5]}"
+                       f" -- the log above says why; the next run retries them")
+    return failed
+
+
 def status(conn, collection=None):
     """Prints the job histogram and how much of the pipeline has actually landed."""
     with conn.cursor() as cur:
@@ -275,9 +318,12 @@ def status(conn, collection=None):
                    (SELECT count(*) FROM keyframe_embedding),
                    (SELECT count(*) FROM keyframe_text),
                    (SELECT count(*) FROM keyframe_caption),
-                   (SELECT count(*) FROM transcript_segment);
+                   (SELECT count(*) FROM transcript_segment),
+                   (SELECT count(*) FROM video_info),
+                   (SELECT count(*) FROM video_info_embedding);
         """)
-        videos, scenes, keyframes, embeddings, ocr, captions, transcripts = cur.fetchone()
+        (videos, scenes, keyframes, embeddings, ocr, captions, transcripts, info,
+         info_embeddings) = cur.fetchone()
 
     if jobs:
         print("ingest_jobs:")
@@ -289,7 +335,8 @@ def status(conn, collection=None):
     print("\ncontent:")
     for label, value in [("videos", videos), ("scenes", scenes), ("keyframes", keyframes),
                          ("embeddings", embeddings), ("ocr rows", ocr), ("captions", captions),
-                         ("transcript segments", transcripts)]:
+                         ("transcript segments", transcripts), ("video info", info),
+                         ("video info embeddings", info_embeddings)]:
         print(f"  {label:22s} {value:>9,}")
 
     work = paths._work_root()

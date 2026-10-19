@@ -12,11 +12,18 @@ like and proper nouns are exactly what OCR contributes that nothing else can.
 
 Syntax:
     plain words              every retriever
-    text:"..." / text:...    OCR only, matched as a phrase
-    said:"..." / said:...    transcripts only, matched as a phrase
+    text:"..." / text:...    on-screen text, as a phrase (repeatable)
+    said:"..." / said:...    transcripts, as a phrase (repeatable); spoken: is the same
+    tag:bmx / tag:"a b"      the uploader's tags (V3C); one word unless quoted
+    video:00191              only this video (repeatable: any of them)
     -video:00191             exclude a video (repeatable)
     A >> B                   A, then B within the default window, in the same video
     A >>(d120) B             the same, with a 120 second window
+
+text:, said: and tag: are requirements at video level: `said:"hello darling" text:"they kissed"`
+finds the videos where both hold, each possibly in a different scene, and ranks only within those.
+Plain words rank and never exclude anything. video: and -video: take a clip id or a whole MVK
+recording (`Ambon_Apr2012`); the engine resolves which.
 
 The quotes are optional: the colon is what makes it an operator. Unquoted, the phrase runs to the
 end of the stage or to the next operator, so `said: after the earthquake` is the whole sentence and
@@ -36,7 +43,7 @@ from dataclasses import dataclass, field
 
 # Where an unquoted phrase has to stop: the next operator, or the end of the stage. `>>` never
 # appears here because stages are split before parse() sees them.
-_NEXT_OPERATOR = r'(?=\s+(?:text:|said:|-video:|--exclude:)|$)'
+_NEXT_OPERATOR = r'(?=\s+(?:text:|said:|spoken:|tag:|video:|-video:|--exclude:)|$)'
 
 
 def _phrase_prefix(keyword: str):
@@ -51,8 +58,14 @@ def _phrase_prefix(keyword: str):
 
 
 TEXT_PREFIX = _phrase_prefix("text")
-SAID_PREFIX = _phrase_prefix("said")
-EXCLUDE_PREFIX = re.compile(r'-video:([A-Za-z0-9_]+)')
+SAID_PREFIX = _phrase_prefix("(?:said|spoken)")
+# Tags are a word or a quoted phrase, never "the rest of the stage": `tag:bmx a rider jumps` is a
+# tag and a description, not a tag nobody has.
+TAG_PREFIX = re.compile(r'\btag:\s*(?:"([^"]*)"|([^\s"]+))', re.I)
+VIDEO_ID = r'([A-Za-z0-9_-]+)'
+EXCLUDE_PREFIX = re.compile(rf'-video:{VIDEO_ID}')
+# After the exclusions are gone, or `-video:` would read as `video:`.
+ONLY_PREFIX = re.compile(rf'(?<![\w-])video:{VIDEO_ID}', re.I)
 # Legacy syntax the frontend still appends; kept so an old client does not silently search for it.
 #
 # The list is comma separated *with spaces*, the frontend writes `--exclude: 00083, 00140, 00004`.
@@ -82,8 +95,10 @@ MIN_TOKEN_LENGTH = 3
 class ParsedQuery:
     raw: str
     free_text: str = ""
-    ocr_phrase: str | None = None
-    asr_phrase: str | None = None
+    ocr_phrases: list = field(default_factory=list)
+    asr_phrases: list = field(default_factory=list)
+    tags: list = field(default_factory=list)
+    only_videos: list = field(default_factory=list)
     exclude_videos: list = field(default_factory=list)
 
     @property
@@ -91,14 +106,19 @@ class ParsedQuery:
         return bool(self.free_text.strip())
 
     @property
+    def has_filters(self) -> bool:
+        """Anything that narrows which videos may answer, as opposed to how they rank."""
+        return bool(self.ocr_phrases or self.asr_phrases or self.tags)
+
+    @property
     def targeted(self) -> bool:
         """True when the user asked for one specific retriever rather than a general search."""
-        return (self.ocr_phrase is not None or self.asr_phrase is not None) and not self.has_free_text
+        return bool(self.ocr_phrases or self.asr_phrases) and not self.has_free_text
 
     @property
     def has_content(self) -> bool:
-        """False when nothing here would run a retriever, only exclusions, or nothing at all."""
-        return bool(self.has_free_text or self.ocr_phrase or self.asr_phrase)
+        """False when nothing here would run a retriever or filter, only exclusions or nothing."""
+        return bool(self.has_free_text or self.has_filters)
 
 
 @dataclass
@@ -113,8 +133,10 @@ class TemporalQuery:
     stages: list = field(default_factory=list)
     # One window per gap, so len(gaps_ms) == len(stages) - 1.
     gaps_ms: list = field(default_factory=list)
-    # Global: an exclusion written on any stage excludes the video from all of them.
+    # Global: an exclusion written on any stage excludes the video from all of them, and a
+    # `video:` on any stage restricts all of them (a chain lives in one video anyway).
     exclude_videos: list = field(default_factory=list)
+    only_videos: list = field(default_factory=list)
 
     @property
     def is_temporal(self) -> bool:
@@ -159,30 +181,32 @@ def _phrase(match) -> str | None:
     return (quoted if quoted is not None else bare).strip()
 
 
+def _take_all(pattern, text, extract) -> tuple:
+    """Every match of `pattern`, extracted, and the text with them removed."""
+    found = [value for value in (extract(m) for m in pattern.finditer(text)) if value]
+    return found, pattern.sub(" ", text)
+
+
 def parse(query: str) -> ParsedQuery:
     raw = query or ""
-    remainder = raw
-    exclude = []
 
-    ocr_phrase = _phrase(TEXT_PREFIX.search(remainder))
-    remainder = TEXT_PREFIX.sub(" ", remainder)
+    ocr_phrases, remainder = _take_all(TEXT_PREFIX, raw, _phrase)
+    asr_phrases, remainder = _take_all(SAID_PREFIX, remainder, _phrase)
+    tags, remainder = _take_all(TAG_PREFIX, remainder, _phrase)
+    exclude, remainder = _take_all(EXCLUDE_PREFIX, remainder, lambda m: m.group(1))
 
-    asr_phrase = _phrase(SAID_PREFIX.search(remainder))
-    remainder = SAID_PREFIX.sub(" ", remainder)
+    legacy, remainder = _take_all(LEGACY_EXCLUDE, remainder, lambda m: m.group(1))
+    exclude += [v for group in legacy for v in (p.strip() for p in group.split(",")) if v]
 
-    for match in EXCLUDE_PREFIX.finditer(remainder):
-        exclude.append(match.group(1))
-    remainder = EXCLUDE_PREFIX.sub(" ", remainder)
-
-    for match in LEGACY_EXCLUDE.finditer(remainder):
-        exclude.extend(v for v in (p.strip() for p in match.group(1).split(",")) if v)
-    remainder = LEGACY_EXCLUDE.sub(" ", remainder)
+    only, remainder = _take_all(ONLY_PREFIX, remainder, lambda m: m.group(1))
 
     return ParsedQuery(
         raw=raw,
         free_text=" ".join(remainder.split()),
-        ocr_phrase=ocr_phrase or None,
-        asr_phrase=asr_phrase or None,
+        ocr_phrases=_dedupe(ocr_phrases),
+        asr_phrases=_dedupe(asr_phrases),
+        tags=_dedupe(t.lower() for t in tags),
+        only_videos=_dedupe(only),
         exclude_videos=_dedupe(exclude),
     )
 
@@ -238,6 +262,7 @@ def parse_temporal(query: str, default_delta_ms: int, max_delta_ms: int,
     parsed = [(parse(text), delta) for text, delta in _split_stages(raw)]
 
     exclude = [video for stage, _ in parsed for video in stage.exclude_videos]
+    only = [video for stage, _ in parsed for video in stage.only_videos]
 
     # An empty stage is not a stage: `A >>` is a search for A, not a sequence whose second half
     # matches nothing and therefore returns nothing at all.
@@ -250,4 +275,4 @@ def parse_temporal(query: str, default_delta_ms: int, max_delta_ms: int,
             for _, delta in kept[1:]]
 
     return TemporalQuery(raw=raw, stages=[stage for stage, _ in kept], gaps_ms=gaps,
-                         exclude_videos=_dedupe(exclude))
+                         exclude_videos=_dedupe(exclude), only_videos=_dedupe(only))

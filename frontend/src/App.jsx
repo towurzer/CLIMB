@@ -49,6 +49,9 @@ function App() {
     const [searchHasMore, setSearchHasMore] = useState(false);
     const [searchTemporal, setSearchTemporal] = useState(null); // set only by an `A >> B` query
     const [sources, setSources] = useState(ALL_SOURCE_KEYS);
+    const [collection, setCollection] = useState(""); // "" = every dataset
+    // Each text:/said:/tag:/video: requirement and how many videos met it; null without any.
+    const [searchFilters, setSearchFilters] = useState(null);
     const [searchLoadingMore, setSearchLoadingMore] = useState(false);
     const [resultsPanel, setResultsPanel] = useState(null);
     const [searchSentinel, setSearchSentinel] = useState(null);
@@ -85,6 +88,11 @@ function App() {
     useEffect(() => {
         sourcesRef.current = sources;
     }, [sources]);
+
+    const collectionRef = useRef(collection);
+    useEffect(() => {
+        collectionRef.current = collection;
+    }, [collection]);
 
     const excludedRef = useRef(excludedVideos);
     useEffect(() => {
@@ -191,8 +199,9 @@ function App() {
 
             const excluded = excludedRef.current;
             const excludeParam = excluded.length ? `&exclude=${excluded.join(",")}` : "";
+            const collectionParam = collectionRef.current ? `&collection=${collectionRef.current}` : "";
             const res = await fetch(
-                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}${sourcesParam}${excludeParam}`
+                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}${sourcesParam}${excludeParam}${collectionParam}`
             );
             const data = await res.json();
             const pageResults = data.results || [];
@@ -201,6 +210,7 @@ function App() {
             setSearchHasMore(Boolean(data.has_more));
             // Null unless the query used `A >> B`; describes how it was understood.
             setSearchTemporal(data.temporal || null);
+            setSearchFilters(data.filters || null);
             return pageResults;
         } catch (err) {
             console.error("Search failed:", err);
@@ -211,6 +221,7 @@ function App() {
     const fetchSimilarPage = useCallback(async (keyframeId, excluded = [], page = 1, append = false) => {
         const params = new URLSearchParams({page, per_page: searchPerPage});
         if (excluded.length) params.set("exclude", excluded.join(","));
+        if (collectionRef.current) params.set("collection", collectionRef.current);
         try {
             // Find-similar lives under /search now: it is fused, cached and paged like a search.
             const res = await fetch(
@@ -222,6 +233,7 @@ function App() {
             setSearchPage(page);
             setSearchHasMore(Boolean(data.has_more));
             setSearchTemporal(null); // find-similar replaces the result set, sequence or not
+            setSearchFilters(null);
             return pageResults;
         } catch (err) {
             console.error("Similar search failed:", err);
@@ -280,6 +292,26 @@ function App() {
             setLoading(false);
         })();
     }, [sources, mode, similarSource, query, fetchSearchPage]);
+
+    // Switching dataset changes the result set, so whatever is on screen re-runs against it
+    const handleChangeCollection = useCallback((next) => {
+        setCollection(next);
+        collectionRef.current = next;
+
+        if (mode !== "search") return;
+        (async () => {
+            setLoading(true);
+            setSelectedResult(null);
+            setSearchPage(1);
+            setSearchHasMore(false);
+            if (similarSource) {
+                await fetchSimilarPage(similarSource.keyframe_id, excludedRef.current, 1, false);
+            } else if (query.trim()) {
+                await fetchSearchPage(query, 1, false);
+            }
+            setLoading(false);
+        })();
+    }, [mode, similarSource, query, fetchSearchPage, fetchSimilarPage]);
 
     // Find similar refines what we are already looking at, so exclusions carry over
     const handleFindSimilar = useCallback(async (result) => {
@@ -725,6 +757,12 @@ function App() {
         `stage hits ${(searchTemporal.stage_counts || []).join(" / ")}`
     ].join(" · ");
 
+    // What each requirement left over, in order. An empty page reads as "this is the one that
+    // matched nothing" instead of "the search is broken".
+    const filtersNote = searchFilters && searchFilters
+        .map((f) => `${f.stage != null ? `s${f.stage}: ` : ""}${f.filter} → ${f.videos} video${f.videos === 1 ? "" : "s"}`)
+        .join(" · ");
+
     return (
         <div className="app">
             {/* for the top top bar */}
@@ -816,6 +854,8 @@ function App() {
                     history={searchHistory}
                     sources={sources}
                     onToggleSource={handleToggleSource}
+                    collection={collection}
+                    onChangeCollection={handleChangeCollection}
                 />
 
             )}
@@ -828,9 +868,15 @@ function App() {
                                 {loading && <div className="loading">Searching...</div>}
                                 {/* A sequence that found nothing still shows its header - that is
                                     exactly when the per-stage counts are worth reading */}
-                                {!loading && (results.length > 0 || temporalNote) && (
+                                {!loading && (results.length > 0 || temporalNote || filtersNote) && (
                                     <div className="results-info">
                                         {visibleResultCount}{searchHasMore ? "+" : ""} results for "{query}"
+                                        {collection && (
+                                            <span className="results-temporal-note"> · {collection} only</span>
+                                        )}
+                                        {filtersNote && (
+                                            <span className="results-temporal-note"> · {filtersNote}</span>
+                                        )}
                                         {temporalNote && (
                                             <span className="results-temporal-note"> · {temporalNote}</span>
                                         )}
@@ -863,6 +909,8 @@ function App() {
                                 onExitBrowse={browseReturnMode ? handleBrowseExit : null}
                                 submittedScenes={isAvs ? avsSubmittedScenes : EMPTY_SET}
                                 coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}
+                                collection={collection}
+                                onChangeCollection={handleChangeCollection}
                             />
                         )}
                 </div>

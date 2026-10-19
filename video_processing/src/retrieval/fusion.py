@@ -67,3 +67,28 @@ def fuse(ranked_lists: dict, weights: dict, k: int = RRF_K, limit: int = None) -
              for keyframe_id, score in scores.items()]
     fused.sort(key=lambda r: (-r.score, r.keyframe_id))
     return fused[:limit] if limit else fused
+
+
+def apply_video_prior(fused, video_of, ranked_videos, weight, name="info", k: int = RRF_K,
+                      limit: int = None) -> list:
+    """
+    Adds a video-level signal to keyframes that are already in `fused`.
+
+    The video info describes a whole video, so it cannot say which frame. Spreading it over every
+    keyframe of a well-described video would fill the page with that video; instead it only
+    re-orders what the frame-level signals found, each keyframe getting weight / (K + rank) for
+    its video's rank, the same RRF term as any other signal.
+    """
+    if weight <= 0 or not ranked_videos:
+        return fused[:limit] if limit else fused
+    rank_of = {video_id: rank for rank, video_id in enumerate(ranked_videos, start=1)}
+    for item in fused:
+        rank = rank_of.get(video_of.get(item.keyframe_id))
+        if rank is None:
+            continue
+        contribution = weight / (k + rank)
+        item.score += contribution
+        item.signals[name] = rank
+        item.contributions[name] = contribution
+    fused.sort(key=lambda r: (-r.score, r.keyframe_id))
+    return fused[:limit] if limit else fused

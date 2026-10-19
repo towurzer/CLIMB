@@ -1,15 +1,15 @@
 {
   "V3C": {
     "videos": "VBS/videos/v3c",
-    "scenes": ["V3Cmeta/scenesV3C/scenes", "V3Cmeta/scenesV3C.tgz"],
+    "scenes": ["V3Cmeta/scenesV3C.tgz", "V3Cmeta/scenesV3C/scenes"],
     "info": ["V3Cmeta/info", "V3Cmeta/infoV3C.tgz"]
   },
   "MVK": {
     "videos": "VBS/videos/mvk",
-    "scenes": ["MVKmeta/scenes", "MVKmeta/scenesMVK12.tgz"]
+    "scenes": ["MVKmeta/scenesMVK12.tgz", "MVKmeta/mvk12scenes.tgz", "MVKmeta/scenes"]
   },
   "LHE": {
     "videos": "VBS/videos/lhe",
-    "scenes": ["LHEmeta/scenes", "LHEmeta/scenesLHE.tgz"]
+    "scenes": ["LHEmeta/scenesLHE.tgz", "LHEmeta/scenes"]
   }
 }

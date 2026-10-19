@@ -1,5 +1,5 @@
 """
-Semantic embeddings over the transcript segments and the VLM captions.
+Semantic embeddings over the transcript segments, the VLM captions and the V3C video info.
 """
 
 from dataclasses import dataclass
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import custom_logger
 from config import Config
 from pipeline import device
+from pipeline.video_info import VideoInfo
 from psycopg2.extras import execute_values
 from tqdm import tqdm
 
@@ -54,10 +55,53 @@ INSERT_CAPTION = """
 """
 
 
+# The passage is built in Python (VideoInfo.passage), so the SQL only has to skip rows that would
+# produce an empty one. hashtext() because the shard split needs an integer and video ids are text;
+# ::bigint because abs() of the one int4 hash -2147483648 overflows.
+SELECT_PENDING_INFO = """
+    SELECT i.video_id, i.title, i.tags, i.description
+    FROM video_info i
+             JOIN videos v ON v.video_id = i.video_id
+    WHERE (i.title <> '' OR i.description <> '' OR cardinality(i.tags) > 0)
+      AND NOT EXISTS (SELECT 1
+                      FROM video_info_embedding e
+                      WHERE e.video_id = i.video_id
+                        AND e.model_id = %(model_id)s)
+      AND (%(collection)s IS NULL OR v.collection = %(collection)s)
+      AND mod(abs(hashtext(i.video_id)::bigint), %(shards)s) = %(shard)s
+    ORDER BY i.video_id
+    LIMIT %(limit)s;
+"""
+
+COUNT_PENDING_INFO = """
+    SELECT count(*)
+    FROM video_info i
+             JOIN videos v ON v.video_id = i.video_id
+    WHERE (i.title <> '' OR i.description <> '' OR cardinality(i.tags) > 0)
+      AND NOT EXISTS (SELECT 1
+                      FROM video_info_embedding e
+                      WHERE e.video_id = i.video_id
+                        AND e.model_id = %(model_id)s)
+      AND (%(collection)s IS NULL OR v.collection = %(collection)s)
+      AND mod(abs(hashtext(i.video_id)::bigint), %(shards)s) = %(shard)s;
+"""
+
+INSERT_INFO = """
+    INSERT INTO video_info_embedding (video_id, model_id, embedding)
+    VALUES %s ON CONFLICT (video_id, model_id) DO NOTHING
+"""
+
+
 @dataclass
 class TextEmbedResult:
     transcript: int = 0
     caption: int = 0
+    info: int = 0
+
+
+def _info_passage(row) -> tuple:
+    video_id, title, tags, description = row
+    return video_id, VideoInfo(title=title, tags=list(tags), description=description).passage()
 
 
 def as_passage(text: str) -> str:
@@ -96,7 +140,7 @@ def to_pgvector(values) -> str:
 
 
 def _run(conn, select_sql, insert_sql, model_id, params, tokenizer, model, dev, batch_size,
-         label, total):
+         label, total, to_text=None):
     logger = custom_logger.get_logger("text_embed")
     done = 0
     with tqdm(total=total, desc=f"Embedding {label}", unit="item") as progress:
@@ -106,6 +150,8 @@ def _run(conn, select_sql, insert_sql, model_id, params, tokenizer, model, dev, 
                 rows = cur.fetchall()
             if not rows:
                 break
+            if to_text:
+                rows = [to_text(row) for row in rows]
             vectors = encode([as_passage(text) for _, text in rows], tokenizer, model, dev)
             payload = [(key, model_id, to_pgvector(v)) for (key, _), v in zip(rows, vectors)]
             with conn.cursor() as cur:
@@ -156,13 +202,17 @@ def embed_text_pending(conn, collection=None, batch_size=None, shard=0, shards=1
             (model_id, collection, collection, shards, shard),
         )
         caption_total = cur.fetchone()[0]
+        cur.execute(COUNT_PENDING_INFO, {**params, "model_id": model_id})
+        info_total = cur.fetchone()[0]
 
     result.transcript = _run(conn, SELECT_PENDING_TRANSCRIPT, INSERT_TRANSCRIPT, model_id,
                              params, tokenizer, model, dev, batch_size, "transcript",
                              transcript_total)
     result.caption = _run(conn, SELECT_PENDING_CAPTION, INSERT_CAPTION, model_id,
                           params, tokenizer, model, dev, batch_size, "caption", caption_total)
+    result.info = _run(conn, SELECT_PENDING_INFO, INSERT_INFO, model_id, params, tokenizer,
+                       model, dev, batch_size, "video info", info_total, to_text=_info_passage)
 
-    logger.info(f"Embedded {result.transcript} transcript segment(s) and "
-                f"{result.caption} caption(s)")
+    logger.info(f"Embedded {result.transcript} transcript segment(s), "
+                f"{result.caption} caption(s) and {result.info} video info(s)")
     return result

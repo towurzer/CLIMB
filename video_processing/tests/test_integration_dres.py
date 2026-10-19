@@ -49,6 +49,17 @@ def submissions(dres):
     return body
 
 
+def _all_results(backend, query):
+    """Every page of an unfiltered search, from the backend's cached result set."""
+    results, page = [], 1
+    while True:
+        _, body = get_json(f"{backend}/climb/search?q={query}&per_page=100&page={page}")
+        results += body["results"]
+        if not body["has_more"]:
+            return results
+        page += 1
+
+
 def submit_kis(backend, video_id="00043", start=1000, end=4000, **extra):
     return post_json(f"{backend}/climb/dres/submit/kis", {
         "video_id": video_id, "start_time_ms": start, "end_time_ms": end, **extra,
@@ -288,6 +299,26 @@ def test_only_a_holding_verdict_covers_the_video(backend, dres, connected, avs_s
     assert ("00043" in session["coveredVideos"]) is holds
 
 
+def test_a_covered_mvk_clip_covers_its_whole_recording(backend, dres, connected, avs_session, db):
+    """An MVK dive is one video cut into clips; a correct hit in one of them covers all of them."""
+    with db.cursor() as cur:
+        cur.execute("SELECT array_agg(video_id ORDER BY video_id) FROM videos WHERE collection = "
+                    "'MVK' GROUP BY recording_id HAVING count(*) > 1 LIMIT 1")
+        row = cur.fetchone()
+    db.rollback()
+    if not row:
+        pytest.skip("no MVK recording with more than one clip in the database")
+    clips = row[0]
+
+    post_json(f"{dres}/mock/verdict", {"verdict": "CORRECT", "httpStatus": 200})
+    status, _ = submit_kis(backend, video_id=clips[0], scene_id=4343,
+                           start_frame=1, end_frame=10, avs_session=avs_session["code"])
+    assert status == 200
+
+    _, session = get_json(f"{backend}/climb/avs/session/{avs_session['code']}")
+    assert set(clips) <= set(session["coveredVideos"])
+
+
 def test_a_submission_without_a_session_code_records_nothing(backend, dres, connected,
                                                              avs_session):
     post_json(f"{dres}/mock/verdict", {"verdict": "CORRECT", "httpStatus": 200})
@@ -315,7 +346,9 @@ def test_a_held_scene_disappears_from_search_for_the_whole_session(backend, dres
     _, after = get_json(
         f"{backend}/climb/search?q={query}&per_page=5&avs_session={avs_session['code']}")
     assert victim["scene_id"] not in {r["scene_id"] for r in after["results"]}
-    assert after["total"] == before["total"] - 1
+    # Results are keyframes, so the scene takes every one of its keyframes with it, not one row.
+    victim_rows = sum(1 for r in _all_results(backend, query) if r["scene_id"] == victim["scene_id"])
+    assert after["total"] == before["total"] - victim_rows
 
     # ...and only inside that session. Another client with no session still sees it.
     _, unfiltered = get_json(f"{backend}/climb/search?q={query}&per_page=5")

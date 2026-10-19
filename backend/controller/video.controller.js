@@ -6,12 +6,14 @@ const VIDEOS_CACHE_TTL_SECONDS = parseInt(process.env.VIDEOS_CACHE_TTL_SECONDS |
 exports.listVideos = async (req, res) => {
     const page = Math.max(parseInt(req.query.page || '1', 10), 1);
     const perPage = Math.min(Math.max(parseInt(req.query.per_page || '25', 10), 1), 100);
-    const key = `videos:page:${page}:perPage:${perPage}`;
+    // V3C, MVK or LHE; absent means every collection. Same values as the search's `collection`.
+    const collection = (req.query.collection || '').trim().toUpperCase() || null;
+    const key = `videos:page:${page}:perPage:${perPage}:collection:${collection || 'all'}`;
 
     const cached = await cache.get(key);
     if (cached) return res.status(200).json({...cached, cached: true});
 
-    const result = await queries.getAllVideos(page, perPage);
+    const result = await queries.getAllVideos(page, perPage, collection);
     await cache.set(key, result, VIDEOS_CACHE_TTL_SECONDS);
     res.status(200).json({...result, cached: false});
 };

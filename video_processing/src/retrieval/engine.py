@@ -13,6 +13,7 @@ import custom_logger
 from config import Config
 from pipeline import device
 from retrieval import fusion, query_parser, retrievers, temporal
+from retrieval.retrievers import Scope
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
 
@@ -22,6 +23,7 @@ SOURCE_RETRIEVERS = {
     "ocr": ("ocr",),
     "asr": ("transcript",),
     "caption": ("caption",),
+    "info": ("info",),
 }
 
 
@@ -73,11 +75,12 @@ def _ends_transaction(method):
 ENRICH = """
     SELECT k.keyframe_id, k.kf_index, k.frame_number, k.ts_ms,
            s.scene_id, s.video_id, s.shot_index, s.start_frame, s.end_frame, s.start_ms, s.end_ms,
-           v.fps, v.duration_ms, v.damaged,
+           v.fps, v.duration_ms, v.damaged, v.recording_id, t.offset_ms,
            strip.keyframes
     FROM keyframes k
              JOIN scenes s ON s.scene_id = k.scene_id
              JOIN videos v ON v.video_id = s.video_id
+             JOIN video_timeline t ON t.video_id = v.video_id
              LEFT JOIN LATERAL (
         SELECT json_agg(json_build_object(
                 'keyframe_id', kk.keyframe_id,
@@ -94,11 +97,43 @@ ENRICH = """
 # A stage runs 1000 deep but only the handful of hits that end up inside a chain are ever shown, so
 # enriching a whole stage is work thrown away: linking reads video_id, ts_ms, scene_id and score,
 # never the filmstrip.
+#
+# Linked per recording, on the recording's clock: an MVK dive is one recording cut into 10-40 s
+# clips, and `A >> B` should not stop at a clip boundary. For everything else the recording is the
+# video and the offset is 0.
 LINK_ROWS = """
-    SELECT keyframe_id, video_id, ts_ms
-    FROM keyframes
-    WHERE keyframe_id = ANY (%(keyframe_ids)s);
+    SELECT k.keyframe_id, t.recording_id, k.ts_ms + t.offset_ms
+    FROM keyframes k
+             JOIN video_timeline t ON t.video_id = k.video_id
+    WHERE k.keyframe_id = ANY (%(keyframe_ids)s);
 """
+
+VIDEO_OF = "SELECT keyframe_id, video_id FROM keyframes WHERE keyframe_id = ANY (%(ids)s);"
+
+# `video:` and `-video:` -- and the exclusion list the x on a result card builds -- work on whole
+# recordings, whether given a recording id or any one of its clips: excluding the clip you are
+# looking at has to take the other seven clips of that dive with it, or the page fills straight
+# back up with them. Retrievers only know clips, so this expands to every clip of the recording.
+# Outside MVK the recording is the video, so this changes nothing there.
+RESOLVE_VIDEOS = """
+    SELECT video_id
+    FROM videos
+    WHERE recording_id IN (SELECT recording_id
+                           FROM videos
+                           WHERE video_id = ANY (%(ids)s) OR recording_id = ANY (%(ids)s));
+"""
+
+# A query that only narrows (`video:00191`, `tag:bmx`) and has nothing to rank by: the scenes of
+# what is left, in order, one keyframe each. Only ever run with a restricted Scope.
+LIST_SCENES = """
+    SELECT k.scene_id, k.keyframe_id
+    FROM keyframes k
+             JOIN videos v ON v.video_id = k.video_id
+    WHERE k.kf_index = 0
+      AND {scope}
+    ORDER BY k.video_id, k.ts_ms
+    LIMIT %(limit)s;
+""".format(scope=retrievers.KEYFRAME_SCOPE)
 
 
 @dataclass
@@ -109,6 +144,9 @@ class SearchResult:
     # Present only for a sequence query: what it was understood to mean, and how much each stage
     # found. Without it an empty page cannot be told apart from a stage that matched nothing.
     temporal: dict = None
+    # Present when the query had requirements (text:, said:, tag:, video:): each one and how many
+    # videos satisfied it, for the same reason.
+    filters: list = None
 
 
 class SearchEngine:
@@ -297,27 +335,73 @@ class SearchEngine:
         parsed = query_parser.parse_temporal(
             query, conf.TEMPORAL_DEFAULT_DELTA_MS, conf.TEMPORAL_MAX_DELTA_MS,
             conf.TEMPORAL_MAX_STAGES)
-        exclude = list(dict.fromkeys((exclude or []) + parsed.exclude_videos))
         top_k = top_k or conf.SEARCH_TOP_K
         weights = {**conf.rrf_weights(), **(weights or {})}
-        collection = normalize_collection(collection)
+        scope, filters = self._base_scope(parsed, exclude, normalize_collection(collection))
 
         allowed = _allowed_retrievers(sources)
 
         if parsed.is_temporal:
-            return self._search_temporal(parsed, exclude, collection, weights, top_k, depth,
-                                         allowed)
+            return self._search_temporal(parsed, scope, filters, weights, top_k, depth, allowed)
 
-        fused, timings, lists = self._retrieve(
-            parsed.stages[0], exclude, collection, weights,
-            depth or conf.RETRIEVER_DEPTH, top_k, allowed)
+        fused, timings, lists, stage_filters = self._retrieve(
+            parsed.stages[0], scope, weights, depth or conf.RETRIEVER_DEPTH, top_k, allowed)
+        filters += stage_filters
         return SearchResult(results=self._enrich(fused), timings=timings,
-                            signals_used=[n for n, r in lists.items() if r])
+                            signals_used=[n for n, r in lists.items() if r],
+                            filters=filters or None)
 
-    def _retrieve(self, parsed, exclude, collection, weights, depth, limit, allowed=None,
-                  vectors=None):
+    def _resolve_videos(self, ids) -> tuple:
+        """Every clip of the recordings named by clip or recording ids. Unknown ids add nothing."""
+        if not ids:
+            return ()
+        with self.conn.cursor() as cur:
+            cur.execute(RESOLVE_VIDEOS, {"ids": list(ids)})
+            return tuple(sorted(row[0] for row in cur.fetchall()))
+
+    def _base_scope(self, parsed, exclude, collection) -> tuple:
         """
-        Run every retriever for one query and fuse them.
+        The Scope every stage starts from: the request's and the query's exclusions, the
+        collection, and `video:`. Returns (scope, filters) with `video:` reported as a filter.
+        """
+        excluded = self._resolve_videos(list(dict.fromkeys((exclude or []) + parsed.exclude_videos)))
+        scope = Scope(exclude=excluded, collection=collection)
+        if not parsed.only_videos:
+            return scope, []
+        only = tuple(v for v in self._resolve_videos(parsed.only_videos) if v not in set(excluded))
+        label = " ".join(f"video:{v}" for v in parsed.only_videos)
+        return Scope(exclude=excluded, collection=collection, only=only), \
+            [{"filter": label, "videos": len(only)}]
+
+    def _apply_filters(self, stage, scope) -> tuple:
+        """
+        Narrows a Scope to the videos where every text:, said: and tag: of the stage holds.
+
+        Each requirement is evaluated inside what the previous ones left over, so the reported
+        counts read as a funnel and an empty one names the requirement that emptied it. Returns
+        (scope, filters); scope.only == () once nothing is left.
+        """
+        requirements = ([(f'text:"{p}"', retrievers.videos_with_ocr_phrase, p)
+                         for p in stage.ocr_phrases]
+                        + [(f'said:"{p}"', retrievers.videos_with_speech, p)
+                           for p in stage.asr_phrases]
+                        + [(f'tag:"{t}"', retrievers.videos_with_tag, t) for t in stage.tags])
+        filters = []
+        for label, find, value in requirements:
+            if scope.only == ():
+                filters.append({"filter": label, "videos": 0})
+                continue
+            videos = tuple(sorted(find(self.conn, value, scope)))
+            scope = Scope(exclude=scope.exclude, collection=scope.collection, only=videos)
+            filters.append({"filter": label, "videos": len(videos)})
+        return scope, filters
+
+    def _retrieve(self, parsed, scope, weights, depth, limit, allowed=None, vectors=None):
+        """
+        Run every retriever for one query and fuse them. Returns (fused, timings, lists, filters).
+
+        The stage's requirements are applied first (see _apply_filters), so every retriever only
+        ranks inside the videos that satisfy all of them.
 
         Shared by a plain search and by each stage of a sequence, which is the point: a stage is
         exactly as strong as a search, so `text:"Boulangerie" >> a dog runs past` works and every
@@ -331,6 +415,14 @@ class SearchEngine:
         """
         lists, timings = {}, {}
         vectors = vectors or {}
+        collection = scope.collection
+
+        started = time.monotonic()
+        scope, filters = self._apply_filters(parsed, scope)
+        if filters:
+            timings["filters"] = round((time.monotonic() - started) * 1000, 1)
+        if scope.only == ():
+            return [], timings, lists, filters
 
         def enabled(name):
             return allowed is None or name in allowed
@@ -366,33 +458,67 @@ class SearchEngine:
                                lambda: self.embed_query_visual(parsed.free_text, visual_spec))
                 run("visual", lambda: retrievers.visual(
                     self.conn, vector, visual_spec["model_id"], visual_spec["dims"],
-                    exclude, collection, depth))
+                    scope, depth))
 
             tokens = query_parser.distinctive_tokens(parsed.free_text)
             if tokens and enabled("ocr"):
-                run("ocr", lambda: retrievers.ocr_lexical(
-                    self.conn, tokens, exclude, collection, depth))
+                run("ocr", lambda: retrievers.ocr_lexical(self.conn, tokens, scope, depth))
 
-            # One embedding serves both, so it is only worth computing if either is wanted.
-            if self.text_model and (enabled("caption") or enabled("transcript")):
+            # One embedding serves all three, so it is only worth computing if any is wanted.
+            if self.text_model and (enabled("caption") or enabled("transcript")
+                                    or enabled("info")):
                 text_vector = embed("text", lambda: self.embed_query_text(parsed.free_text))
                 if enabled("caption"):
                     run("caption", lambda: retrievers.caption(
                         self.conn, text_vector, self.text_model["model_id"],
-                        self.text_model["dims"], exclude, collection, depth))
+                        self.text_model["dims"], scope, depth))
                 if enabled("transcript"):
                     run("transcript", lambda: retrievers.transcript(
                         self.conn, text_vector, self.text_model["model_id"],
-                        self.text_model["dims"], exclude, collection, depth))
+                        self.text_model["dims"], scope, depth))
+                if enabled("info"):
+                    run("info", lambda: retrievers.info(
+                        self.conn, text_vector, self.text_model["model_id"],
+                        self.text_model["dims"], scope, self.conf.INFO_DEPTH))
 
-        if parsed.ocr_phrase:
-            run("ocr_phrase", lambda: retrievers.ocr_phrase(
-                self.conn, parsed.ocr_phrase, exclude, collection, depth))
-        if parsed.asr_phrase:
-            run("asr_phrase", lambda: retrievers.transcript_phrase(
-                self.conn, parsed.asr_phrase, exclude, collection, depth))
+        # Several phrases of one kind share one list, interleaved, so each keeps the phrase
+        # weight and the UI's signal names stay what they were.
+        if parsed.ocr_phrases:
+            run("ocr_phrase", lambda: _interleave(
+                [retrievers.ocr_phrase(self.conn, p, scope, depth) for p in parsed.ocr_phrases],
+                depth))
+        if parsed.asr_phrases:
+            run("asr_phrase", lambda: _interleave(
+                [retrievers.transcript_phrase(self.conn, p, scope, depth)
+                 for p in parsed.asr_phrases], depth))
 
-        return fusion.fuse(lists, weights, limit=limit), timings, lists
+        if not any(lists.values()) and scope.only is not None and not parsed.has_free_text:
+            # Nothing to rank by, only requirements (`video:00191`, `tag:bmx`): list what is left.
+            run("listing", lambda: self._list_scenes(scope, depth))
+
+        # Video ids, not keyframes, so it joins after the frame-level fusion rather than in it.
+        videos = lists.pop("info", None)
+        fused = fusion.fuse(lists, weights, limit=None if videos else limit)
+        if videos:
+            started = time.monotonic()
+            fused = fusion.apply_video_prior(fused, self._video_of(fused), videos,
+                                             weights.get("info", 0.0), limit=limit)
+            timings["info"] = round(timings.get("info", 0.0)
+                                    + (time.monotonic() - started) * 1000, 1)
+            lists["info"] = videos
+        return fused, timings, lists, filters
+
+    def _video_of(self, fused) -> dict:
+        if not fused:
+            return {}
+        with self.conn.cursor() as cur:
+            cur.execute(VIDEO_OF, {"ids": [item.keyframe_id for item in fused]})
+            return dict(cur.fetchall())
+
+    def _list_scenes(self, scope, limit) -> list:
+        with self.conn.cursor() as cur:
+            cur.execute(LIST_SCENES, {**scope.params, "limit": limit})
+            return [(row[0], row[1]) for row in cur.fetchall()]
 
     def _embed_stages(self, stages, collection, allowed) -> list:
         """
@@ -417,12 +543,12 @@ class SearchEngine:
         if enabled("visual"):
             for index, vector in zip(wanted, self.embed_query_visual_batch(texts, visual_spec)):
                 vectors[index]["visual"] = vector
-        if self.text_model and (enabled("caption") or enabled("transcript")):
+        if self.text_model and (enabled("caption") or enabled("transcript") or enabled("info")):
             for index, vector in zip(wanted, self.embed_query_text_batch(texts)):
                 vectors[index]["text"] = vector
         return vectors
 
-    def _search_temporal(self, parsed, exclude, collection, weights, top_k, depth,
+    def _search_temporal(self, parsed, scope, filters, weights, top_k, depth,
                          allowed=None) -> SearchResult:
         """
         Each stage is a full search; the chaining is arithmetic over the results.
@@ -438,14 +564,15 @@ class SearchEngine:
 
         timings, signals = {}, []
         started = time.monotonic()
-        stage_vectors = self._embed_stages(parsed.stages, collection, allowed)
+        stage_vectors = self._embed_stages(parsed.stages, scope.collection, allowed)
         timings["embed"] = round((time.monotonic() - started) * 1000, 1)
 
         stage_rows, stage_fused = [], []
         for index, stage in enumerate(parsed.stages):
-            fused, stage_timings, lists = self._retrieve(
-                stage, exclude, collection, weights, stage_depth, conf.TEMPORAL_STAGE_TOP_K,
+            fused, stage_timings, lists, stage_filters = self._retrieve(
+                stage, scope, weights, stage_depth, conf.TEMPORAL_STAGE_TOP_K,
                 allowed, vectors=stage_vectors[index])
+            filters = filters + [{**f, "stage": index} for f in stage_filters]
             for name, elapsed in stage_timings.items():
                 timings[f"s{index}:{name}"] = elapsed
             signals += [f"s{index}:{name}" for name, results in lists.items() if results]
@@ -463,7 +590,7 @@ class SearchEngine:
         timings["enrich"] = round((time.monotonic() - started) * 1000, 1)
 
         return SearchResult(
-            results=results, timings=timings, signals_used=signals,
+            results=results, timings=timings, signals_used=signals, filters=filters or None,
             temporal={
                 "stages": [_stage_label(stage) for stage in parsed.stages],
                 "deltas_ms": parsed.gaps_ms,
@@ -535,9 +662,9 @@ class SearchEngine:
         collection = normalize_collection(collection)
         started = time.monotonic()
         spec = self.visual_model_for(collection)
+        scope = Scope(exclude=self._resolve_videos(exclude or []), collection=collection or None)
         pairs = retrievers.similar_to_keyframe(
-            self.conn, keyframe_id, spec["model_id"], spec["dims"],
-            exclude or [], collection or None, top_k)
+            self.conn, keyframe_id, spec["model_id"], spec["dims"], scope, top_k)
         timings = {"similar": round((time.monotonic() - started) * 1000, 1)}
 
         fused = [fusion.FusedResult(keyframe_id=kf, scene_id=scene_id, score=1.0 / (rank + 1),
@@ -574,11 +701,15 @@ class SearchEngine:
                 continue
             (keyframe_id, kf_index, frame_number, ts_ms,
              scene_id, video_id, shot_index, start_frame, end_frame, start_ms, end_ms,
-             fps, duration_ms, damaged, keyframes) = row
+             fps, duration_ms, damaged, recording_id, recording_offset_ms, keyframes) = row
             out.append((index, {
                 "scene_id": scene_id,
                 "keyframe_id": keyframe_id,
                 "video_id": video_id,
+                # The MVK dive this clip belongs to, and where in it the clip starts; the video
+                # itself and 0 everywhere else.
+                "recording_id": recording_id,
+                "recording_offset_ms": recording_offset_ms,
                 "shot_index": shot_index,
                 "kf_index": kf_index,
                 "start_frame": start_frame,
@@ -604,18 +735,27 @@ def _stage_label(stage) -> str:
     Rebuilt from the parsed parts rather than echoed from the raw segment, so an exclusion written
     mid-sequence does not show up as part of the thing being searched for.
     """
-    parts = []
-    if stage.ocr_phrase:
-        parts.append(f'text:"{stage.ocr_phrase}"')
-    if stage.asr_phrase:
-        parts.append(f'said:"{stage.asr_phrase}"')
+    parts = [f'text:"{p}"' for p in stage.ocr_phrases]
+    parts += [f'said:"{p}"' for p in stage.asr_phrases]
+    parts += [f'tag:"{t}"' for t in stage.tags]
     if stage.has_free_text:
         parts.append(stage.free_text)
     return " ".join(parts)
 
 
+def _interleave(ranked_lists, limit) -> list:
+    """Round-robin over several ranked lists, first occurrence wins, cut at `limit`."""
+    seen, out = set(), []
+    for rank in range(max((len(r) for r in ranked_lists), default=0)):
+        for ranked in ranked_lists:
+            if rank < len(ranked) and ranked[rank] not in seen:
+                seen.add(ranked[rank])
+                out.append(ranked[rank])
+    return out[:limit]
+
+
 def normalize_collection(collection):
-    """Collections are stored uppercase (V3C1, MVK, GYNSURG). None means every collection."""
+    """Collections are stored uppercase (V3C, MVK, LHE). None means every collection."""
     return collection.strip().upper() if collection else None
 
 

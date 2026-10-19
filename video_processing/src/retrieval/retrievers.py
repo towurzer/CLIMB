@@ -9,8 +9,45 @@ see _expand_to_keyframes().
 """
 
 from collections import defaultdict
+from dataclasses import dataclass
 
 from config import Config
+
+
+@dataclass(frozen=True)
+class Scope:
+    """
+    Which videos a search may answer from. Travels as one value so that no retriever can apply
+    the exclusions and forget the restriction, or the other way round.
+
+    `only` is None for "no restriction" and a tuple of clip ids otherwise; MVK recordings are
+    already resolved to their clips by the engine. An empty tuple means nothing may answer.
+    """
+    exclude: tuple = ()
+    collection: str | None = None
+    only: tuple | None = None
+
+    @property
+    def params(self) -> dict:
+        return {"exclude": list(self.exclude), "collection": self.collection,
+                "only": None if self.only is None else list(self.only)}
+
+    @property
+    def exact(self) -> bool:
+        """
+        Small enough to rank by exact distance over just these videos. The ANN index answers for
+        the whole collection and is filtered afterwards, so `video:00191 a red car` would keep
+        whichever of the global top 1000 happen to be in 00191 -- usually none.
+        """
+        return self.only is not None and len(self.only) <= Config.EXACT_SCOPE_MAX_VIDEOS
+
+
+# The filter every retriever applies, on whichever table carries the video id.
+SCOPE_SQL = """NOT ({video} = ANY (%(exclude)s::text[]))
+      AND (%(only)s::text[] IS NULL OR {video} = ANY (%(only)s::text[]))
+      AND (%(collection)s IS NULL OR v.collection = %(collection)s)"""
+KEYFRAME_SCOPE = SCOPE_SQL.format(video="k.video_id")
+SEGMENT_SCOPE = SCOPE_SQL.format(video="t.video_id")
 
 # Oversample on the binary index, then rerank the candidates against the full halfvec.
 #
@@ -47,12 +84,28 @@ RERANK_SQL = """
     ORDER BY embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s), {key};
 """
 
+# Exact distance over the embeddings of a handful of videos, for a Scope small enough to be exact.
+# Reaches the rows through the video id index on keyframes / transcript_segment.
+EXACT_SQL = """
+    SELECT e.{key}
+    FROM {table} e
+             JOIN {owner} o ON o.{key} = e.{key}
+    WHERE o.video_id = ANY (%(only)s::text[])
+      AND e.model_id = %(model_id)s
+    ORDER BY e.embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s), e.{key}
+    LIMIT %(limit)s;
+"""
+
 VISUAL_ANN = ANN_SQL.format(table="keyframe_embedding", key="keyframe_id")
 VISUAL_RERANK = RERANK_SQL.format(table="keyframe_embedding", key="keyframe_id")
 CAPTION_ANN = ANN_SQL.format(table="caption_embedding", key="keyframe_id")
 CAPTION_RERANK = RERANK_SQL.format(table="caption_embedding", key="keyframe_id")
 ASR_ANN = ANN_SQL.format(table="transcript_embedding", key="segment_id")
 ASR_RERANK = RERANK_SQL.format(table="transcript_embedding", key="segment_id")
+VISUAL_EXACT = EXACT_SQL.format(table="keyframe_embedding", key="keyframe_id", owner="keyframes")
+CAPTION_EXACT = EXACT_SQL.format(table="caption_embedding", key="keyframe_id", owner="keyframes")
+ASR_EXACT = EXACT_SQL.format(table="transcript_embedding", key="segment_id",
+                             owner="transcript_segment")
 
 # Metadata and filtering for an already-ranked set of keyframes. Single table plus a tiny join to
 # videos, both on primary keys.
@@ -61,9 +114,8 @@ KEYFRAME_META = """
     FROM keyframes k
              JOIN videos v ON v.video_id = k.video_id
     WHERE k.keyframe_id = ANY (%(ids)s)
-      AND NOT (k.video_id = ANY (%(exclude)s))
-      AND (%(collection)s IS NULL OR v.collection = %(collection)s);
-"""
+      AND {scope};
+""".format(scope=KEYFRAME_SCOPE)
 
 # ts_rank_cd with normalisation 32 maps to (0,1), so the floor below means something stable.
 # The floor matters because this retriever is weighted far above the others: without it, OCR noise
@@ -76,11 +128,10 @@ OCR_SEARCH = """
              JOIN videos v ON v.video_id = k.video_id
     WHERE t.tsv @@ q.query
       AND ts_rank_cd(t.tsv, q.query, 32) >= %(min_rank)s
-      AND NOT (k.video_id = ANY (%(exclude)s))
-      AND (%(collection)s IS NULL OR v.collection = %(collection)s)
+      AND {scope}
     ORDER BY rank DESC, t.keyframe_id
     LIMIT %(limit)s;
-"""
+""".format(scope=KEYFRAME_SCOPE)
 
 # Trigram fallback for OCR noise: 'B0ULANGERIE' scores 0.727 against the right sign, where lexeme
 # matching scores nothing at all.
@@ -90,11 +141,10 @@ OCR_TRIGRAM_SEARCH = """
              JOIN keyframes k ON k.keyframe_id = t.keyframe_id
              JOIN videos v ON v.video_id = k.video_id
     WHERE t.ocr_text %% %(phrase)s
-      AND NOT (k.video_id = ANY (%(exclude)s))
-      AND (%(collection)s IS NULL OR v.collection = %(collection)s)
+      AND {scope}
     ORDER BY sim DESC, t.keyframe_id
     LIMIT %(limit)s;
-"""
+""".format(scope=KEYFRAME_SCOPE)
 
 # Scenes an already-ranked set of transcript segments lands on.
 #
@@ -109,9 +159,8 @@ ASR_SCENES = """
              JOIN scenes s ON s.video_id = t.video_id
                  AND s.start_ms < t.end_ms AND s.end_ms > t.start_ms
     WHERE t.segment_id = ANY (%(segment_ids)s)
-      AND NOT (t.video_id = ANY (%(exclude)s))
-      AND (%(collection)s IS NULL OR v.collection = %(collection)s);
-"""
+      AND {scope};
+""".format(scope=SEGMENT_SCOPE)
 
 # DISTINCT ON has to sort by scene_id first to pick one segment per scene, which is not the order
 # the caller wants -- the ranking is the whole point, and RRF reads position as rank. So the pick
@@ -127,12 +176,11 @@ ASR_PHRASE_SEARCH = """
                    JOIN scenes s ON s.video_id = t.video_id
                        AND s.start_ms < t.end_ms AND s.end_ms > t.start_ms
           WHERE t.tsv @@ q.query
-            AND NOT (t.video_id = ANY (%(exclude)s))
-            AND (%(collection)s IS NULL OR v.collection = %(collection)s)
+            AND {scope}
           ORDER BY s.scene_id, rank DESC, t.segment_id) best
     ORDER BY rank DESC, scene_id
     LIMIT %(limit)s;
-"""
+""".format(scope=SEGMENT_SCOPE)
 
 
 def _or_tsquery(tokens) -> str | None:
@@ -155,7 +203,7 @@ SCENE_KEYFRAMES = """
 """
 
 
-def _resolve_scenes(conn, ordered_ids, exclude, collection, limit):
+def _resolve_scenes(conn, ordered_ids, scope, limit):
     """
     Filters an already-ranked keyframe list and attaches scene ids, preserving rank order.
 
@@ -166,8 +214,7 @@ def _resolve_scenes(conn, ordered_ids, exclude, collection, limit):
     if not ordered_ids:
         return []
     with conn.cursor() as cur:
-        cur.execute(KEYFRAME_META, {"ids": ordered_ids, "exclude": exclude,
-                                    "collection": collection})
+        cur.execute(KEYFRAME_META, {"ids": ordered_ids, **scope.params})
         scene_of = dict(cur.fetchall())
 
     out = []
@@ -235,39 +282,50 @@ def _ann_rerank(conn, ann_sql, rerank_sql, query_vector, model_id, dims, oversam
         return [row[0] for row in cur.fetchall()]
 
 
-def visual(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
-    ranked = _ann_rerank(conn, VISUAL_ANN, VISUAL_RERANK, query_vector, model_id, dims, oversample)
-    return _resolve_scenes(conn, ranked, exclude, collection, limit)
+def _rank_vectors(conn, ann_sql, rerank_sql, exact_sql, query_vector, model_id, dims, scope,
+                  oversample=None):
+    """Exact over the Scope's videos when it is small enough, the ANN path otherwise."""
+    if not scope.exact:
+        return _ann_rerank(conn, ann_sql, rerank_sql, query_vector, model_id, dims, oversample)
+    with conn.cursor() as cur:
+        cur.execute(exact_sql, {"only": list(scope.only), "model_id": model_id, "dims": dims,
+                                "query": query_vector,
+                                "limit": oversample or Config.ANN_OVERSAMPLE})
+        return [row[0] for row in cur.fetchall()]
 
 
-def ocr_lexical(conn, tokens, exclude, collection, limit):
+def visual(conn, query_vector, model_id, dims, scope, limit, oversample=None):
+    ranked = _rank_vectors(conn, VISUAL_ANN, VISUAL_RERANK, VISUAL_EXACT, query_vector, model_id,
+                           dims, scope, oversample)
+    return _resolve_scenes(conn, ranked, scope, limit)
+
+
+def ocr_lexical(conn, tokens, scope, limit):
     conf = Config()
     tsquery = _or_tsquery(tokens)
     if not tsquery:
         return []
     with conn.cursor() as cur:
-        cur.execute(OCR_SEARCH, {"tsquery": tsquery, "exclude": exclude, "collection": collection,
-                                 "limit": limit, "min_rank": conf.OCR_MIN_RANK})
+        cur.execute(OCR_SEARCH, {"tsquery": tsquery, **scope.params, "limit": limit,
+                                 "min_rank": conf.OCR_MIN_RANK})
         return [(row[0], row[1]) for row in cur.fetchall()]
 
 
-def ocr_phrase(conn, phrase, exclude, collection, limit):
+def ocr_phrase(conn, phrase, scope, limit):
     """Exact phrase search, used by text:"..." -- with a trigram pass for OCR misreadings."""
     conf = Config()
     tsquery = _phrase_tsquery(phrase)
     results = []
     if tsquery:
         with conn.cursor() as cur:
-            cur.execute(OCR_SEARCH, {"tsquery": tsquery, "exclude": exclude,
-                                     "collection": collection, "limit": limit,
+            cur.execute(OCR_SEARCH, {"tsquery": tsquery, **scope.params, "limit": limit,
                                      "min_rank": 0.0})
             results = [(row[0], row[1]) for row in cur.fetchall()]
     if len(results) < limit:
         with conn.cursor() as cur:
             cur.execute("SET LOCAL pg_trgm.similarity_threshold = %s;",
                         (conf.OCR_TRIGRAM_THRESHOLD,))
-            cur.execute(OCR_TRIGRAM_SEARCH, {"phrase": phrase, "exclude": exclude,
-                                             "collection": collection, "limit": limit})
+            cur.execute(OCR_TRIGRAM_SEARCH, {"phrase": phrase, **scope.params, "limit": limit})
             seen = {scene for scene, _ in results}
             results += [(row[0], row[1]) for row in cur.fetchall() if row[0] not in seen]
     return results[:limit]
@@ -279,8 +337,7 @@ KEYFRAME_VECTOR = """
 """
 
 
-def similar_to_keyframe(conn, keyframe_id, model_id, dims, exclude, collection, limit,
-                        oversample=None):
+def similar_to_keyframe(conn, keyframe_id, model_id, dims, scope, limit, oversample=None):
     """
     Find-similar, using the same ANN path as a text search.
 
@@ -293,11 +350,10 @@ def similar_to_keyframe(conn, keyframe_id, model_id, dims, exclude, collection, 
         row = cur.fetchone()
     if not row:
         return []
-    return visual(conn, row[0], model_id, dims, exclude, collection, limit + 1,
-                  oversample=oversample)
+    return visual(conn, row[0], model_id, dims, scope, limit + 1, oversample=oversample)
 
 
-def caption(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
+def caption(conn, query_vector, model_id, dims, scope, limit, oversample=None):
     """
     Captions describe the shot, not the frame, so a hit expands across the scene's keyframes.
 
@@ -307,13 +363,13 @@ def caption(conn, query_vector, model_id, dims, exclude, collection, limit, over
     retriever's worth of score that none of its siblings can earn. Measured before this was added,
     that pinned kf_index 0 to all 15 of the top 15 results.
     """
-    ranked = _ann_rerank(conn, CAPTION_ANN, CAPTION_RERANK, query_vector, model_id, dims,
-                         oversample)
-    scenes = _resolve_scenes(conn, ranked, exclude, collection, limit)
+    ranked = _rank_vectors(conn, CAPTION_ANN, CAPTION_RERANK, CAPTION_EXACT, query_vector,
+                           model_id, dims, scope, oversample)
+    scenes = _resolve_scenes(conn, ranked, scope, limit)
     return _expand_to_keyframes(conn, scenes, limit)
 
 
-def transcript(conn, query_vector, model_id, dims, exclude, collection, limit, oversample=None):
+def transcript(conn, query_vector, model_id, dims, scope, limit, oversample=None):
     """
     Scenes that were on screen while something matching the query was being said.
 
@@ -322,14 +378,13 @@ def transcript(conn, query_vector, model_id, dims, exclude, collection, limit, o
     back in were both whatever the plan produced, and RRF then read that as a ranking.
     """
     conf = Config()
-    ranked = _ann_rerank(conn, ASR_ANN, ASR_RERANK, query_vector, model_id, dims,
-                         oversample or conf.ASR_SEGMENT_LIMIT)
+    ranked = _rank_vectors(conn, ASR_ANN, ASR_RERANK, ASR_EXACT, query_vector, model_id, dims,
+                           scope, oversample or conf.ASR_SEGMENT_LIMIT)
     if not ranked:
         return []
 
     with conn.cursor() as cur:
-        cur.execute(ASR_SCENES, {"segment_ids": ranked, "exclude": exclude,
-                                 "collection": collection})
+        cur.execute(ASR_SCENES, {"segment_ids": ranked, **scope.params})
         scenes_of = defaultdict(list)
         for segment_id, scene_id in cur.fetchall():
             scenes_of[segment_id].append(scene_id)
@@ -346,12 +401,103 @@ def transcript(conn, query_vector, model_id, dims, exclude, collection, limit, o
     return _expand_to_keyframes(conn, scenes[:limit], limit)
 
 
-def transcript_phrase(conn, phrase, exclude, collection, limit):
+def transcript_phrase(conn, phrase, scope, limit):
     tsquery = _phrase_tsquery(phrase)
     if not tsquery:
         return []
     with conn.cursor() as cur:
-        cur.execute(ASR_PHRASE_SEARCH, {"tsquery": tsquery, "exclude": exclude,
-                                        "collection": collection, "limit": limit})
+        cur.execute(ASR_PHRASE_SEARCH, {"tsquery": tsquery, **scope.params, "limit": limit})
         scenes = [(row[0], row[1]) for row in cur.fetchall()]
     return _expand_to_keyframes(conn, scenes, limit)
+
+
+# --- video info -------------------------------------------------------------------------------
+
+# One row per video, tens of thousands at most, so an exact scan with no index (see migration 007).
+INFO_SEARCH = """
+    SELECT e.video_id
+    FROM video_info_embedding e
+             JOIN videos v ON v.video_id = e.video_id
+    WHERE e.model_id = %(model_id)s
+      AND {scope}
+    ORDER BY e.embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s), e.video_id
+    LIMIT %(limit)s;
+""".format(scope=SCOPE_SQL.format(video="e.video_id"))
+
+
+def info(conn, query_vector, model_id, dims, scope, limit) -> list:
+    """Videos whose title, tags and description match the query, best first. Video ids, not
+    keyframes: see fusion.apply_video_prior for how they reach the ranking."""
+    with conn.cursor() as cur:
+        cur.execute(INFO_SEARCH, {"model_id": model_id, "dims": dims, "query": query_vector,
+                                  "limit": limit, **scope.params})
+        return [row[0] for row in cur.fetchall()]
+
+
+# --- filters: which videos satisfy a requirement ----------------------------------------------
+#
+# Complete sets, not ranked lists cut at some depth: `said:"hello"` may hold in thousands of
+# videos, and a requirement that silently dropped the ones past rank 1000 would be a wrong answer,
+# not a slow one.
+
+# Lexeme adjacency or the trigram fallback, the same two ways ocr_phrase() finds a phrase. A
+# filter stricter than the retriever would throw away exactly the misread signs (B0ULANGERIE) the
+# trigram pass exists for.
+OCR_PHRASE_VIDEOS = """
+    SELECT DISTINCT k.video_id
+    FROM keyframe_text t
+             JOIN keyframes k ON k.keyframe_id = t.keyframe_id
+             JOIN videos v ON v.video_id = k.video_id
+    WHERE (t.tsv @@ to_tsquery('simple', %(tsquery)s) OR t.ocr_text %% %(phrase)s)
+      AND {scope};
+""".format(scope=KEYFRAME_SCOPE)
+
+SPEECH_PHRASE_VIDEOS = """
+    SELECT DISTINCT t.video_id
+    FROM transcript_segment t
+             JOIN videos v ON v.video_id = t.video_id
+    WHERE t.tsv @@ to_tsquery('simple', %(tsquery)s)
+      AND {scope};
+""".format(scope=SEGMENT_SCOPE)
+
+# Exact tag, or a stored tag with `?` where the source lost a character: `vid?o` is how the info
+# files spell vidéo, so the stored tag is used as a LIKE pattern with `?` as the one-character
+# wildcard. Tags are lowercased on both sides.
+TAG_VIDEOS = """
+    SELECT i.video_id
+    FROM video_info i
+             JOIN videos v ON v.video_id = i.video_id
+    WHERE (i.tags @> ARRAY [%(tag)s]
+        OR EXISTS (SELECT 1
+                   FROM unnest(i.tags) AS stored(tag)
+                   WHERE stored.tag LIKE '%%?%%'
+                     AND %(tag)s LIKE replace(replace(replace(replace(stored.tag, '\\', '\\\\'),
+                                                                 '%%', '\\%%'), '_', '\\_'), '?', '_')))
+      AND {scope};
+""".format(scope=SCOPE_SQL.format(video="i.video_id"))
+
+
+def videos_with_ocr_phrase(conn, phrase, scope) -> set:
+    conf = Config()
+    tsquery = _phrase_tsquery(phrase)
+    if not tsquery:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL pg_trgm.similarity_threshold = %s;", (conf.OCR_TRIGRAM_THRESHOLD,))
+        cur.execute(OCR_PHRASE_VIDEOS, {"tsquery": tsquery, "phrase": phrase, **scope.params})
+        return {row[0] for row in cur.fetchall()}
+
+
+def videos_with_speech(conn, phrase, scope) -> set:
+    tsquery = _phrase_tsquery(phrase)
+    if not tsquery:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(SPEECH_PHRASE_VIDEOS, {"tsquery": tsquery, **scope.params})
+        return {row[0] for row in cur.fetchall()}
+
+
+def videos_with_tag(conn, tag, scope) -> set:
+    with conn.cursor() as cur:
+        cur.execute(TAG_VIDEOS, {"tag": tag.strip().lower(), **scope.params})
+        return {row[0] for row in cur.fetchall()}

@@ -8,14 +8,18 @@ import custom_logger
 from config import Config
 from db.connection import connect_to_database
 from db.index_ops import apply_serve_tuning
+from db.migrate import migration_status
 from retrieval.engine import SearchEngine
 
 search_engine = None
+# Migrations the database has not had. The engine queries what they create, so searching a
+# database that is behind fails on SQL nobody can read; this turns it into an instruction.
+pending_migrations = []
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global search_engine
+    global search_engine, pending_migrations
     from dotenv import load_dotenv
     load_dotenv()
     logger = custom_logger.get_logger("worker")
@@ -26,6 +30,11 @@ async def lifespan(app: FastAPI):
         # rows from an index scan, so at the default of 40 the oversample step asks for 1000
         # candidates, quietly receives 40, and the rerank has almost nothing to work with.
         apply_serve_tuning(conn)
+        pending_migrations = [f"{v} {n}" for v, n, applied in migration_status(conn) if not applied]
+        conn.commit()
+        if pending_migrations:
+            logger.error(f"Database schema is behind ({', '.join(pending_migrations)}): "
+                         f"run `python main.py migrate`. Searches are refused until then.")
         search_engine = SearchEngine(conn)
     else:
         logger.error("Could not connect to the database at startup.")
@@ -50,18 +59,27 @@ class SearchRequest(BaseModel):
 
 @app.get("/api/health")
 def health():
-    ready = search_engine is not None and search_engine.ready
+    ready = search_engine is not None and search_engine.ready and not pending_migrations
     return {
         "status": "ok" if ready else "degraded",
         "search_engine_ready": ready,
         "device": search_engine.device if search_engine else None,
+        "pending_migrations": pending_migrations,
     }
+
+
+def _require_engine():
+    if pending_migrations:
+        raise HTTPException(status_code=503, detail=f"Database schema is behind "
+                                                    f"({', '.join(pending_migrations)}): run "
+                                                    f"`python main.py migrate`")
+    if not search_engine or not search_engine.ready:
+        raise HTTPException(status_code=500, detail="Search engine not initialized")
 
 
 @app.post("/api/search")
 def do_search(request: SearchRequest):
-    if not search_engine or not search_engine.ready:
-        raise HTTPException(status_code=500, detail="Search engine not initialized")
+    _require_engine()
 
     result = search_engine.search(
         request.prompt, exclude=request.exclude, top_k=request.top_k,
@@ -73,6 +91,9 @@ def do_search(request: SearchRequest):
         "signals": result.signals_used,
         "timings_ms": result.timings,
         "temporal": result.temporal, # Null unless the prompt used the `A >> B` sequence syntax.
+        # Null unless the prompt had requirements (text:, said:, tag:, video:): each one and how
+        # many videos satisfied it.
+        "filters": result.filters,
     }
 
 
@@ -85,8 +106,7 @@ class SimilarRequest(BaseModel):
 
 @app.post("/api/similar")
 def do_similar(request: SimilarRequest):
-    if not search_engine or not search_engine.ready:
-        raise HTTPException(status_code=500, detail="Search engine not initialized")
+    _require_engine()
     result = search_engine.similar(request.keyframe_id, exclude=request.exclude,
                                    top_k=request.top_k, collection=request.collection)
     return {"results": result.results, "timings_ms": result.timings}

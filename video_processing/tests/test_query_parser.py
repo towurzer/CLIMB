@@ -23,15 +23,15 @@ def temporal(query, default=DEFAULT_DELTA, maximum=MAX_DELTA, stages=MAX_STAGES)
 def test_plain_query_is_all_free_text():
     parsed = parse("a dog runs across a beach")
     assert parsed.free_text == "a dog runs across a beach"
-    assert parsed.ocr_phrase is None
-    assert parsed.asr_phrase is None
+    assert parsed.ocr_phrases == []
+    assert parsed.asr_phrases == []
     assert parsed.has_content
     assert not parsed.targeted
 
 
 def test_text_prefix_is_lifted_out_of_free_text():
     parsed = parse('text:"Boulangerie Dupont"')
-    assert parsed.ocr_phrase == "Boulangerie Dupont"
+    assert parsed.ocr_phrases == ["Boulangerie Dupont"]
     assert parsed.free_text == ""
     # Nothing left to search generally, so this is a targeted OCR query.
     assert parsed.targeted
@@ -39,14 +39,14 @@ def test_text_prefix_is_lifted_out_of_free_text():
 
 def test_said_prefix_is_lifted_out_of_free_text():
     parsed = parse('said:"ladies and gentlemen"')
-    assert parsed.asr_phrase == "ladies and gentlemen"
+    assert parsed.asr_phrases == ["ladies and gentlemen"]
     assert parsed.free_text == ""
     assert parsed.targeted
 
 
 def test_prefix_alongside_free_text_is_not_targeted():
     parsed = parse('text:"Dupont" a man walks past')
-    assert parsed.ocr_phrase == "Dupont"
+    assert parsed.ocr_phrases == ["Dupont"]
     assert parsed.free_text == "a man walks past"
     assert not parsed.targeted
 
@@ -66,26 +66,26 @@ def test_prefix_alongside_free_text_is_not_targeted():
 ])
 def test_said_takes_the_phrase_with_or_without_quotes(query):
     parsed = parse(query)
-    assert parsed.asr_phrase == "perfect execution"
+    assert parsed.asr_phrases == ["perfect execution"]
     assert parsed.free_text == ""
 
 
 def test_bare_text_operator_takes_the_rest_of_the_stage():
     parsed = parse("text:Boulangerie Dupont")
-    assert parsed.ocr_phrase == "Boulangerie Dupont"
+    assert parsed.ocr_phrases == ["Boulangerie Dupont"]
     assert parsed.free_text == ""
 
 
 def test_a_bare_phrase_stops_at_the_next_operator():
     parsed = parse("text:BANK said:we are live")
-    assert parsed.ocr_phrase == "BANK"
-    assert parsed.asr_phrase == "we are live"
+    assert parsed.ocr_phrases == ["BANK"]
+    assert parsed.asr_phrases == ["we are live"]
     assert parsed.free_text == ""
 
 
 def test_a_bare_phrase_stops_at_an_exclusion():
     parsed = parse("said: hello -video:00191")
-    assert parsed.asr_phrase == "hello"
+    assert parsed.asr_phrases == ["hello"]
     assert parsed.exclude_videos == ["00191"]
     assert parsed.free_text == ""
 
@@ -93,21 +93,21 @@ def test_a_bare_phrase_stops_at_an_exclusion():
 def test_quotes_are_still_how_a_phrase_and_free_text_share_a_stage():
     """The bare form is greedy by design, so quoting is what keeps the two apart."""
     assert parse('text:"Dupont" a man walks past').free_text == "a man walks past"
-    assert parse("text:Dupont a man walks past").ocr_phrase == "Dupont a man walks past"
+    assert parse("text:Dupont a man walks past").ocr_phrases == ["Dupont a man walks past"]
 
 
 @pytest.mark.parametrize("query", ["text:", "said:", "text: ", "said:  "])
 def test_an_operator_with_no_phrase_is_not_a_search_term(query):
     parsed = parse(query)
-    assert parsed.ocr_phrase is None
-    assert parsed.asr_phrase is None
+    assert parsed.ocr_phrases == []
+    assert parsed.asr_phrases == []
     assert not parsed.has_content
 
 
 def test_a_bare_phrase_does_not_swallow_the_next_stage():
     query = temporal("said: he is leaving >> text:EXIT")
-    assert [stage.asr_phrase for stage in query.stages] == ["he is leaving", None]
-    assert [stage.ocr_phrase for stage in query.stages] == [None, "EXIT"]
+    assert [stage.asr_phrases for stage in query.stages] == [["he is leaving"], []]
+    assert [stage.ocr_phrases for stage in query.stages] == [[], ["EXIT"]]
 
 
 def test_empty_query_has_no_content():
@@ -209,14 +209,14 @@ def test_separator_inside_quotes_does_not_split():
     # The whole point of the hand-written scanner rather than a regex split.
     query = temporal('text:"a >> b"')
     assert not query.is_temporal
-    assert query.stages[0].ocr_phrase == "a >> b"
+    assert query.stages[0].ocr_phrases == ["a >> b"]
 
 
 def test_quoted_separator_and_a_real_one_coexist():
     query = temporal('text:"a >> b" >> a dog runs')
     assert query.is_temporal
     assert len(query.stages) == 2
-    assert query.stages[0].ocr_phrase == "a >> b"
+    assert query.stages[0].ocr_phrases == ["a >> b"]
     assert query.stages[1].free_text == "a dog runs"
 
 
@@ -309,3 +309,53 @@ def test_legacy_exclusions_survive_a_sequence_query():
     query = temporal("a dog >> a car --exclude: 00191, 00042")
     assert query.exclude_videos == ["00191", "00042"]
     assert [stage.free_text for stage in query.stages] == ["a dog", "a car"]
+
+
+# --- combining filters ------------------------------------------------------------------------
+
+def test_the_professors_example_is_two_requirements():
+    parsed = parse('said:"hello darling" text:"and they kissed"')
+    assert parsed.asr_phrases == ["hello darling"]
+    assert parsed.ocr_phrases == ["and they kissed"]
+    assert parsed.has_filters and not parsed.has_free_text
+
+
+def test_a_second_phrase_of_the_same_kind_is_kept():
+    """It used to be dropped without a word: only the first text: was ever searched."""
+    parsed = parse("text:BANK text:EXIT a man runs")
+    assert parsed.ocr_phrases == ["BANK", "EXIT a man runs"]
+    assert parse('text:"BANK" text:"EXIT" a man runs').free_text == "a man runs"
+
+
+def test_spoken_is_said():
+    assert parse("spoken:good evening").asr_phrases == ["good evening"]
+    assert parse('spoken:"hi" said:"bye"').asr_phrases == ["hi", "bye"]
+
+
+def test_tag_is_one_word_unless_quoted():
+    parsed = parse("tag:bmx a rider jumps")
+    assert parsed.tags == ["bmx"] and parsed.free_text == "a rider jumps"
+    assert parse('tag:"Short Film" tag:Drama').tags == ["short film", "drama"]
+
+
+def test_tag_alone_is_a_query():
+    assert parse("tag:bmx").has_content
+
+
+def test_video_restricts_and_minus_video_excludes():
+    parsed = parse("-video:00191 video:00042 video:Ambon_Apr2012 a turtle")
+    assert parsed.only_videos == ["00042", "Ambon_Apr2012"]
+    assert parsed.exclude_videos == ["00191"]
+    assert parsed.free_text == "a turtle"
+
+
+def test_a_bare_phrase_stops_at_the_new_operators():
+    parsed = parse("said:we are live video:00042 tag:news")
+    assert parsed.asr_phrases == ["we are live"]
+    assert parsed.only_videos == ["00042"] and parsed.tags == ["news"]
+
+
+def test_video_restriction_is_global_across_stages():
+    query = parse_temporal("a dog video:00042 >> a cat", 60_000, 600_000, 4)
+    assert query.only_videos == ["00042"]
+    assert [stage.free_text for stage in query.stages] == ["a dog", "a cat"]

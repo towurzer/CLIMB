@@ -84,6 +84,11 @@ class Config:
     # a scene poorly still contribute.
     RETRIEVER_DEPTH: int = int(os.getenv("CLIMB_RETRIEVER_DEPTH") or 200)
     ASR_SEGMENT_LIMIT: int = 500
+    # A search restricted to at most this many videos (video:, or what text:/said:/tag: leave over)
+    # ranks by exact distance over just their embeddings instead of the ANN index. ~150 keyframes
+    # per V3C video, so 300 videos is ~45k exact distances: measured 170 ms on the laptop CPU for
+    # 45k 1024-d halfvecs (23 ms for 4.5k), about what embedding the query costs there anyway.
+    EXACT_SCOPE_MAX_VIDEOS: int = int(os.getenv("CLIMB_EXACT_SCOPE_MAX_VIDEOS") or 300)
     # ts_rank_cd with normalisation 32 is in (0,1). The floor stops OCR noise that happens to
     # spell a real word from being promoted by the heavy lexical weight below. Tune with WP9.
     OCR_MIN_RANK: float = float(os.getenv("CLIMB_OCR_MIN_RANK") or 0.01)
@@ -98,6 +103,12 @@ class Config:
     RRF_WEIGHT_TRANSCRIPT: float = float(os.getenv("CLIMB_W_TRANSCRIPT") or 1.0)
     # Explicit text:"..." / said:"..." searches outrank everything -- the user told us what to find.
     RRF_WEIGHT_PHRASE: float = float(os.getenv("CLIMB_W_PHRASE") or 8.0)
+    # The V3C uploader's title, tags and description, matched against the query. A video-level
+    # prior: it re-orders keyframes the other signals found, never adds any. 1.0 like the others
+    # until WP9 can measure it.
+    RRF_WEIGHT_INFO: float = float(os.getenv("CLIMB_W_INFO") or 1.0)
+    # How many videos the info retriever ranks.
+    INFO_DEPTH: int = int(os.getenv("CLIMB_INFO_DEPTH") or 500)
 
     # --- Temporal queries (see retrieval/temporal.py) ---
     # Query-side only: no schema, no embeddings, nothing to re-index.
@@ -137,9 +148,14 @@ class Config:
             "transcript": self.RRF_WEIGHT_TRANSCRIPT,
             "ocr_phrase": self.RRF_WEIGHT_PHRASE,
             "asr_phrase": self.RRF_WEIGHT_PHRASE,
+            "info": self.RRF_WEIGHT_INFO,
         }
 
     DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)
+    # Videos per decode -> select -> purge round in `run`. Candidate frames are ~130 MB per hour of
+    # video and only exist between decode and purge, so this is what bounds work/ (200 V3C videos
+    # are ~29 h, ~4 GB). See runner.process_in_batches.
+    PROCESS_BATCH: int = int(os.getenv("CLIMB_PROCESS_BATCH") or 200)
     FFMPEG_THREADS: int = int(os.getenv("CLIMB_FFMPEG_THREADS") or 2)
 
     # --- Paths ---
@@ -170,6 +186,10 @@ class Config:
     # container's own filesystem, so the volume holds nothing and the data dies with the container.
     DB_CONTAINER_MOUNT_PATH: str = "/var/lib/postgresql/data"
     DB_IMAGE: str = "docker.io/pgvector/pgvector:pg17"
+    # The container default is 64 MB, and a parallel HNSW build wants a shared segment the size of
+    # maintenance_work_mem (PG_BUILD_MAINTENANCE_WORK_MEM), so `index build` dies with "No space
+    # left on device" and falls back to a serial build. A limit, not a reservation.
+    DB_SHM_SIZE: str = "8g"
 
     # --- Vector index ---
     # m=16 / ef_construction=64 are pgvector's defaults and are adequate for binary vectors.
