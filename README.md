@@ -878,6 +878,12 @@ frame could earn a bonus an MVK frame never can. That is why Info follows the da
 picking anything else (including "All datasets", the start) unticks it. After that the tickbox is yours to flip until
 the next dataset switch.
 
+**ASR** follows the dropdown the same way, the other way round: picking MVK unticks it, everything else ticks it.
+MVK is filmed underwater, nobody talks, and Whisper fills the regulator noise with things it has heard a lot of:
+"Thank you.", "Продолжение следует..." ("to be continued"), "We'll see you next time." Every one of the 36 segments it
+found in 78 MVK clips was invented, and they still matched queries: "fish on a coral reef" ranked a clip third on the
+strength of a transcript that said "You".
+
 This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
 match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the
 lexical pass falls back to ORing every content word, so `a snowboarder doing a backflip` goes hunting for scenes whose

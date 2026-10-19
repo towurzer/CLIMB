@@ -13,12 +13,22 @@ export const SOURCES = [
 
 export const ALL_SOURCE_KEYS = SOURCES.map((source) => source.key);
 
-// Only V3C has info files. Choosing a dataset ticks Info for V3C and unticks it otherwise; it can
-// still be flipped by hand afterwards.
+// Sources that start unticked for some datasets. Choosing a dataset applies these; they can still be
+// flipped by hand afterwards.
+//   info: only V3C has info files.
+//   asr:  MVK is filmed underwater; its "transcripts" are Whisper hallucinations ("Thank you.").
+const OFF_FOR = {
+    info: (collection) => collection !== "V3C",
+    asr: (collection) => collection === "MVK",
+};
+
+const startsTicked = (key, collection) => !(key in OFF_FOR) || !OFF_FOR[key](collection);
+
 export const sourcesForCollection = (collection, sources) => {
-    const rest = sources.filter((key) => key !== "info");
-    if (collection === "V3C") return [...rest, "info"];
-    return rest.length ? rest : ALL_SOURCE_KEYS.filter((key) => key !== "info");
+    const next = ALL_SOURCE_KEYS.filter((key) =>
+        key in OFF_FOR ? startsTicked(key, collection) : sources.includes(key));
+    // Never leave nothing ticked: fall back to everything this dataset starts with
+    return next.length ? next : ALL_SOURCE_KEYS.filter((key) => startsTicked(key, collection));
 };
 
 // The collections a search can be limited to. `key` is what videos.collection holds (see
