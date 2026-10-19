@@ -1538,6 +1538,31 @@ body {
     transform: scale(1.02);
 }
 
+/* The keyframe selected in the side panel: a ring outside the card (hover only colours the border),
+   lifted above its neighbours, with a tag. Has to be found among 60 thumbnails at a glance. */
+.browse-card.selected,
+.browse-card.selected:hover {
+    position: relative;
+    z-index: 1;
+    border-color: #fff;
+    transform: scale(1.06);
+    box-shadow: 0 0 0 4px #5b8def, 0 0 24px 6px rgba(91, 141, 239, 0.75);
+}
+
+.browse-card-selected {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    background: #5b8def;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
 .browse-card-thumb {
     position: relative;
     background: #222;

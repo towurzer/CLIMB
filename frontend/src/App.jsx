@@ -743,13 +743,16 @@ function App() {
 
     // Jump to browse mode with a specific video's shots open (triggered from the sidebar ShotBrowser)
     const [browseOpenVideoId, setBrowseOpenVideoId] = useState(null);
+    // The keyframe the shot view opens on (scrolled to the middle); null opens at the top
+    const [browseFocusKeyframeId, setBrowseFocusKeyframeId] = useState(null);
     // Where "Browse in Fullscreen" was fired from. Set only when the jump crossed modes, so the
     // shot view's back arrow returns to the results the user came from instead of the video grid.
     const [browseReturnMode, setBrowseReturnMode] = useState(null);
-    const handleBrowseAllShots = useCallback((videoId) => {
+    const handleBrowseAllShots = useCallback((videoId, keyframeId = null) => {
         // Re-triggering from inside browse keeps the original origin: the user never left it.
         if (mode !== "browse") setBrowseReturnMode(mode);
         setMode("browse");
+        setBrowseFocusKeyframeId(keyframeId);
         setBrowseOpenVideoId(videoId);
     }, [mode]);
     const handleBrowseOpenVideoHandled = useCallback(() => {
@@ -993,6 +996,8 @@ function App() {
                                 coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}
                                 collection={collection}
                                 onChangeCollection={handleChangeCollection}
+                                selectedKeyframeId={selectedResult?.keyframe_id ?? null}
+                                focusKeyframeId={browseFocusKeyframeId}
                             />
                         )}
                 </div>
@@ -1101,7 +1106,7 @@ function App() {
                                 recording={recording}
                                 currentKeyframeId={selectedResult.keyframe_id}
                                 onSelectShot={handleShotSelect}
-                                onBrowseAll={handleBrowseAllShots}
+                                onBrowseAll={(videoId) => handleBrowseAllShots(videoId, selectedResult.keyframe_id)}
                                 submittedScenes={isAvs ? avsSubmittedScenes : EMPTY_SET}
                                 coveredVideos={isAvs ? avsCoveredVideos : EMPTY_SET}
                             />
