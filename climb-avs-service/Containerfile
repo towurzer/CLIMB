@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 
-COPY sessionStore.js auth.js sessions.controller.js server.js ./
+COPY sessionStore.js teamStore.js auth.js sessions.controller.js teams.controller.js server.js ./
 
 ENV AVS_SESSION_PORT=8080
 EXPOSE 8080

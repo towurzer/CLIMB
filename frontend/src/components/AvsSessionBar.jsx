@@ -1,4 +1,4 @@
-import {useState, useCallback} from "react";
+import {useEffect, useState} from "react";
 
 const expiryLabel = (ms) => {
     const total = Math.max(0, Math.ceil((ms || 0) / 1000));
@@ -7,62 +7,39 @@ const expiryLabel = (ms) => {
     return `${total}s`;
 };
 
-function AvsSessionBar({
-    apiUrl,
-    session,
-    expiredCode,
-    collabOffline,
-    onCreate,
-    onJoin,
-    onLeave,
-}) {
-    const [joinCode, setJoinCode] = useState("");
-    const [joinError, setJoinError] = useState("");
-    const [sessions, setSessions] = useState(null); // null = list not open
+/**
+ * The AVS session: which scenes are hidden because someone already submitted them. In a team it is
+ * the team's session, and "New session" starts a fresh one for everybody (the next AVS task). The
+ * code is shown so people next to each other can see they share it.
+ */
+function AvsSessionBar({session, teamName, expiredCode, collabOffline, onNewSession, onLeave}) {
+    const [confirming, setConfirming] = useState(false);
 
-    const submitJoin = useCallback(async () => {
-        const clean = joinCode.trim().toUpperCase();
-        if (!clean) return;
-        const result = await onJoin(clean);
-        if (result === "notfound") {
-            setJoinError(`Session ${clean} not found or expired.`);
-        } else if (result === "offline") {
-            setJoinError("Can't reach the session service — collaboration is offline.");
-        } else {
-            setJoinError("");
-            setJoinCode("");
-            setSessions(null);
-        }
-    }, [joinCode, onJoin]);
+    useEffect(() => setConfirming(false), [session?.code]);
 
-    const toggleList = useCallback(async () => {
-        if (sessions !== null) {
-            setSessions(null);
-            return;
-        }
-        try {
-            const res = await fetch(`${apiUrl}/climb/avs/sessions`);
-            const data = await res.json();
-            if (res.status === 503) {
-                setJoinError("Can't reach the session service — can't list sessions.");
-                setSessions([]);
-                return;
-            }
-            setJoinError("");
-            setSessions(data.sessions || []);
-        } catch (err) {
-            console.error("Failed to list AVS sessions:", err);
-            setSessions([]);
-        }
-    }, [apiUrl, sessions]);
+    const newSession = confirming ? (
+        <span className="avs-session-confirm">
+            {teamName ? "Fresh session for the whole team?" : "Start a fresh session?"}
+            <button className="avs-session-btn" onClick={() => {
+                setConfirming(false);
+                onNewSession();
+            }}>Yes</button>
+            <button className="avs-session-btn ghost" onClick={() => setConfirming(false)}>No</button>
+        </span>
+    ) : (
+        <button className="avs-session-btn" onClick={() => (session ? setConfirming(true) : onNewSession())}
+                title={teamName ? "Start a fresh session for the whole team, e.g. for the next AVS task" : "Start a fresh session"}>
+            New session
+        </button>
+    );
 
     return (
         <div className="avs-session-bar">
+            {teamName && <span className="avs-session-team">Team <strong>{teamName}</strong></span>}
             {session ? (
                 <>
-                    <span className="avs-session-code" title="Active AVS session code">
+                    <span className="avs-session-code" title="Session code: the same for everyone in it">
                         Session <strong>{session.code}</strong>
-                        {session.name ? ` · ${session.name}` : ""}
                     </span>
                     <span className="avs-session-stats">
                         {session.counts?.instances ?? 0} instances · {session.counts?.distinctVideos ?? 0} videos
@@ -80,64 +57,25 @@ function AvsSessionBar({
                             expires in {expiryLabel(session.expiresInMs)}
                         </span>
                     )}
-                    <button className="avs-session-btn" onClick={onCreate} title="Start a fresh session">
-                        New session
-                    </button>
-                    <button className="avs-session-btn ghost" onClick={onLeave}>
-                        Leave
-                    </button>
+                    {newSession}
+                    {!teamName && (
+                        <button className="avs-session-btn ghost" onClick={onLeave}>
+                            Leave
+                        </button>
+                    )}
                 </>
             ) : (
                 <>
-                    {expiredCode && (
-                        <span className="avs-session-expired">
-                            Session {expiredCode} expired
-                        </span>
-                    )}
+                    {expiredCode && <span className="avs-session-expired">Session {expiredCode} expired</span>}
                     {collabOffline && (
                         <span className="avs-session-offline" title="The shared session service is unreachable. Search and DRES submission still work.">
                             collab offline
                         </span>
                     )}
-                    <span className="avs-session-hint">No AVS session — create one or join to collaborate.</span>
-                    <button className="avs-session-btn" onClick={onCreate}>
-                        New session
-                    </button>
-                    <input
-                        className="avs-session-join-input"
-                        type="text"
-                        maxLength={4}
-                        placeholder="CODE"
-                        value={joinCode}
-                        onChange={(e) => {
-                            setJoinCode(e.target.value.toUpperCase());
-                            setJoinError("");
-                        }}
-                        onKeyDown={(e) => e.key === "Enter" && submitJoin()}
-                    />
-                    <button className="avs-session-btn" onClick={submitJoin}>
-                        Join
-                    </button>
-                    <button className="avs-session-btn ghost" onClick={toggleList}>
-                        {sessions !== null ? "Hide" : "Active"}
-                    </button>
-                    {joinError && <span className="avs-session-error">{joinError}</span>}
-                    {sessions !== null && (
-                        <span className="avs-session-list">
-                            {sessions.length === 0
-                                ? "no active sessions"
-                                : sessions.map((s) => (
-                                    <button
-                                        key={s.code}
-                                        className="avs-session-chip"
-                                        onClick={() => onJoin(s.code)}
-                                        title={`${s.instances} instances · expires in ${secs(s.expiresInMs)}s`}
-                                    >
-                                        {s.code}{s.name ? ` (${s.name})` : ""}
-                                    </button>
-                                ))}
-                        </span>
-                    )}
+                    <span className="avs-session-hint">
+                        No AVS session. Join a team to share one, or start one for yourself.
+                    </span>
+                    {newSession}
                 </>
             )}
         </div>

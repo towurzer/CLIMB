@@ -136,8 +136,22 @@ Every submission shows a result box with the DRES status code, a plain language 
 e.g. 200 · Accepted & graded · CORRECT. Green means a correct verdict, red a wrong or rejected one, and amber 
 (202 · Accepted - awaiting verdict) means DRES took the submission but hasn't judged it yet.
 
+Working together starts with **Join Team** in the top bar, next to "Login to DRES". Pick your team from the list (each
+one says how long it has left, a team nobody used for a week is gone) or type a new name, give the password and your
+username, Connect. A name nobody has taken yet creates the team with that password. The button turns green once you are
+in. Your username is what your teammates see on your hints, and who the session records as having submitted a scene.
+
+In a team you can send each other **hints**: "Send to team" under the player sends the selected video (for MVK the whole
+dive), optionally with the keyframe you are on and a note. Your teammates get a large red popup at the bottom of the
+screen, "Anna: have a look at 00191 · 00:12.40", and a red frame around the whole window. Both stay until you deal with
+it, because someone deep in their own search has to decide to ignore a hint, not miss it. Clicking the popup opens that
+video in the fullscreen keyframe browser with the keyframe selected (or nothing selected, when only the video was
+sent); the × ignores it. Every hint also lands in the inbox next to the team button.
+
 For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (next to Search/Browse) to AVS. 
-AVS is collaborative: click New session to get a random 4-letter code, or Join a teammate's code to work together. 
+AVS is collaborative: in a team everybody is in the team's session, and its 4-letter code is shown so the people next
+to you can check they see the same one. New session starts a fresh one for the whole team (the next AVS task), after a
+confirmation, since it un-hides everything for everybody. Without a team, New session gives you a session of your own.
 Each shot you submit is sent as its own submission and is then hidden from everyone in the session's search results, 
 so no one on the team submits the same scene twice. Videos where you already got a correct hit are dimmed and marked 
 "covered", since extra shots from the same video barely raise the AVS score. For MVK that means the whole dive: a hit
@@ -184,7 +198,8 @@ BACKEND_PORT=8000
 FRONTEND_PORT=3000
 ALLOWED_ORIGIN_REGEX=^https?:\/\/(?:[a-zA-Z0-9-]+\.)*q1studios\.at(?::\d+)?$
 ```
-If you want AVS collaboration across machines you need three more. Leave them out and AVS still works, it is just private to your own CLIMB:
+If you want teams and AVS collaboration across machines you need two more. Leave them out and both still work, they
+are just private to your own CLIMB. `CLIMB_USER` is only the fallback name for submissions made outside a team:
 
 ```text:
 AVS_SESSION_SERVICE_URL=https://example.org
@@ -222,17 +237,20 @@ backend/
     server.js               # Express API server
     mock-dres-server.js     # a fake DRES to test submissions against (port 8080)
     avsSessionClient.js     # talks to the AVS session service, and mirrors it so search never waits
+    teamClient.js           # this stack's team membership, held like the DRES login
     serviceUrls.js          # resolves the backend / search engine / avs service base urls from env
     datasets.js             # finds a source video to play, from datasets.json
     controller/             # Route handlers
     models/                 # Database models and queries
     routes/                 # Express routes
 
-climb-avs-service/          # the shared AVS session bookkeeper, deployed once for the whole team
-    server.js               # 5 routes wired to the controller. That is the entire service
-    sessions.controller.js  # what those 5 routes actually do
+climb-avs-service/          # teams and AVS sessions, deployed once for everyone
+    server.js               # 10 routes wired to the controllers. That is the entire service
+    sessions.controller.js  # the AVS session routes
+    teams.controller.js     # the team routes: list, connect, snapshot, new session, hint
     auth.js                 # bearer token + rate limit, the whole door
     sessionStore.js         # the sessions themselves, in memory; the backend requires this too for solo mode
+    teamStore.js            # the teams: password hash, current session, hints; idle out after a week
     Containerfile           # one dependency, no DB, no dataset, no media, no DRES credentials
     package.json
 
@@ -258,6 +276,8 @@ frontend/
         timecode.js         # timecode <-> ms <-> frame conversion
         sceneKey.js         # one canonical scene identity for grid, browser and AVS
         useRecording.js     # all clips of the selected video's recording, prev / next clip
+        useTeam.js          # the team connection, its poll, which hints are new
+        hints.js            # how a hint reads: "Anna: have a look at 00191 · 00:12.40"
         components/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
@@ -267,7 +287,11 @@ frontend/
             VideoBrowser.jsx# Browse all videos
             VqaAnswer.jsx   # VQA answer input + DRES submit buttons
             SubmissionLog.jsx # Submission history log
-            AvsSessionBar.jsx # AVS session create/join controls
+            AvsSessionBar.jsx # the AVS session: code, counts, New session
+            TeamLoginModal.jsx # Join Team: create or join, username
+            TeamInbox.jsx   # every hint of the team
+            HintToast.jsx   # a teammate's hint: red popup and screen frame until dealt with
+            SendHint.jsx    # send the selected video to the team
             DresLoginModal.jsx # DRES login popup
             BackendStatusDot.jsx # backend liveness circle in the header
 
@@ -1094,9 +1118,10 @@ clears it all again.
 
 At a competition every teammate runs their own full CLIMB. 
 
-The one thing that genuinely has to be shared is AVS session bookkeeping, and it is tiny: a few hundred scene records
-keyed by a 4-letter code, no database, no dataset, no media, no DRES credentials. So it lives on its own in
-`climb-avs-service/`, deployed **once** for the whole team:
+The things that genuinely have to be shared are tiny: the teams (name, a scrypt hash of the password, the current
+session, the last 200 hints) and the AVS session bookkeeping (a few hundred scene records keyed by a 4-letter code). No
+database, no dataset, no media, no DRES credentials. So it lives on its own in `climb-avs-service/`, deployed **once**
+for everyone:
 
 ```bash
 cd climb-avs-service
@@ -1110,6 +1135,11 @@ The service always listens on 8080 inside the container; the host side is yours 
 one you picked. Every teammate then sets `AVS_SESSION_SERVICE_URL` (plus `AVS_SESSION_PORT=20359` if they give a bare
 host rather than a full URL) and the same `AVS_SESSION_TOKEN`, and gets on with it.
 
+Joining a team hands the backend a token for it, and the backend holds the membership the way it holds the DRES login,
+so a page reload keeps you in. The service-wide `AVS_SESSION_TOKEN` stays what keeps strangers out of the service; the
+team password only separates teams from each other. Everything is in memory: a restart of the service empties it, and
+every member sees "IVADL expired or was reset. Join it again." and joins again, which recreates the team.
+
 Three rules this is built around:
 
 - **Search never touches the network.** Every backend keeps a local mirror of the session and filters against that,
@@ -1117,9 +1147,9 @@ Three rules this is built around:
   filtering - showing a scene twice costs one duplicate submission, failing a search costs you the query.
 - **Submitting never depends on it.** The DRES POST goes out first and is what scores; recording the scene into the
   session happens afterwards, is not awaited, and cannot fail into your submission.
-- **404 and 503 are different answers.** 404 means the session is really gone. 503 means we could not reach the
-  service and have nothing to say, so the team keeps its exclusion list and only the indicator changes. Collapsing
-  those two would throw away good state over a few seconds of bad wifi.
+- **404 and 503 are different answers.** 404 means the session (or team) is really gone. 503 means we could not
+  reach the service and have nothing to say, so the team keeps its exclusion list, its session and its hints, and only
+  the indicator changes. Collapsing those two would throw away good state over a few seconds of bad wifi.
 
 Leave `AVS_SESSION_SERVICE_URL` unset and none of this applies: the store runs in-process exactly as it used to, which
 is what you want when developing on your own. The backend says which mode it is in on startup, so you never have to

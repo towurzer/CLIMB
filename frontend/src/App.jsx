@@ -11,6 +11,11 @@ import SubmissionLog from "./components/SubmissionLog";
 import KeyframeTime from "./components/KeyframeTime";
 import AvsSessionBar from "./components/AvsSessionBar";
 import DresLoginModal from "./components/DresLoginModal";
+import TeamLoginModal from "./components/TeamLoginModal";
+import TeamInbox from "./components/TeamInbox";
+import HintToast from "./components/HintToast";
+import SendHint from "./components/SendHint";
+import {useTeam} from "./useTeam";
 import BackendStatusDot from "./components/BackendStatusDot";
 import {describeDresResult, describeDresError} from "./dresSubmission";
 import {sceneKey} from "./sceneKey";
@@ -79,6 +84,11 @@ function App() {
     const [avsCoveredVideos, setAvsCoveredVideos] = useState(EMPTY_SET);      // Set<videoId>
     const [avsExpiredCode, setAvsExpiredCode] = useState(null); // last session that idled out
     const [avsCollabOffline, setAvsCollabOffline] = useState(false);
+
+    // The team this stack is connected to: its AVS session and the hints teammates send
+    const teamApi = useTeam(API_URL);
+    const {team} = teamApi;
+    const [teamLoginOpen, setTeamLoginOpen] = useState(false);
 
     const avsFilterRef = useRef({mode: "kis", code: null});
     useEffect(() => {
@@ -456,6 +466,10 @@ function App() {
     }, []);
 
     const createAvsSession = useCallback(async () => {
+        if (team) {
+            await teamApi.newSession();
+            return;
+        }
         try {
             const res = await fetch(`${API_URL}/climb/avs/session`, {
                 method: "POST",
@@ -471,26 +485,29 @@ function App() {
         } catch (err) {
             console.error("Create AVS session failed:", err);
         }
-    }, [dresName, applyAvsSession]);
+    }, [dresName, applyAvsSession, team, teamApi.newSession]);
 
-    // Returns "ok" | "notfound" | "offline" so the join UI can tell the which it was
-    const joinAvsSession = useCallback(async (code) => {
-        const clean = (code || "").trim().toUpperCase();
-        if (!clean) return "notfound";
-        try {
-            const res = await fetch(`${API_URL}/climb/avs/session/${clean}/join`, {method: "POST"});
-            if (res.status === 503) {
-                setAvsCollabOffline(true);
-                return "offline";
-            }
-            if (!res.ok) return "notfound";
-            applyAvsSession(await res.json());
-            return "ok";
-        } catch (err) {
-            console.error("Join AVS session failed:", err);
-            return "offline";
+    // In a team, the AVS session is the team's: every team poll brings it along. Leaving the team
+    // (or the team expiring) leaves its session too.
+    const wasInTeam = useRef(false);
+    useEffect(() => {
+        if (team?.session) {
+            wasInTeam.current = true;
+            applyAvsSession({...team.session, collab: team.collab});
+        } else if (wasInTeam.current) {
+            wasInTeam.current = false;
+            setAvsSession(null);
+            setAvsSubmittedScenes(EMPTY_SET);
+            setAvsCoveredVideos(EMPTY_SET);
         }
-    }, [applyAvsSession]);
+    }, [team, applyAvsSession]);
+
+    useEffect(() => {
+        if (!teamApi.lostTeam) return;
+        setSnackbar({visible: true, message: `${teamApi.lostTeam} expired or was reset. Join it again.`, type: "error", raw: null});
+        const id = setTimeout(() => setSnackbar((s) => ({...s, visible: false})), 7000);
+        return () => clearTimeout(id);
+    }, [teamApi.lostTeam]);
 
     // Leaving is local only, the session lives on until it idles out
     const leaveAvsSession = useCallback(() => {
@@ -505,7 +522,7 @@ function App() {
     // 404 means the session is really gone, so the exclusion list is dropped.
     // 503 means the backend could not reach the shared session service and has nothing to say
     useEffect(() => {
-        if (!isAvs || !avsSession?.code) return;
+        if (!isAvs || !avsSession?.code || team) return;
         const code = avsSession.code;
         let cancelled = false;
 
@@ -545,7 +562,7 @@ function App() {
             cancelled = true;
             clearInterval(id);
         };
-    }, [isAvs, avsSession?.code]);
+    }, [isAvs, avsSession?.code, Boolean(team)]);
 
     // Shot select from filmstrip - the one under video. It spans the whole recording, so the
     // scene says which clip it is in
@@ -747,6 +764,31 @@ function App() {
         setMode(next);
     }, []);
 
+    // A hint opens the fullscreen keyframe browser of its video (for MVK: the dive) with the sent
+    // keyframe selected, or nothing selected when only the video was sent.
+    const openHint = useCallback(async (hint) => {
+        let selected = false;
+        if (hint.keyframe_id != null) {
+            try {
+                const res = await fetch(`${API_URL}/climb/videos/${encodeURIComponent(hint.video_id)}/scenes`);
+                const data = await res.json();
+                for (const scene of data.scenes || []) {
+                    const keyframe = (scene.keyframes || []).find((k) => k.keyframe_id === hint.keyframe_id);
+                    if (keyframe) {
+                        setSelectedResult(null);
+                        handleShotSelect(scene, keyframe);
+                        selected = true;
+                        break;
+                    }
+                }
+            } catch (err) {
+                console.error("Opening the hint's keyframe failed:", err);
+            }
+        }
+        if (!selected) setSelectedResult(null);
+        handleBrowseAllShots(hint.video_id);
+    }, [handleShotSelect, handleBrowseAllShots]);
+
     const isDuplicate = selectedResult ? alreadySubmitted(selectedResult) : false;
 
     // AVS: is the currently previewed scene already submitted in this session?
@@ -829,9 +871,35 @@ function App() {
                             : dresConnected ? `DRES · ${dresName}`
                                 : "Login to DRES"}
                     </button>
+                    <button
+                        className={`dres-login-btn ${team ? "connected" : ""}`}
+                        onClick={() => setTeamLoginOpen(true)}
+                        title={team ? `Team ${team.name} as ${team.user}` : "Join or create a team"}
+                    >
+                        <span className="dres-login-dot"/>
+                        {team ? `Team · ${team.name}` : "Join Team"}
+                    </button>
+                    {team && <TeamInbox hints={team.hints || []} onOpen={openHint}/>}
                     <BackendStatusDot apiUrl={API_URL}/>
                 </div>
             </header>
+            <TeamLoginModal
+                open={teamLoginOpen}
+                onClose={() => setTeamLoginOpen(false)}
+                team={team}
+                listTeams={teamApi.listTeams}
+                onConnect={teamApi.connect}
+                onDisconnect={teamApi.disconnect}
+            />
+            <HintToast
+                hint={teamApi.incoming[0] || null}
+                pending={teamApi.incoming.length}
+                onOpen={(hint) => {
+                    teamApi.dismissIncoming(hint.id);
+                    openHint(hint);
+                }}
+                onDismiss={teamApi.dismissIncoming}
+            />
             <DresLoginModal
                 open={dresLoginOpen}
                 onClose={() => setDresLoginOpen(false)}
@@ -852,12 +920,11 @@ function App() {
             {/* AVS collaborative session controls, only in AVS mode */}
             {isAvs && (
                 <AvsSessionBar
-                    apiUrl={API_URL}
                     session={avsSession}
+                    teamName={team?.name || null}
                     expiredCode={avsExpiredCode}
                     collabOffline={avsCollabOffline}
-                    onCreate={createAvsSession}
-                    onJoin={joinAvsSession}
+                    onNewSession={createAvsSession}
                     onLeave={leaveAvsSession}
                 />
             )}
@@ -1014,6 +1081,13 @@ function App() {
                                         Find similar
                                     </button>
                                 </div>
+                                {team && (
+                                    <SendHint
+                                        result={selectedResult}
+                                        recordingId={recording.recordingId}
+                                        onSend={teamApi.sendHint}
+                                    />
+                                )}
 
                                 {submitMessage && (
                                     <div className={`submit-result-box ${submitStatus || ""}`}>

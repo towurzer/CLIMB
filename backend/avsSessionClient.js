@@ -61,21 +61,21 @@ const collabState = () => {
 
 /**
  * Remote call wrapper. Distinguishes the three outcomes that matter:
- *   {ok: true, data}            - fine
+ *   {ok: true, status, data}    - fine
  *   {ok: false, status: 404}    - the session is genuinely gone
  *   {ok: false, status: null}   - we could not reach the service; say nothing about the session
  */
-async function call(method, suffix, body) {
+async function call(method, suffix, body, headers = {}) {
     try {
         const res = await axios({
             method,
             url: url(suffix),
             data: body,
-            headers: authHeaders(),
+            headers: {...authHeaders(), ...headers},
             timeout: TIMEOUT_MS
         });
         remoteReachable = true;
-        return {ok: true, data: res.data};
+        return {ok: true, status: res.status, data: res.data};
     } catch (err) {
         const status = err.response?.status || null;
         // A 4xx/5xx is an answer: the service is up and told us something. Only a transport failure
@@ -242,6 +242,10 @@ async function health() {
 
 module.exports = {
     mode,
+    // For teamClient, which talks to the same service and feeds the same mirror
+    call,
+    putMirror,
+    MIRROR_TTL_MS,
     sceneKey: store.sceneKey,
     holdsVideo: store.holdsVideo,
     getMirror,

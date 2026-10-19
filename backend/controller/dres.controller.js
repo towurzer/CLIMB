@@ -1,5 +1,6 @@
 const axios = require('axios')
 const avsClient = require('../avsSessionClient');
+const teamClient = require('../teamClient');
 
 let dresState = {
     connected: false,
@@ -88,6 +89,8 @@ const submitAnswerSet = async (res, answer, {successMessage, errorLabel, record 
                 video_id: record.video_id,
                 start_frame: record.start_frame,
                 end_frame: record.end_frame,
+                // The team login's username; without one the record falls back to CLIMB_USER
+                user: teamClient.currentUser(),
                 // null falls back to INDETERMINATE inside the store
                 status: response.data?.submission || (response.status === 202 ? "INDETERMINATE" : null)
             }).catch((err) => console.error("AVS record failed (non-fatal):", err.message));

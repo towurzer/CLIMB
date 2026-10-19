@@ -12,6 +12,7 @@ const searchRoutes = require('./routes/search.routes');
 const videoRoutes = require('./routes/video.routes');
 const dresRoutes = require('./routes/dres.routes');
 const avsRoutes = require('./routes/avs.routes');
+const teamRoutes = require('./routes/team.routes');
 
 const app = express();
 const PORT = process.env.BACKEND_PORT || 8000;
@@ -82,6 +83,7 @@ app.use('/climb/search', searchRoutes);
 app.use('/climb/videos', videoRoutes);
 app.use('/climb/dres', dresRoutes);
 app.use('/climb/avs', avsRoutes);
+app.use('/climb/team', teamRoutes);
 
 // Media roots. CLIMB_MEDIA_DIR is where the pipeline writes; at full V3C scale that is the
 // external SSD rather than anywhere inside the repo. Videos are not in there, they are played from

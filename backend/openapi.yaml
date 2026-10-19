@@ -3,7 +3,7 @@
   "info": {
     "title": "Video Retrieval API",
     "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.\n\nv2.1.0: AVS session bookkeeping moved out of this backend into a separate service (`climb-avs-service`), so teammates running their own local stacks share one exclusion list. Every AVS route can now answer **503** when that service is unreachable, which is deliberately distinct from 404: 404 means the session is gone, 503 means we cannot tell. Snapshots carry a `collab` field, and /climb/health reports `avs_collab`. Search and DRES submission never depend on the service; search filters a local mirror. With `AVS_SESSION_SERVICE_URL` unset the store stays in-process and 503 never occurs.\n\nv2.2.0: `collection` restricts a search to V3C, MVK or LHE. Query requirements (text:, said:/spoken:, tag:, video:) combine at video level, and the response reports each in `filters`. Videos are served from the source collections.",
-    "version": "2.3.0"
+    "version": "2.4.0"
   },
   "servers": [
     {
@@ -777,11 +777,22 @@
                       "items": {
                         "type": "object",
                         "properties": {
-                          "video_id": {"type": "string"},
-                          "fps": {"type": "number"},
-                          "duration_sec": {"type": "integer"},
-                          "recording_offset_ms": {"type": "integer", "description": "Where the clip starts within its recording"},
-                          "video_url": {"type": "string"}
+                          "video_id": {
+                            "type": "string"
+                          },
+                          "fps": {
+                            "type": "number"
+                          },
+                          "duration_sec": {
+                            "type": "integer"
+                          },
+                          "recording_offset_ms": {
+                            "type": "integer",
+                            "description": "Where the clip starts within its recording"
+                          },
+                          "video_url": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -914,6 +925,287 @@
                     },
                     "source_keyframe": {
                       "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/team": {
+      "get": {
+        "summary": "This backend's team membership",
+        "description": "The frontend polls this every 4 s while connected; it is also the heartbeat that keeps the team and its session alive. A team that is gone (expired, or the service restarted) answers `{connected: false, lost: true}` once. An unreachable service keeps the last snapshot with `collab: offline`.",
+        "operationId": "getTeam",
+        "responses": {
+          "200": {
+            "description": "The team as this backend sees it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/team/list": {
+      "get": {
+        "summary": "Teams that exist on the service",
+        "operationId": "listTeams",
+        "responses": {
+          "200": {
+            "description": "Every team, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "teams": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "expiresInMs": {
+                            "type": "integer",
+                            "description": "Until it idles out (a week without anyone connected)"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/team/connect": {
+      "post": {
+        "summary": "Join a team, or create it when the name is free",
+        "operationId": "connectTeam",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "team",
+                  "password",
+                  "user"
+                ],
+                "properties": {
+                  "team": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "description": "Case-insensitive"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "user": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "description": "Shown on hints and recorded on submissions"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Joined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Name, password or username missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong password for this team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/team/disconnect": {
+      "post": {
+        "summary": "Leave the team (this backend only)",
+        "operationId": "disconnectTeam",
+        "responses": {
+          "200": {
+            "description": "The team as this backend sees it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/team/session": {
+      "post": {
+        "summary": "Start a fresh AVS session for the whole team",
+        "operationId": "newTeamSession",
+        "responses": {
+          "200": {
+            "description": "The team as this backend sees it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamView"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/team/hint": {
+      "post": {
+        "summary": "Send a hint to the team",
+        "operationId": "sendHint",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HintInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The team as this backend sees it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "video_id missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
                     }
                   }
                 }
@@ -1481,6 +1773,117 @@
           "detail": {
             "type": "string",
             "description": "Underlying transport error, when there is one"
+          }
+        }
+      },
+      "HintInput": {
+        "type": "object",
+        "required": [
+          "video_id"
+        ],
+        "description": "Only video_id is required: by default a hint is the whole video",
+        "properties": {
+          "video_id": {
+            "type": "string"
+          },
+          "recording_id": {
+            "type": "string",
+            "description": "For MVK the dive; defaults to video_id"
+          },
+          "keyframe_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "scene_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "keyframe_time_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "nullable": true
+          }
+        }
+      },
+      "Hint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string"
+          },
+          "video_id": {
+            "type": "string"
+          },
+          "recording_id": {
+            "type": "string",
+            "description": "For MVK the dive; defaults to video_id"
+          },
+          "keyframe_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "scene_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "keyframe_time_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "nullable": true
+          }
+        }
+      },
+      "TeamView": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "lost": {
+            "type": "boolean",
+            "description": "Only when the team was gone"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          },
+          "expiresInMs": {
+            "type": "integer"
+          },
+          "session": {
+            "type": "object",
+            "description": "The team's current AVS session, same shape as GET /climb/avs/session/{code}"
+          },
+          "hints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hint"
+            },
+            "description": "Newest first, at most 200"
+          },
+          "collab": {
+            "type": "string",
+            "enum": [
+              "local",
+              "online",
+              "offline"
+            ]
           }
         }
       }

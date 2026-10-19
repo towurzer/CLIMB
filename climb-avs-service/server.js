@@ -2,6 +2,7 @@ const express = require('express');
 
 const store = require('./sessionStore');
 const sessions = require('./sessions.controller');
+const teams = require('./teams.controller');
 const {requireToken} = require('./auth');
 
 const PORT = parseInt(process.env.AVS_SESSION_PORT || '20359', 10);
@@ -19,6 +20,12 @@ app.get('/avs/sessions', sessions.list);
 app.post('/avs/session/:code/join', sessions.join);
 app.get('/avs/session/:code', sessions.get);
 app.post('/avs/session/:code/scene', sessions.recordScene);
+
+app.get('/teams', teams.list);
+app.post('/teams/connect', teams.connect);
+app.get('/team/:name', teams.get);
+app.post('/team/:name/session', teams.newSession);
+app.post('/team/:name/hint', teams.hint);
 
 app.listen(PORT, () => {
     console.log(`AVS session service listening on ${PORT} (idle timeout ${store.IDLE_TIMEOUT_MS} ms)`);
