@@ -24,9 +24,17 @@ const resolveDir = (value) => {
     return root ? path.join(expandHome(root), dir) : null;
 };
 
-const videoDirs = () => Object.entries(REGISTRY)
-    .map(([name, entry]) => resolveDir(process.env[`CLIMB_${name}_VIDEOS`] || entry.videos))
-    .filter(Boolean);
+const configuredVideoDirs = () => Object.entries(REGISTRY)
+    .map(([name, entry]) => [name, resolveDir(process.env[`CLIMB_${name}_VIDEOS`] || entry.videos)]);
+
+const videoDirs = () => configuredVideoDirs().map(([, dir]) => dir).filter(Boolean);
+
+/** One line per collection whose video folder cannot be read; empty when all are there. */
+const unreachableVideoDirs = () => configuredVideoDirs()
+    .filter(([, dir]) => !dir || !fs.existsSync(dir))
+    .map(([name, dir]) => dir
+        ? `${name}: ${dir} does not exist (is the drive mounted?)`
+        : `${name}: CLIMB_SOURCE_ROOT is not set`);
 
 // Hits only. A miss is not cached, so a drive mounted after the backend started is still found.
 const found = new Map();
@@ -47,4 +55,4 @@ const sourceVideoPath = (videoId) => {
     return null;
 };
 
-module.exports = {sourceVideoPath, videoDirs};
+module.exports = {sourceVideoPath, videoDirs, unreachableVideoDirs};

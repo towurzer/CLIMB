@@ -6,7 +6,7 @@ require('dotenv').config();
 
 const {SEARCH_ENGINE_URL} = require('./serviceUrls');
 const avsClient = require('./avsSessionClient');
-const {sourceVideoPath} = require('./datasets');
+const {sourceVideoPath, unreachableVideoDirs} = require('./datasets');
 
 const searchRoutes = require('./routes/search.routes');
 const videoRoutes = require('./routes/video.routes');
@@ -94,11 +94,17 @@ const immutable = {maxAge: '365d', immutable: true};
 app.use('/thumbs', express.static(path.join(MEDIA_DIR, 'thumbs'), immutable));
 app.use('/kf', express.static(path.join(MEDIA_DIR, 'kf'), immutable));
 app.get('/videos/:file', (req, res) => {
-    const file = sourceVideoPath(req.params.file.replace(/\.mp4$/, ''));
-    if (!file) return res.sendStatus(404);
-    res.sendFile(file, {maxAge: '365d'});
+    const videoId = req.params.file.replace(/\.mp4$/, '');
+    const file = sourceVideoPath(videoId);
+    if (file) return res.sendFile(file, {maxAge: '365d'});
+    // The player shows this text, so it says why.
+    const unreachable = unreachableVideoDirs();
+    res.status(404).type('text/plain').send(unreachable.length
+        ? `Source videos not reachable. ${unreachable.join('; ')}`
+        : `No source file for video ${videoId}`);
 });
 
 app.listen(PORT, () => {
     console.log(`Video Retrieval API running on http://localhost:${PORT}`);
+    for (const problem of unreachableVideoDirs()) console.warn(`Videos will not play: ${problem}`);
 });

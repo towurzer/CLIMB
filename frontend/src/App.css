@@ -812,9 +812,10 @@ body {
 .fallback-label {
     position: absolute;
     bottom: 8px;
-    background: rgba(0, 0, 0, 0.7);
-    color: #888;
-    font-size: 11px;
+    margin: 0 8px;
+    background: rgba(0, 0, 0, 0.8);
+    color: #f0b0a0;
+    font-size: 12px;
     padding: 4px 10px;
     border-radius: 4px;
 }

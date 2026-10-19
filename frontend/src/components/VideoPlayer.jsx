@@ -10,11 +10,23 @@ function VideoPlayer({result}) {
     const startSec = (keyframeAt != null ? keyframeAt : result.start_time_ms) / 1000;
     const endSec = startSec + 5;
     const videoUrl = result.video_url; // Always from the API: mediaPaths.js is the one place that knows the sharded layout.
+    // Why the video did not load, from the backend's 404 text; null while it plays.
+    const [loadError, setLoadError] = useState(null);
+
+    const explainLoadError = async () => {
+        try {
+            const res = await fetch(videoUrl, {headers: {Range: "bytes=0-0"}});
+            setLoadError(res.ok ? "The browser cannot play this video file." : await res.text());
+        } catch {
+            setLoadError("The backend is not reachable.");
+        }
+    };
 
     // When video_id changes, reload the video. When only the segment changes, just seek.
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
+        setLoadError(null);
 
         // Force reload when source changes
         video.load();
@@ -52,11 +64,16 @@ function VideoPlayer({result}) {
                     ref={videoRef}
                     controls
                     preload="metadata"
-                    onError={() => {
-                    }}
                 >
-                    <source src={videoUrl} type="video/mp4"/>
+                    {/* A failed <source> fires error on itself, not on the <video> */}
+                    <source src={videoUrl} type="video/mp4" onError={explainLoadError}/>
                 </video>
+                {loadError && (
+                    <div className="video-fallback">
+                        <img src={result.keyframe_url} alt="Keyframe"/>
+                        <div className="fallback-label">{loadError}</div>
+                    </div>
+                )}
             </div>
 
             <div className="player-controls">
