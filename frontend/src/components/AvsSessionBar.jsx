@@ -131,7 +131,7 @@ function AvsSessionBar({
                                         key={s.code}
                                         className="avs-session-chip"
                                         onClick={() => onJoin(s.code)}
-                                        title={`${s.instances} instances · expires in ${secs(s.expiresInMs)}s`}
+                                        title={`${s.instances} instances · expires in ${expiryLabel(s.expiresInMs)}`}
                                     >
                                         {s.code}{s.name ? ` (${s.name})` : ""}
                                     </button>
