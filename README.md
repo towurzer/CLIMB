@@ -429,7 +429,10 @@ python main.py <command> [options]
 | `serve`        | Start the search engine the backend talks to                                    |
 
 Every command takes `--collection` (`V3C`, `MVK` or `LHE`; leave it out for all of them) and `--limit`. The GPU ones
-also take `--shard N --shards M`.
+also take `--shard N --shards M`. `--limit` counts what the command works on: videos, except for `embed`, `ocr` and
+`caption`, which count keyframes. In `run` it counts videos and only limits the stages that take videos in (`fetch`
+to `select`); the later stages finish what those produced. It used to be handed to every stage as-is, so
+`run --limit 17` selected 310 keyframes and then embedded 17 of them.
 `python main.py <command> --help` explains any of them.
 
 The whole batch in one line:

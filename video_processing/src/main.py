@@ -58,12 +58,15 @@ from pipeline.video_info import ingest_info
 # The order `run` applies stages in, regardless of the order they are listed on the command line.
 RUN_ORDER = ["fetch", "ingest-shots", "decode", "select", "purge",
              "embed", "ocr", "caption", "asr", "embed-text"]
+# The stages that take in videos. In `run`, --limit counts videos and applies to these; the stages
+# after them finish what they produced, since keyframes and audio only exist for selected videos.
+VIDEO_STAGES = {"fetch", "ingest-shots", "decode", "select"}
 
 
-def add_common(parser, sharded=False):
+def add_common(parser, sharded=False, limit="videos"):
     parser.add_argument("--collection", default=None,
                         help="restrict to one collection: V3C, MVK or LHE (default: all)")
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--limit", type=int, default=None, help=f"at most this many {limit}")
     if sharded:
         parser.add_argument("--shard", type=int, default=0)
         parser.add_argument("--shards", type=int, default=1,
@@ -88,14 +91,14 @@ def build_parser():
     add_common(sub.add_parser("ingest-shots", help="probe videos, load their scenes and info"))
     add_common(sub.add_parser("decode", help="one FFmpeg pass: candidate frames and audio"))
     add_common(sub.add_parser("select", help="pick keyframes and write images"))
-    add_common(sub.add_parser("embed", help="SigLIP2 vectors (GPU)"), sharded=True)
+    add_common(sub.add_parser("embed", help="SigLIP2 vectors (GPU)"), sharded=True, limit="keyframes")
     add_common(sub.add_parser("asr", help="Whisper transcripts (GPU)"), sharded=True)
     add_common(sub.add_parser("embed-text", help="embed transcripts, captions and video info (GPU)"),
                sharded=True)
 
     for name, helptext in [("ocr", "read on-screen text (GPU)"),
                            ("caption", "describe each shot (GPU)")]:
-        stage = add_common(sub.add_parser(name, help=helptext), sharded=True)
+        stage = add_common(sub.add_parser(name, help=helptext), sharded=True, limit="keyframes")
         stage.add_argument("--all-keyframes", action="store_true",
                            help="every keyframe rather than one per shot")
 
@@ -105,7 +108,9 @@ def build_parser():
     index = sub.add_parser("index", help="build, drop or inspect the search indexes")
     index.add_argument("action", choices=["build", "drop", "status"])
 
-    run = add_common(sub.add_parser("run", help="run several stages in order"))
+    run = add_common(sub.add_parser("run", help="run several stages in order"),
+                     limit="videos taken in by fetch / ingest-shots / decode / select; the later "
+                           "stages finish what those produced")
     run.add_argument("--stages", default="fetch,ingest-shots,decode,select,purge",
                      help=f"comma-separated; any of {','.join(RUN_ORDER)}")
     return parser
@@ -190,6 +195,10 @@ def dispatch(args, conn=None):
         # Sorted into pipeline order: listing them the wrong way round should not try to select
         # keyframes from a video that has not been decoded yet.
         ordered = sorted(stages, key=RUN_ORDER.index)
+        if limit is not None and not VIDEO_STAGES & set(ordered):
+            raise SystemExit("run --limit counts videos, and none of these stages takes in videos.\n"
+                             "Run the stage on its own to limit it, e.g. `embed --limit 500` "
+                             "(keyframes).")
         # With both decode and select asked for, those two and purge run as one loop over batches
         # (runner.process_in_batches) instead of each stage over every video in turn.
         batched = {"decode", "select"} <= set(ordered)
@@ -202,7 +211,9 @@ def dispatch(args, conn=None):
                                               purge_after="purge" in ordered, keep_raw=keep_raw)
                 continue
             print(f"--- {stage} ---")
-            dispatch(argparse.Namespace(**{**vars(args), "command": stage}), conn=conn)
+            stage_limit = limit if stage in VIDEO_STAGES else None
+            dispatch(argparse.Namespace(**{**vars(args), "command": stage, "limit": stage_limit}),
+                     conn=conn)
 
 
 if __name__ == "__main__":
