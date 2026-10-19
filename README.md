@@ -141,12 +141,13 @@ one says how long it has left, a team nobody used for a week is gone) or type a 
 username, Connect. A name nobody has taken yet creates the team with that password. The button turns green once you are
 in. Your username is what your teammates see on your hints, and who the session records as having submitted a scene.
 
-In a team you can send each other **hints**: "Send to team" under the player sends the selected video (for MVK the whole
-dive), optionally with the keyframe you are on and a note. Your teammates get a large red popup at the bottom of the
-screen, "Anna: have a look at 00191 · 00:12.40", and a red frame around the whole window. Both stay until you deal with
-it, because someone deep in their own search has to decide to ignore a hint, not miss it. Clicking the popup opens that
-video in the fullscreen keyframe browser with the keyframe selected (or nothing selected, when only the video was
-sent); the × ignores it. Every hint also lands in the inbox next to the team button.
+In a team you can send each other **hints**: "Send to team" under the player sends the keyframe you are on (untick it
+to send only the video, for MVK the whole dive). It is made for the keyboard: after the click, Enter sends; Tab opens a
+note, and Tab, Enter sends it with the note. Your teammates get a large red popup at the bottom of the screen, "Anna:
+have a look at 00191 · 00:12.40", and a red frame around the whole window. Both stay until you deal with it, because
+someone deep in their own search has to decide to ignore a hint, not miss it. Clicking the popup opens that video in
+the fullscreen keyframe browser, scrolled to the keyframe and with it selected (or at the top with nothing selected,
+when only the video was sent); the × ignores it. Every hint also lands in the inbox next to the team button.
 
 For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (next to Search/Browse) to AVS. 
 AVS is collaborative: in a team everybody is in the team's session, and its 4-letter code is shown so the people next

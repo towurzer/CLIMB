@@ -789,7 +789,7 @@ function App() {
             }
         }
         if (!selected) setSelectedResult(null);
-        handleBrowseAllShots(hint.video_id);
+        handleBrowseAllShots(hint.video_id, selected ? hint.keyframe_id : null);
     }, [handleShotSelect, handleBrowseAllShots]);
 
     const isDuplicate = selectedResult ? alreadySubmitted(selectedResult) : false;

@@ -2167,6 +2167,20 @@ The timecode is what tells them apart. */
     font-size: 13px;
 }
 
+.send-hint-add-note {
+    align-self: flex-start;
+    padding: 4px 0;
+    border: none;
+    background: none;
+    color: #9fbcf5;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.send-hint-add-note span {
+    color: #777;
+}
+
 .send-hint-actions {
     display: flex;
     justify-content: flex-end;
