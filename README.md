@@ -862,7 +862,7 @@ sorting the badges by rank would cheerfully credit the wrong one. Sequence hits 
 
 ##### Turning a signal off
 
-Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and all five start ticked. Untick one and
+Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and the first four start ticked. Untick one and
 it is not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
 embedded.
 
@@ -870,8 +870,9 @@ embedded.
 description, see 1.4.1), so it cannot say *which frame*. Instead of adding frames it re-orders the ones the other
 signals found: a frame gets a bonus for how well its video's description matches, the same weight / (60 + rank) as any
 other signal (`CLIMB_W_INFO`, 1.0 for now, unmeasured). Only V3C has info files, so in an all-datasets search a V3C
-frame can earn a bonus an MVK frame never can. With the dataset dropdown on MVK or LHE it simply does nothing, and the
-tickbox is there for when it gets in the way.
+frame could earn a bonus an MVK frame never can. That is why Info follows the dataset dropdown: picking V3C ticks it,
+picking anything else (including "All datasets", the start) unticks it. After that the tickbox is yours to flip until
+the next dataset switch.
 
 This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
 match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the

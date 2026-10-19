@@ -13,6 +13,14 @@ export const SOURCES = [
 
 export const ALL_SOURCE_KEYS = SOURCES.map((source) => source.key);
 
+// Only V3C has info files. Choosing a dataset ticks Info for V3C and unticks it otherwise; it can
+// still be flipped by hand afterwards.
+export const sourcesForCollection = (collection, sources) => {
+    const rest = sources.filter((key) => key !== "info");
+    if (collection === "V3C") return [...rest, "info"];
+    return rest.length ? rest : ALL_SOURCE_KEYS.filter((key) => key !== "info");
+};
+
 // The collections a search can be limited to. `key` is what videos.collection holds (see
 // /datasets.json); "" means all of them. At VBS the task says which one it is from.
 export const COLLECTIONS = [

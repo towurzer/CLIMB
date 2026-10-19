@@ -1,5 +1,5 @@
 import {useState, useCallback, useEffect, useRef} from "react";
-import {ALL_SOURCE_KEYS} from "./sources";
+import {ALL_SOURCE_KEYS, sourcesForCollection} from "./sources";
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
@@ -48,8 +48,8 @@ function App() {
     const [searchPerPage] = useState(24);
     const [searchHasMore, setSearchHasMore] = useState(false);
     const [searchTemporal, setSearchTemporal] = useState(null); // set only by an `A >> B` query
-    const [sources, setSources] = useState(ALL_SOURCE_KEYS);
     const [collection, setCollection] = useState(""); // "" = every dataset
+    const [sources, setSources] = useState(() => sourcesForCollection("", ALL_SOURCE_KEYS));
     // Each text:/said:/tag:/video: requirement and how many videos met it; null without any.
     const [searchFilters, setSearchFilters] = useState(null);
     const [searchLoadingMore, setSearchLoadingMore] = useState(false);
@@ -297,6 +297,9 @@ function App() {
     const handleChangeCollection = useCallback((next) => {
         setCollection(next);
         collectionRef.current = next;
+        const nextSources = sourcesForCollection(next, sourcesRef.current);
+        setSources(nextSources);
+        sourcesRef.current = nextSources;
 
         if (mode !== "search") return;
         (async () => {
