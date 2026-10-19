@@ -244,7 +244,8 @@
     },
     "/climb/videos": {
       "get": {
-        "summary": "List all videos in the dataset",
+        "summary": "List all videos in the dataset, one entry per recording",
+        "description": "An MVK dive is one entry however many clips it has; every other video is its own recording. `total` counts recordings.",
         "operationId": "listVideos",
         "responses": {
           "200": {
@@ -1058,7 +1059,14 @@
         "type": "object",
         "properties": {
           "video_id": {
+            "type": "string",
+            "description": "The recording's first clip; its scenes endpoint returns the whole recording"
+          },
+          "recording_id": {
             "type": "string"
+          },
+          "num_clips": {
+            "type": "integer"
           },
           "fps": {
             "type": "number",

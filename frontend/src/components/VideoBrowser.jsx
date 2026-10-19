@@ -246,7 +246,10 @@ function VideoBrowser({
         });
     };
 
-    const filtered = filter ? videos.filter((v) => v.video_id.includes(filter)) : videos;
+    // One card per recording; a filter on a clip id finds its dive
+    const filtered = filter
+        ? videos.filter((v) => v.video_id.includes(filter) || (v.recording_id || "").includes(filter))
+        : videos;
     const multiClip = recording.clips.length > 1;
 
     // ── Shot view: showing shots of a selected video ──
@@ -346,11 +349,13 @@ function VideoBrowser({
                     <div key={video.video_id} className={`browse-card ${covered ? "covered" : ""}`} onClick={() => handleVideoClick(video)}>
                         <div className="browse-card-thumb">
                             <img src={video.thumbnail_url} alt={video.video_id} loading="lazy"/>
-                            <span className="browse-card-badge">{video.num_scenes} shots</span>
+                            <span className="browse-card-badge">
+                                {video.num_clips > 1 && `${video.num_clips} clips · `}{video.num_scenes} shots
+                            </span>
                             {covered && <span className="covered-badge" title="Already has a correct hit">covered</span>}
                         </div>
                         <div className="browse-card-label">
-                            <span className="browse-card-id">{video.video_id}</span>
+                            <span className="browse-card-id">{video.recording_id || video.video_id}</span>
                             <span className="browse-card-meta">{formatDuration(video.duration_sec)}</span>
                         </div>
                     </div>

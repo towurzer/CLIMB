@@ -97,6 +97,21 @@ def test_a_clips_filmstrip_is_its_whole_recording(backend, corpus, db):
     assert all(s["video_url"].endswith(f"/videos/{s['video_id']}.mp4") for s in body["scenes"])
 
 
+def test_the_browse_list_has_one_card_per_recording(backend, corpus, db):
+    recording, clips = _recording(db)
+    status, body = get_json(f"{backend}/climb/videos?per_page=100&collection=mvk")
+    assert status == 200, body
+    cards = [v for v in body["videos"] if v["recording_id"] == recording]
+    assert len(cards) == 1
+    card, = cards
+    assert card["video_id"] == clips[0] and card["num_clips"] == len(clips)
+    scenes, duration_ms = _one(db, """
+        SELECT (SELECT count(*) FROM scenes WHERE video_id = ANY(%s)),
+               (SELECT sum(duration_ms) FROM videos WHERE video_id = ANY(%s))""", (clips, clips))
+    assert card["num_scenes"] == scenes
+    assert card["duration_sec"] == int(duration_ms / 1000 + 0.5)  # Math.round
+
+
 def test_the_collection_restriction_holds(worker, corpus, db):
     collections = [r[0] for r in _all(db, """
         SELECT DISTINCT v.collection FROM videos v
@@ -182,7 +197,8 @@ def test_the_backend_passes_the_collection_and_the_filters(backend, corpus, db):
 
 
 def test_the_browse_list_follows_the_dataset(backend, corpus, db):
-    for collection, count in _all(db, "SELECT collection, count(*) FROM videos GROUP BY 1"):
+    for collection, count in _all(db, "SELECT collection, count(DISTINCT recording_id) FROM videos "
+                                      "GROUP BY 1"):
         status, body = get_json(f"{backend}/climb/videos?per_page=100&collection={collection.lower()}")
         assert status == 200, body
         assert body["total"] == count

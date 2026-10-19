@@ -129,33 +129,51 @@ module.exports = {
         }
     },
 
+    /**
+     * One entry per recording: an MVK dive is one card, not one per clip. Every other video is its
+     * own recording. `video_id` is the recording's first clip, which opens the whole recording.
+     */
     getAllVideos: async (page = 1, perPage = 20, collection = null) => {
         const offset = (page - 1) * perPage;
 
-        const countSql = `SELECT COUNT(*)::int AS total FROM videos
+        const countSql = `SELECT COUNT(DISTINCT recording_id)::int AS total FROM videos
                           WHERE ($1::text IS NULL OR collection = $1);`;
-        // One representative keyframe per video: the first keyframe of its first shot.
+        // One representative keyframe per recording: the first keyframe of its first clip's first shot.
         const videosSql = `
-            SELECT v.video_id,
+            WITH recording AS (SELECT recording_id,
+                                      min(video_id)      AS first_clip,
+                                      count(*)::int      AS num_clips,
+                                      sum(duration_ms)   AS duration_ms,
+                                      bool_or(damaged)   AS damaged
+                               FROM videos
+                               WHERE ($3::text IS NULL OR collection = $3)
+                               GROUP BY recording_id
+                               ORDER BY recording_id
+                               LIMIT $1 OFFSET $2)
+            SELECT r.recording_id,
+                   r.first_clip AS video_id,
+                   r.num_clips,
+                   r.duration_ms,
+                   r.damaged,
                    v.fps,
-                   v.duration_ms,
                    v.width,
                    v.height,
-                   v.damaged,
-                   (SELECT COUNT(*)::int FROM scenes s WHERE s.video_id = v.video_id) AS num_scenes,
+                   (SELECT COUNT(*)::int
+                    FROM scenes s
+                             JOIN videos c ON c.video_id = s.video_id
+                    WHERE c.recording_id = r.recording_id) AS num_scenes,
                    cover.shot_index,
                    cover.kf_index
-            FROM videos v
+            FROM recording r
+                     JOIN videos v ON v.video_id = r.first_clip
                      LEFT JOIN LATERAL (
                 SELECT s.shot_index, k.kf_index
                 FROM scenes s
                          JOIN keyframes k ON k.scene_id = s.scene_id
-                WHERE s.video_id = v.video_id
+                WHERE s.video_id = r.first_clip
                 ORDER BY s.shot_index, abs(k.ts_ms - (s.start_ms + s.end_ms) / 2)
                 LIMIT 1) cover ON TRUE
-            WHERE ($3::text IS NULL OR v.collection = $3)
-            ORDER BY v.video_id
-            LIMIT $1 OFFSET $2;
+            ORDER BY r.recording_id;
         `;
 
         const [countRes, videosRes] = await Promise.all([
@@ -165,6 +183,8 @@ module.exports = {
 
         const videos = videosRes.rows.map((row) => ({
             video_id: row.video_id,
+            recording_id: row.recording_id,
+            num_clips: row.num_clips,
             fps: row.fps,
             duration_sec: Math.round((row.duration_ms || 0) / 1000),
             width: row.width,

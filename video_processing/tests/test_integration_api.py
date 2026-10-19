@@ -239,10 +239,15 @@ def test_backend_similar_returns_results(backend, corpus, db):
     assert body["results"]
 
 
-def test_backend_lists_videos_with_covers(backend, corpus):
+def test_backend_lists_videos_with_covers(backend, corpus, db):
     status, body = get_json(f"{backend}/climb/videos?per_page=100")
     assert status == 200
-    assert body["total"] == corpus["videos"]
+    # One entry per recording: an MVK dive is one card
+    with db.cursor() as cur:
+        cur.execute("SELECT count(DISTINCT recording_id) FROM videos;")
+        recordings = cur.fetchone()[0]
+    db.rollback()
+    assert body["total"] == recordings
     assert body["videos"]
     for video in body["videos"]:
         assert video["num_scenes"] >= 0

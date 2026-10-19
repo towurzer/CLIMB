@@ -955,6 +955,7 @@ Interesting to know is:
 
 ##### MVK dives in the preview
 
+Browse lists a dive as one card (`Ambon_Apr2012 · 3 clips · 21 shots`); the filter still finds it by a clip's id.
 The filmstrip under the player and "Browse in Fullscreen" show the whole dive, not just the clip you clicked: every
 clip in order, each one starting at an orange mark with its number (`0002`), and the fullscreen view says how far into
 the dive each clip starts. Clicking a keyframe in another clip selects *that* clip, which is what gets submitted, since
