@@ -1,4 +1,4 @@
-import {useState, useEffect, useCallback} from "react";
+import {useState, useEffect, useCallback, useRef} from "react";
 import {sceneKey} from "../sceneKey";
 import {formatDuration, formatTimecode} from "../timecode";
 import {COLLECTIONS} from "../sources";
@@ -26,6 +26,9 @@ function useSentinel(onVisible, enabled) {
 
 const EMPTY_SET = new Set();
 
+const containsKeyframe = (scenes, keyframeId) =>
+    scenes.some((scene) => (scene.keyframes || []).some((k) => k.keyframe_id === keyframeId));
+
 function VideoBrowser({
     apiUrl,
     onSelectShot,
@@ -36,6 +39,8 @@ function VideoBrowser({
     coveredVideos = EMPTY_SET,
     collection = "",
     onChangeCollection = () => {},
+    selectedKeyframeId = null, // the keyframe selected in the side panel, outlined in the grid
+    focusKeyframeId = null, // the keyframe a deep link opens on
 }) {
     const [videos, setVideos] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -51,6 +56,8 @@ function VideoBrowser({
     const [shotsLoadingMore, setShotsLoadingMore] = useState(false);
     // The shot view shows the selected video's whole recording: every clip of an MVK dive.
     const [recording, setRecording] = useState({recordingId: null, clips: []});
+    const [scrollTarget, setScrollTarget] = useState(null);
+    const grid = useRef(null);
     const [filter, setFilter] = useState("");
     // True when the shot view was opened by a deep link (Browse in Fullscreen) rather than by
     // clicking a card in the grid. The back arrow follows the way in, so it leads back out.
@@ -102,8 +109,26 @@ function VideoBrowser({
         !loading && !loadingMore && (total === null || videos.length < total)
     );
 
-    // Fetch shots (page 1) when a video is selected
-    const handleVideoClick = (video, viaDeepLink = false) => {
+    // The first page of a video's scenes, and further pages until `focus` (a keyframe id) is among
+    // them, so the shot view can open on the selected keyframe however deep into the video it is.
+    const fetchShotsUntil = async (videoId, focus) => {
+        let page = 0;
+        let scenes = [];
+        let data = {};
+        do {
+            page += 1;
+            const res = await fetch(`${apiUrl}/climb/videos/${encodeURIComponent(videoId)}/scenes?page=${page}&per_page=${SHOTS_PER_PAGE}`);
+            data = await res.json();
+            scenes = scenes.concat(data.scenes || []);
+        } while (focus != null && !containsKeyframe(scenes, focus) && (data.scenes || []).length
+                 && scenes.length < (data.total ?? 0));
+        return {data, scenes, page};
+    };
+
+    // Open a video's shot view. A deep link (Browse in Fullscreen, a hint) may name a keyframe to
+    // open on: it is scrolled to the middle once the grid is there. Returns a cancel function.
+    const openShots = (video, viaDeepLink, focus = null) => {
+        let cancelled = false;
         setSelectedVideo(video);
         setOpenedByDeepLink(viaDeepLink);
         setRecording({recordingId: null, clips: []});
@@ -111,21 +136,37 @@ function VideoBrowser({
         setShotsPage(1);
         setShotsTotal(null);
         setShotsLoading(true);
+        setScrollTarget(null);
 
-        fetch(`${apiUrl}/climb/videos/${video.video_id}/scenes?page=1&per_page=${SHOTS_PER_PAGE}`)
-            .then((res) => res.json())
-            .then((data) => {
-                setShots(data.scenes || []);
+        fetchShotsUntil(video.video_id, focus)
+            .then(({data, scenes, page}) => {
+                if (cancelled) return;
+                setShots(scenes);
+                setShotsPage(page);
                 setShotsTotal(data.total ?? null);
                 setRecording({recordingId: data.recording_id, clips: data.clips || []});
-                setSelectedVideo((prev) => prev ? {...prev, video_url: data.video_url ?? prev.video_url} : prev);
-                setShotsLoading(false);
+                setSelectedVideo((prev) => viaDeepLink ? {
+                    ...prev,
+                    fps: data.fps || scenes[0]?.fps || 25,
+                    duration_sec: data.duration_sec || 0,
+                    video_url: data.video_url,
+                } : {...prev, video_url: data.video_url ?? prev.video_url});
+                setScrollTarget(focus);
             })
             .catch((err) => {
-                console.error("Failed to load shots:", err);
+                if (!cancelled) console.error("Failed to load shots:", err);
+            })
+            .finally(() => {
+                if (cancelled) return;
                 setShotsLoading(false);
+                if (viaDeepLink) onOpenVideoHandled?.();
             });
+        return () => {
+            cancelled = true;
+        };
     };
+
+    const handleVideoClick = (video) => openShots(video, false);
 
     const loadMoreShots = useCallback(() => {
         if (!selectedVideo || shotsLoadingMore || shotsLoading) return;
@@ -153,55 +194,20 @@ function VideoBrowser({
         !shotsLoading && !shotsLoadingMore && (shotsTotal === null || shots.length < shotsTotal)
     );
 
-    // Jump straight to a video's shot grid (e.g. requested from the sidebar ShotBrowser)
+    // Jump straight to a video's shot grid (Browse in Fullscreen), on the selected keyframe if any
     useEffect(() => {
         if (!openVideoId) return;
-
         const existing = videos.find((v) => v.video_id === openVideoId);
-        if (existing) {
-            handleVideoClick(existing, true);
-            onOpenVideoHandled?.();
-            return;
-        }
-
-        let cancelled = false;
-        setSelectedVideo({video_id: openVideoId, fps: 25, duration_sec: 0});
-        setOpenedByDeepLink(true);
-        setRecording({recordingId: null, clips: []});
-        setShots([]);
-        setShotsPage(1);
-        setShotsTotal(null);
-        setShotsLoading(true);
-
-        fetch(`${apiUrl}/climb/videos/${openVideoId}/scenes?page=1&per_page=${SHOTS_PER_PAGE}`)
-            .then((res) => res.json())
-            .then((data) => {
-                if (cancelled) return;
-                const fetchedShots = data.scenes || [];
-                setShots(fetchedShots);
-                setShotsTotal(data.total ?? null);
-                setRecording({recordingId: data.recording_id, clips: data.clips || []});
-                setSelectedVideo({
-                    video_id: openVideoId,
-                    fps: data.fps || fetchedShots[0]?.fps || 25,
-                    duration_sec: data.duration_sec || 0,
-                    video_url: data.video_url,
-                });
-                setShotsLoading(false);
-                onOpenVideoHandled?.();
-            })
-            .catch((err) => {
-                if (cancelled) return;
-                console.error("Failed to open requested video:", err);
-                setShotsLoading(false);
-                onOpenVideoHandled?.();
-            });
-
-        return () => {
-            cancelled = true;
-        };
+        return openShots(existing || {video_id: openVideoId, fps: 25, duration_sec: 0}, true, focusKeyframeId);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [openVideoId, apiUrl]);
+
+    // Once the grid holds the keyframe to open on, put it in the middle of the view
+    useEffect(() => {
+        if (scrollTarget == null || shotsLoading) return;
+        grid.current?.querySelector(`[data-keyframe-id="${scrollTarget}"]`)?.scrollIntoView({block: "center"});
+        setScrollTarget(null);
+    }, [scrollTarget, shotsLoading, shots]);
 
     // Back retraces the way in: out to the results we were sent from if this view was deep-linked,
     // to the video grid if the user got here by clicking a card.
@@ -275,7 +281,7 @@ function VideoBrowser({
                 ) : (
                     <>
                         {/* Every keyframe, not one per scene.*/}
-                        <div className="browse-grid">
+                        <div className="browse-grid" ref={grid}>
                             {shots.flatMap((shot, s) => {
                                 const submitted = submittedScenes.has(sceneKey(shot.scene_id));
                                 const covered = coveredVideos.has(shot.video_id || selectedVideo.video_id);
@@ -290,7 +296,8 @@ function VideoBrowser({
                                 return [...divider, ...(shot.keyframes || []).map((keyframe) => (
                                     <div
                                         key={keyframe.keyframe_id}
-                                        className={`browse-card ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
+                                        data-keyframe-id={keyframe.keyframe_id}
+                                        className={`browse-card ${keyframe.keyframe_id === selectedKeyframeId ? "selected" : ""} ${submitted ? "submitted" : ""} ${covered ? "covered" : ""}`}
                                         onClick={() => handleShotClick(shot, keyframe)}
                                     >
                                         <div className="browse-card-thumb">
@@ -298,6 +305,9 @@ function VideoBrowser({
                                                  alt={`Scene ${shot.scene_id} keyframe ${keyframe.kf_index}`}
                                                  loading="lazy"/>
                                             <span className="browse-card-badge">#{shot.shot_index}</span>
+                                            {keyframe.keyframe_id === selectedKeyframeId && (
+                                                <span className="browse-card-selected">Selected</span>
+                                            )}
                                             <span className="browse-card-time">
                                                 {formatTimecode(keyframe.keyframe_time_ms)}
                                             </span>
