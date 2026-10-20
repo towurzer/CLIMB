@@ -453,7 +453,7 @@ def test_two_stage_sequence_returns_chains(worker, corpus):
         assert len(chain["temporal_partners"]) == 1
         assert len(chain["temporal_gaps_ms"]) == 1
         # Same recording, not necessarily the same clip: an MVK dive is linked on its own clock
-        # across its 10-40 s clips. Everywhere else the recording is the video.
+        # across its clips. Everywhere else the recording is the video.
         assert chain["temporal_partners"][0]["recording_id"] == chain["recording_id"]
 
 

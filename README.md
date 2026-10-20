@@ -948,8 +948,9 @@ stage: `(d120)` and `(120)` are both 120 seconds, `(d500ms)` is half a second, a
 The splitting is quote-aware, so `text:"a >> b"` stays one phrase rather than becoming a sequence. An empty stage is
 not a stage either , `A >>` is just a search for A, not a sequence missing its second half.
 
-MVK recordings count as one video here too: an MVK dive is cut into 10-40 second clips, so `a turtle >> a diver` links
-across clip boundaries on the recording's own clock, and the result still points at the right clip for DRES.
+MVK recordings count as one video here too: an MVK dive is cut into clips (median 27 seconds, a few up to 5
+minutes), so `a turtle >> a diver` links across clip boundaries on the recording's own clock, and the result still
+points at the right clip for DRES.
 
 Interesting to know is: 
 

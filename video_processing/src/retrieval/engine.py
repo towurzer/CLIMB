@@ -98,7 +98,7 @@ ENRICH = """
 # enriching a whole stage is work thrown away: linking reads video_id, ts_ms, scene_id and score,
 # never the filmstrip.
 #
-# Linked per recording, on the recording's clock: an MVK dive is one recording cut into 10-40 s
+# Linked per recording, on the recording's clock: an MVK dive is one recording cut into short
 # clips, and `A >> B` should not stop at a clip boundary. For everything else the recording is the
 # video and the offset is 0.
 LINK_ROWS = """
