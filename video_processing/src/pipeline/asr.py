@@ -128,6 +128,20 @@ def flag_hallucinations(segments) -> list:
     return flags
 
 
+def load_model(dev: str):
+    """faster-whisper, loaded lazily. int8 on CPU, float16 on GPU."""
+    conf = Config()
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as e:
+        raise ImportError(
+            "faster-whisper is not installed: pip install faster-whisper"
+        ) from e
+    compute_type = "float16" if dev == "cuda" else "int8"
+    return WhisperModel(conf.ASR_MODEL, device=("cuda" if dev == "cuda" else "cpu"),
+                        compute_type=compute_type)
+
+
 def transcribe(model, audio_path):
     """Returns (segments, language), the segments as Segment."""
     conf = Config()

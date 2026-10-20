@@ -347,7 +347,38 @@ this is just the order.
    CLIMB_MEDIA_DIR=/big/disk/climb/media           # keyframes we keep, ~33 MB per hour of video
    CLIMB_WORK_DIR=/big/disk/climb/work             # scratch, a few GB at a time
    ```
-4. **Check, then run.** From `video_processing/src`:
+4. **Trial run first, on a throwaway database.** Some things only show up on the server's GPU: bf16, Paddle and torch
+   sharing CUDA libraries in one venv, the caption and ASR models at their full size. Finding out after a day of GPU
+   time is the expensive way, so put two videos per collection through every stage first. From
+   `video_processing/src`:
+
+   ```bash
+   podman exec climb createdb -U postgres climb_trial
+   (
+     # In a subshell, so none of this leaks into the real run.
+     export POSTGRES_DB_NAME=climb_trial CLIMB_MEDIA_DIR=/big/disk/climb-trial/media \
+            CLIMB_WORK_DIR=/big/disk/climb-trial/work
+     python main.py migrate && python main.py check
+     for c in V3C MVK LHE; do
+       python main.py run --collection $c --limit 2 \
+         --stages fetch,ingest-shots,decode,select,purge,embed,ocr,caption,asr,embed-text
+     done
+   )
+   ```
+
+   Every stage logs `Running on cuda (...)`; `cpu` there means the GPU was not found. Then look at what came out:
+
+   ```bash
+   podman exec climb psql -U postgres climb_trial -c "SELECT caption FROM keyframe_caption LIMIT 10;"
+   podman exec climb psql -U postgres climb_trial -c "SELECT ocr_text FROM keyframe_text WHERE ocr_text <> '' LIMIT 10;"
+   podman exec climb psql -U postgres climb_trial -c "SELECT text, hallucination FROM transcript_segment WHERE text <> '' LIMIT 20;"
+   ```
+
+   Captions should describe the frame, OCR should be readable text, transcripts real speech, with
+   `hallucination = t` only on the invented lines (MVK is filmed underwater, so all of its lines are). Empty
+   captions, garbled or empty OCR, or every line flagged mean something is off. When it all looks right, throw the
+   trial away: `podman exec climb dropdb -U postgres climb_trial` and `rm -rf /big/disk/climb-trial`.
+5. **Check, then run.** From `video_processing/src`:
 
    ```bash
    python main.py migrate
@@ -362,10 +393,10 @@ this is just the order.
    ```
 
    Every stage resumes where it stopped, so a crash or a Ctrl-C costs nothing but the batch in flight.
-5. **More than one GPU.** One process uses one GPU. Start one per GPU, each with its own slice:
+6. **More than one GPU.** One process uses one GPU. Start one per GPU, each with its own slice:
    `CUDA_VISIBLE_DEVICES=0 python main.py embed --shard 0 --shards 2` and
    `CUDA_VISIBLE_DEVICES=1 python main.py embed --shard 1 --shards 2`, same for the other model stages.
-6. **Hand back** the media directory and a dump of the database:
+7. **Hand back** the media directory and a dump of the database:
    `podman exec climb pg_dump -U postgres -Fc <POSTGRES_DB_NAME> > climb.dump`.
 
 #### 1.1 Installation
@@ -977,7 +1008,8 @@ When the requirements leave only a handful of videos (300 or fewer, `CLIMB_EXACT
 caption and speech searches rank by exact distance over just those videos instead of going through the index, because
 the index answers for the whole collection and `video:00191 a red car` would otherwise keep whichever of the global top
 1000 happened to be in 00191, which is usually none of them. A query that is *only* requirements, say `video:00191` or
-`tag:bmx`, lists the scenes of what is left in order.
+`tag:bmx`, lists the scenes of what is left in order, up to the 500 results a search fetches (`SEARCH_RESULT_DEPTH`).
+That is the first 500 scenes of a very long video (00193 has 840); Browse shows all of them.
 
 The dataset dropdown next to the sources does what it says: search only V3C, MVK or LHE. At VBS the task tells you which
 collection it is from, and there is no point in letting the other two put look-alikes on the page. Browse has the same

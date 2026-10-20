@@ -521,8 +521,10 @@ class SearchEngine:
                  for p in parsed.asr_phrases], depth))
 
         if not any(lists.values()) and scope.only is not None and not parsed.has_free_text:
-            # Nothing to rank by, only requirements (`video:00191`, `tag:bmx`): list what is left.
-            run("listing", lambda: self._list_scenes(scope, depth))
+            # Nothing to rank by, only requirements (`video:00191`, `tag:bmx`): list what is left,
+            # up to as many results as were asked for. The listing is the whole answer, so the
+            # retriever depth (200) would cut a long video off: 00193 has 840 scenes.
+            run("listing", lambda: self._list_scenes(scope, limit))
 
         # Video ids, not keyframes, so it joins after the frame-level fusion rather than in it.
         videos = lists.pop("info", None)
