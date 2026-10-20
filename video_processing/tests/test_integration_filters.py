@@ -44,13 +44,21 @@ def test_video_restricts_every_result_to_that_video(worker, corpus, db):
 
 
 def test_video_alone_lists_the_scenes_in_order(worker, corpus, db):
+    """The longest video, asked for all of its scenes: more than the retriever depth (200)."""
     video_id, scenes = _one(db, "SELECT video_id, count(*) FROM scenes GROUP BY video_id "
                                 "ORDER BY 2 DESC LIMIT 1")
-    body = _search(worker, f"video:{video_id}", top_k=500)
+    body = _search(worker, f"video:{video_id}", top_k=scenes)
     assert _videos_of(body) == {video_id}
     assert len(body["results"]) == scenes
     starts = [r["start_ms"] for r in body["results"]]
     assert starts == sorted(starts)
+
+
+def test_video_alone_stops_at_the_results_asked_for(worker, corpus, db):
+    video_id, scenes = _one(db, "SELECT video_id, count(*) FROM scenes GROUP BY video_id "
+                                "ORDER BY 2 DESC LIMIT 1")
+    body = _search(worker, f"video:{video_id}", top_k=min(scenes, 5))
+    assert len(body["results"]) == min(scenes, 5)
 
 
 def test_an_unknown_video_is_an_empty_answer_not_an_error(worker, corpus):

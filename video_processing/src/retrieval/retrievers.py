@@ -427,6 +427,47 @@ INFO_SEARCH = """
 """.format(scope=SCOPE_SQL.format(video="e.video_id"))
 
 
+# Videos whose tags are words of the query, rarest tag first. A key is matched exactly through
+# the GIN index; the few with a '?' are tried as LIKE patterns. Each matched tag counts
+# ln(videos / videos with that tag), so "flatland" outweighs "travel", and a tag every video has
+# counts nothing. Unscoped where the tags are counted, since how rare a tag is does not depend on
+# what this search is limited to.
+TAG_SEARCH = """
+    WITH terms AS (SELECT DISTINCT tag_key(term) AS term
+                   FROM unnest(%(terms)s::text[]) AS term),
+         hits AS (SELECT i.video_id, key
+                  FROM video_info i, unnest(i.tag_keys) AS key
+                  WHERE i.tag_keys && (SELECT array_agg(term) FROM terms)
+                    AND key IN (SELECT term FROM terms)
+                  UNION
+                  SELECT i.video_id, pattern
+                  FROM video_info i, unnest(i.tag_wildcards) AS pattern
+                  WHERE i.tag_wildcards <> '{{}}'
+                    AND EXISTS (SELECT 1 FROM terms WHERE term LIKE pattern)),
+         rarity AS (SELECT key, ln((SELECT count(*) FROM video_info)::float / count(*)) AS weight
+                    FROM hits
+                    GROUP BY key)
+    SELECT h.video_id
+    FROM hits h
+             JOIN rarity r USING (key)
+             JOIN videos v ON v.video_id = h.video_id
+    WHERE {scope}
+    GROUP BY h.video_id
+    HAVING sum(r.weight) > 0
+    ORDER BY sum(r.weight) DESC, h.video_id
+    LIMIT %(limit)s;
+""".format(scope=SCOPE_SQL.format(video="h.video_id"))
+
+
+def tags(conn, terms, scope, limit) -> list:
+    """Videos tagged with words of the query, best first; see TAG_SEARCH. Video ids, like info."""
+    if not terms:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(TAG_SEARCH, {"terms": list(terms), "limit": limit, **scope.params})
+        return [row[0] for row in cur.fetchall()]
+
+
 def info(conn, query_vector, model_id, dims, scope, limit) -> list:
     """Videos whose title, tags and description match the query, best first. Video ids, not
     keyframes: see fusion.apply_video_prior for how they reach the ranking."""
@@ -463,19 +504,19 @@ SPEECH_PHRASE_VIDEOS = """
       AND {scope};
 """.format(scope=SEGMENT_SCOPE)
 
-# Exact tag, or a stored tag with `?` where the source lost a character: `vid?o` is how the info
-# files spell vidéo, so the stored tag is used as a LIKE pattern with `?` as the one-character
-# wildcard. Tags are lowercased on both sides.
+# The tag, compared the way the plain query words are (migration 012): by key, so `tag:fisheye`,
+# `tag:"fish eye"` and `tag:fish-eye` are the same requirement and accents do not matter. A stored
+# tag with `?` where the source lost a character (`vid?o` is how the info files spell vidéo) is
+# tried as a pattern, but only if enough of it survived: a tag that arrived as `?????` used to let
+# its video through for every five-letter tag asked for.
 TAG_VIDEOS = """
     SELECT i.video_id
     FROM video_info i
              JOIN videos v ON v.video_id = i.video_id
-    WHERE (i.tags @> ARRAY [%(tag)s]
-        OR EXISTS (SELECT 1
-                   FROM unnest(i.tags) AS stored(tag)
-                   WHERE stored.tag LIKE '%%?%%'
-                     AND %(tag)s LIKE replace(replace(replace(replace(stored.tag, '\\', '\\\\'),
-                                                                 '%%', '\\%%'), '_', '\\_'), '?', '_')))
+    WHERE (i.tag_keys @> ARRAY [tag_key(%(tag)s)]
+        OR (i.tag_wildcards <> '{{}}'
+            AND EXISTS (SELECT 1 FROM unnest(i.tag_wildcards) AS pattern
+                        WHERE tag_key(%(tag)s) LIKE pattern)))
       AND {scope};
 """.format(scope=SCOPE_SQL.format(video="i.video_id"))
 

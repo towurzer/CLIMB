@@ -137,7 +137,7 @@ def encode(texts, tokenizer, model, dev):
 
 
 def to_pgvector(values) -> str:
-    return "[" + ",".join(f"{v:.6f}" for v in values) + "]"
+    return "[" + ",".join(f"{v:.6f}" for v in values.tolist()) + "]"
 
 
 def _run(conn, select_sql, insert_sql, model_id, params, tokenizer, model, dev, batch_size,

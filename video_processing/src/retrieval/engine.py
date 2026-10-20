@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import custom_logger
 from config import Config
-from pipeline import device
+from pipeline import device, visual_models
 from pipeline.embed import vector_counts
 from retrieval import fusion, query_parser, retrievers, temporal
 from retrieval.retrievers import Scope
@@ -24,8 +24,12 @@ SOURCE_RETRIEVERS = {
     "ocr": ("ocr",),
     "asr": ("transcript",),
     "caption": ("caption",),
-    "info": ("info",),
+    "info": ("info", "tags"),
 }
+
+# Signals that rank videos, not keyframes. They join after the frame-level fusion
+# (fusion.apply_video_prior), re-ordering what the others found.
+VIDEO_SIGNALS = ("info", "tags")
 
 
 def _allowed_retrievers(sources):
@@ -185,7 +189,8 @@ class SearchEngine:
         self.device = device.pick_device()
         self.visual_model = None
         self.text_model = None
-        # collection -> loaded visual model spec, for collections SigLIP2 does not serve well.
+        # collection -> loaded spec of the domain model that runs next to SigLIP2 there
+        # (CLIMB_COLLECTION_MODELS): BioCLIP for MVK, PeskaVLP for LHE.
         self.collection_models = {}
         # (tower, model_id, text) -> pgvector literal, most recently used last. See
         # QUERY_EMBED_CACHE_SIZE: query embedding dominates a search, and refining a sequence
@@ -205,34 +210,24 @@ class SearchEngine:
 
 
     def _load_visual(self, model_name):
-        """Loads a visual model's text tower, or None when it is not registered."""
-        from transformers import AutoModel, AutoProcessor
-
+        """Loads a visual model's text side, or None when it is not registered."""
         registered = self._resolve(model_name)
         if not registered:
             return None
         model_id, name, dims = registered
-        processor = AutoProcessor.from_pretrained(name)
-        full = AutoModel.from_pretrained(name, dtype=device.pick_dtype(self.device))
-        text_tower = full.text_model.to(self.device).eval()
-        # The projection head lives outside text_model on SigLIP, so keep whichever exists.
-        head = getattr(full, "text_projection", None)
-        del full
-        self.logger.info(f"Loaded {name} text tower ({dims}d) on {self.device}")
-        return {"model_id": model_id, "name": name, "dims": dims,
-                "processor": processor, "tower": text_tower, "head": head}
+        encode = visual_models.load_text_side(name, self.device)
+        self.logger.info(f"Loaded {name} text side ({dims}d) on {self.device}")
+        return {"model_id": model_id, "name": name, "dims": dims, "encode": encode,
+                "signal": visual_models.signal_name(name)}
 
-    def visual_model_for(self, collection):
+    def domain_model_for(self, collection):
         """
-        Which visual model answers for a collection.
+        The model that searches a collection next to SigLIP2, or None.
 
-        Vector spaces are not comparable, so a query must be embedded by the same model that
-        embedded the frames it is being compared against. Scoping a search to a collection is
-        therefore also choosing a model.
+        Only for a search limited to that collection: its vectors exist for that collection's
+        keyframes alone, so in an all-datasets search it would add hits from one collection only.
         """
-        if collection:
-            return self.collection_models.get(collection.upper(), self.visual_model)
-        return self.visual_model
+        return self.collection_models.get(collection.upper()) if collection else None
 
     def _load_models(self):
         from transformers import AutoModel, AutoTokenizer
@@ -245,21 +240,21 @@ class SearchEngine:
             self.logger.warning(warning)
         self.visual_model = self._load_visual(visual)
 
-        # Domain models, one per collection that needs one. Only loaded when the model is both
-        # configured and actually registered with embeddings -- otherwise a typo in the env var
-        # would silently route a collection at a model that has no vectors, and every search of it
-        # would come back empty rather than merely mediocre.
+        # Domain models, one per collection that has one, searching next to SigLIP2. Only loaded
+        # when the model is both configured and has vectors: a typo in the env var, or a model not
+        # embedded yet, must leave the collection on SigLIP2 alone rather than add a signal that
+        # finds nothing.
         for collection, model_name in self.conf.collection_models().items():
             if model_name == visual:
                 continue
             spec = self._load_visual(model_name) if counts.get(model_name) else None
             if spec:
                 self.collection_models[collection.upper()] = spec
-                self.logger.info(f"{collection}: routed to {model_name}")
+                self.logger.info(f"{collection}: {model_name} searches next to {visual}")
             else:
                 self.logger.warning(
                     f"{collection}: '{model_name}' is not registered in embedding_model or has "
-                    f"no keyframe vectors, falling back to {visual}")
+                    f"no keyframe vectors, searching {collection} with {visual} alone")
 
         text = self._resolve(self.conf.TEXT_MODEL)
         if text:
@@ -311,20 +306,7 @@ class SearchEngine:
             self._embed_cache.popitem(last=False)
 
     def _run_visual(self, texts, spec) -> list:
-        import torch
-
-        inputs = spec["processor"](text=list(texts), return_tensors="pt", padding="max_length",
-                                   truncation=True).to(self.device)
-        # The processor hands the vision tower's keys over too; the text tower rejects them.
-        inputs = {k: v for k, v in inputs.items() if k in ("input_ids", "attention_mask")}
-        with torch.no_grad():
-            output = spec["tower"](**inputs)
-            # transformers 5.x returns an output object here, not a tensor.
-            vectors = output.pooler_output if hasattr(output, "pooler_output") else output[1]
-            if spec["head"] is not None:
-                vectors = spec["head"](vectors)
-            vectors = vectors / vectors.norm(p=2, dim=-1, keepdim=True)
-        return [_to_pgvector(v) for v in vectors.float().cpu().numpy()]
+        return [_to_pgvector(v) for v in spec["encode"](texts)]
 
     def _run_text(self, texts, spec) -> list:
         import torch
@@ -364,7 +346,10 @@ class SearchEngine:
             query, conf.TEMPORAL_DEFAULT_DELTA_MS, conf.TEMPORAL_MAX_DELTA_MS,
             conf.TEMPORAL_MAX_STAGES)
         top_k = top_k or conf.SEARCH_TOP_K
-        weights = {**conf.rrf_weights(), **(weights or {})}
+        domain = self.domain_model_for(normalize_collection(collection))
+        weights = {**conf.rrf_weights(),
+                   **({domain["signal"]: conf.RRF_WEIGHT_DOMAIN} if domain else {}),
+                   **(weights or {})}
         scope, filters = self._base_scope(parsed, exclude, normalize_collection(collection))
 
         allowed = _allowed_retrievers(sources)
@@ -479,7 +464,7 @@ class SearchEngine:
         # used to, back when results collapsed to one row per scene and the first retriever to
         # reach a scene decided its frame. They do not collapse any more -- the scene-level signals
         # expand across the shot instead, see retrievers._expand_to_keyframes().
-        visual_spec = self.visual_model_for(collection)
+        visual_spec, domain = self.visual_model, self.domain_model_for(collection)
         if parsed.has_free_text and visual_spec:
             if enabled("visual"):
                 vector = embed("visual",
@@ -487,6 +472,13 @@ class SearchEngine:
                 run("visual", lambda: retrievers.visual(
                     self.conn, vector, visual_spec["model_id"], visual_spec["dims"],
                     scope, depth))
+            # The collection's own model, searching the same keyframes in its own space; its
+            # ranking fuses with SigLIP2's like any other signal. Unticking Visual turns both off.
+            if domain and enabled("visual"):
+                domain_vector = embed(domain["signal"],
+                                      lambda: self.embed_query_visual(parsed.free_text, domain))
+                run(domain["signal"], lambda: retrievers.visual(
+                    self.conn, domain_vector, domain["model_id"], domain["dims"], scope, depth))
 
             tokens = query_parser.distinctive_tokens(parsed.free_text)
             if tokens and enabled("ocr"):
@@ -509,6 +501,11 @@ class SearchEngine:
                         self.conn, text_vector, self.text_model["model_id"],
                         self.text_model["dims"], scope, self.conf.INFO_DEPTH))
 
+        # No embedding and no visual model needed: the query's own words against the tags.
+        if parsed.has_free_text and enabled("tags"):
+            run("tags", lambda: retrievers.tags(self.conn, query_parser.tag_terms(parsed.free_text),
+                                                scope, self.conf.INFO_DEPTH))
+
         # Several phrases of one kind share one list, interleaved, so each keeps the phrase
         # weight and the UI's signal names stay what they were.
         if parsed.ocr_phrases:
@@ -521,19 +518,26 @@ class SearchEngine:
                  for p in parsed.asr_phrases], depth))
 
         if not any(lists.values()) and scope.only is not None and not parsed.has_free_text:
-            # Nothing to rank by, only requirements (`video:00191`, `tag:bmx`): list what is left.
-            run("listing", lambda: self._list_scenes(scope, depth))
+            # Nothing to rank by, only requirements (`video:00191`, `tag:bmx`): list what is left,
+            # up to as many results as were asked for. The listing is the whole answer, so the
+            # retriever depth (200) would cut a long video off: 00193 has 840 scenes.
+            run("listing", lambda: self._list_scenes(scope, limit))
 
-        # Video ids, not keyframes, so it joins after the frame-level fusion rather than in it.
-        videos = lists.pop("info", None)
-        fused = fusion.fuse(lists, weights, limit=None if videos else limit)
-        if videos:
-            started = time.monotonic()
-            fused = fusion.apply_video_prior(fused, self._video_of(fused), videos,
-                                             weights.get("info", 0.0), limit=limit)
-            timings["info"] = round(timings.get("info", 0.0)
-                                    + (time.monotonic() - started) * 1000, 1)
-            lists["info"] = videos
+        # Video ids, not keyframes, so they join after the frame-level fusion rather than in it,
+        # all of them before the cut to `limit`.
+        video_lists = {name: videos for name in VIDEO_SIGNALS
+                       if (videos := lists.pop(name, None))}
+        fused = fusion.fuse(lists, weights, limit=None if video_lists else limit)
+        if video_lists:
+            video_of = self._video_of(fused)
+            for name, videos in video_lists.items():
+                started = time.monotonic()
+                fused = fusion.apply_video_prior(fused, video_of, videos, weights.get(name, 0.0),
+                                                 name=name)
+                timings[name] = round(timings.get(name, 0.0)
+                                      + (time.monotonic() - started) * 1000, 1)
+                lists[name] = videos
+            fused = fused[:limit]
         return fused, timings, lists, filters
 
     def _video_of(self, fused) -> dict:
@@ -560,7 +564,7 @@ class SearchEngine:
         def enabled(name):
             return allowed is None or name in allowed
 
-        visual_spec = self.visual_model_for(collection)
+        visual_spec, domain = self.visual_model, self.domain_model_for(collection)
         vectors = [{} for _ in stages]
         # Mirrors the guard in _retrieve: without a visual model no free-text signal runs at all.
         wanted = [i for i, stage in enumerate(stages) if stage.has_free_text] if visual_spec else []
@@ -571,6 +575,9 @@ class SearchEngine:
         if enabled("visual"):
             for index, vector in zip(wanted, self.embed_query_visual_batch(texts, visual_spec)):
                 vectors[index]["visual"] = vector
+            if domain:
+                for index, vector in zip(wanted, self.embed_query_visual_batch(texts, domain)):
+                    vectors[index][domain["signal"]] = vector
         if self.text_model and (enabled("caption") or enabled("transcript") or enabled("info")):
             for index, vector in zip(wanted, self.embed_query_text_batch(texts)):
                 vectors[index]["text"] = vector
@@ -689,7 +696,7 @@ class SearchEngine:
         top_k = top_k or self.conf.SEARCH_TOP_K
         collection = normalize_collection(collection)
         started = time.monotonic()
-        spec = self.visual_model_for(collection)
+        spec = self.visual_model
         scope = Scope(exclude=self._resolve_videos(exclude or []), collection=collection or None)
         pairs = retrievers.similar_to_keyframe(
             self.conn, keyframe_id, spec["model_id"], spec["dims"], scope, top_k)

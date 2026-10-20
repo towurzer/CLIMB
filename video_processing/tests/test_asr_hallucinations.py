@@ -87,3 +87,19 @@ def test_segments_from_before_the_migration_are_judged_by_text_and_timing():
 def test_flags_come_back_in_the_order_given():
     talk = [seg(8, "They said yes."), seg(60, "You"), seg(0, "So what did they say?")]
     assert flag_hallucinations(talk) == [False, True, False]
+
+
+def test_the_whisper_model_loads(monkeypatch):
+    """Lost once in an edit; only a full ASR run noticed, since nothing else loads the model."""
+    import sys
+    import types
+
+    built = {}
+
+    class FakeWhisper:
+        def __init__(self, name, device, compute_type):
+            built.update(name=name, device=device, compute_type=compute_type)
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeWhisper))
+    asr.load_model("cpu")
+    assert built == {"name": Config().ASR_MODEL, "device": "cpu", "compute_type": "int8"}

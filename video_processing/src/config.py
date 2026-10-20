@@ -21,6 +21,10 @@ class Config:
     KIS_CPU_MODEL_NAME: str = (os.getenv("CLIMB_EMBED_MODEL_CPU")
                                or "google/siglip2-large-patch16-384")
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("CLIMB_EMBED_BATCH") or 16)
+    # Threads decoding the next keyframes while the model works on this batch. On the laptop,
+    # decoding ran at 522 keyframes/s with one thread, 1137 with two, 1310 with four and 1049
+    # with eight.
+    EMBED_LOADERS: int = int(os.getenv("CLIMB_EMBED_LOADERS") or 4)
     SEARCH_TOP_K: int = 48
 
     # --- Decode stage ---
@@ -137,7 +141,10 @@ class Config:
     # prior: it re-orders keyframes the other signals found, never adds any. 1.0 like the others
     # until WP9 can measure it.
     RRF_WEIGHT_INFO: float = float(os.getenv("CLIMB_W_INFO") or 1.0)
-    # How many videos the info retriever ranks.
+    # Query words that are tags of a video (retrievers.tags). Video-level like info, re-ordering
+    # what the frame-level signals found; 1.0 until WP9 can measure it.
+    RRF_WEIGHT_TAGS: float = float(os.getenv("CLIMB_W_TAGS") or 1.0)
+    # How many videos the info and tags retrievers rank.
     INFO_DEPTH: int = int(os.getenv("CLIMB_INFO_DEPTH") or 500)
 
     # --- Temporal queries (see retrieval/temporal.py) ---
@@ -158,7 +165,16 @@ class Config:
     QUERY_EMBED_CACHE_SIZE: int = int(os.getenv("CLIMB_QUERY_EMBED_CACHE") or 512)
 
     # --- Per-collection visual models ---
-    COLLECTION_MODELS_RAW: str = os.getenv("CLIMB_COLLECTION_MODELS") or ""
+    # A second visual model for one collection, searching next to SigLIP2 when the dataset
+    # dropdown names that collection: BioCLIP 2.5 (trained on biology images) for the dives,
+    # PeskaVLP (surgical video lectures) for the hysterectomies. `embed` embeds each one for its
+    # collection only. Empty switches them off.
+    COLLECTION_MODELS_RAW: str = (os.getenv("CLIMB_COLLECTION_MODELS")
+                                  if os.getenv("CLIMB_COLLECTION_MODELS") is not None
+                                  else "MVK:imageomics/bioclip-2.5-vith14,LHE:camma/peskavlp")
+    # The domain model's signal in the fusion, next to SigLIP2's RRF_WEIGHT_VISUAL. 1.0 until
+    # it can be measured (GynSurg's labels for LHE, MSC's descriptions for MVK).
+    RRF_WEIGHT_DOMAIN: float = float(os.getenv("CLIMB_W_DOMAIN") or 1.0)
 
     def embed_models(self) -> list:
         """
@@ -173,6 +189,10 @@ class Config:
 
     def asr_hallucination_phrases(self) -> frozenset:
         return frozenset(" ".join(p.lower().split()) for p in self.ASR_HALLUCINATION_PHRASES)
+
+    def collection_of(self, model_name: str) -> str | None:
+        """The collection a domain model is for, or None for a model every collection uses."""
+        return next((c for c, m in self.collection_models().items() if m == model_name), None)
 
     def collection_models(self) -> dict:
         mapping = {}
@@ -193,6 +213,7 @@ class Config:
             "ocr_phrase": self.RRF_WEIGHT_PHRASE,
             "asr_phrase": self.RRF_WEIGHT_PHRASE,
             "info": self.RRF_WEIGHT_INFO,
+            "tags": self.RRF_WEIGHT_TAGS,
         }
 
     DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)

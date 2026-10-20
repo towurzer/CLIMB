@@ -372,13 +372,44 @@ this is just the order.
    CLIMB_MEDIA_DIR=/big/disk/climb/media           # keyframes we keep, ~33 MB per hour of video
    CLIMB_WORK_DIR=/big/disk/climb/work             # scratch, a few GB at a time
    ```
-4. **Check, then run.** From `video_processing/src`:
+4. **Trial run first, on a throwaway database.** Some things only show up on the server's GPU: bf16, Paddle and torch
+   sharing CUDA libraries in one venv, the caption and ASR models at their full size. Finding out after a day of GPU
+   time is the expensive way, so put two videos per collection through every stage first. From
+   `video_processing/src`:
+
+   ```bash
+   podman exec climb createdb -U postgres climb_trial
+   (
+     # In a subshell, so none of this leaks into the real run.
+     export POSTGRES_DB_NAME=climb_trial CLIMB_MEDIA_DIR=/big/disk/climb-trial/media \
+            CLIMB_WORK_DIR=/big/disk/climb-trial/work
+     python main.py migrate && python main.py check
+     for c in V3C MVK LHE; do
+       python main.py run --collection $c --limit 2 \
+         --stages fetch,ingest-shots,decode,select,purge,embed,ocr,caption,asr,embed-text
+     done
+   )
+   ```
+
+   Every stage logs `Running on cuda (...)`; `cpu` there means the GPU was not found. Then look at what came out:
+
+   ```bash
+   podman exec climb psql -U postgres climb_trial -c "SELECT caption FROM keyframe_caption LIMIT 10;"
+   podman exec climb psql -U postgres climb_trial -c "SELECT ocr_text FROM keyframe_text WHERE ocr_text <> '' LIMIT 10;"
+   podman exec climb psql -U postgres climb_trial -c "SELECT text, hallucination FROM transcript_segment WHERE text <> '' LIMIT 20;"
+   ```
+
+   Captions should describe the frame, OCR should be readable text, transcripts real speech, with
+   `hallucination = t` only on the invented lines (MVK is filmed underwater, so all of its lines are). Empty
+   captions, garbled or empty OCR, or every line flagged mean something is off. When it all looks right, throw the
+   trial away: `podman exec climb dropdb -U postgres climb_trial` and `rm -rf /big/disk/climb-trial`.
+5. **Check, then run.** From `video_processing/src`:
 
    ```bash
    python main.py migrate
    python main.py check          # fix every FAIL before going on
    python main.py run            # ingest + decode/select/purge in batches, CPU only
-   python main.py embed          # SigLIP2 large; 1.7 says how to add a bigger model
+   python main.py embed          # SigLIP2 large, plus BioCLIP for MVK and PeskaVLP for LHE (1.7)
    python main.py ocr
    python main.py caption
    python main.py asr
@@ -387,10 +418,10 @@ this is just the order.
    ```
 
    Every stage resumes where it stopped, so a crash or a Ctrl-C costs nothing but the batch in flight.
-5. **More than one GPU.** One process uses one GPU. Start one per GPU, each with its own slice:
+6. **More than one GPU.** One process uses one GPU. Start one per GPU, each with its own slice:
    `CUDA_VISIBLE_DEVICES=0 python main.py embed --shard 0 --shards 2` and
    `CUDA_VISIBLE_DEVICES=1 python main.py embed --shard 1 --shards 2`, same for the other model stages.
-6. **Hand back** the media directory and a dump of the database:
+7. **Hand back** the media directory and a dump of the database:
    `podman exec climb pg_dump -U postgres -Fc <POSTGRES_DB_NAME> > climb.dump`.
 
 #### 1.1 Installation
@@ -768,9 +799,15 @@ recall@1:
 | giant  | 56.1 | 86.0   | 1.34 TFLOP           |
 
 One point at rank 1 in a gallery of 5,000 images, while what counts at VBS is the target landing on the first pages
-out of millions. And a second model costs more than its compute suggests: every keyframe spends ~4.7 ms on the CPU
-being decoded and preprocessed before the GPU sees it (measured on the laptop), whichever model it is for, so a second
-pass roughly doubles the embed time.
+out of millions. And a second model is a second pass over every keyframe: so400m on top of large is about 2.4 times
+the compute of large alone.
+
+Keyframes are read ahead: `CLIMB_EMBED_LOADERS` threads (4) decode the next batches while the model works on this one,
+and the image processor resizes and normalises them on the model's device. Done one after the other, that took ~4.7 ms
+per keyframe on the laptop and capped the stage at about 160 keyframes/s whatever the GPU. Decoding alone runs at
+~1,300 keyframes/s in four threads, the processor gives the same pixel values on decoded frames as on PIL images, and
+what is left on the main thread, turning vectors into text and inserting them, is about 1 ms per keyframe. How fast it
+is on the server's GPU is still to be measured, on the trial run.
 
 **If there is GPU time to spare**, a second model for the machines with a GPU is one line in `.env`:
 
@@ -784,6 +821,33 @@ changes nothing: every machine keeps searching with large (with a warning in the
 this machine searches with, and `embed --model <name>` runs one of them on its own. Dropping it again is deleting the
 line; to get the space back, `DELETE FROM keyframe_embedding WHERE model_id = 3;` (3 is so400m, see
 `migrations/010_so400m.sql`), before `index build`, or it builds an index over them too.
+
+**MVK and LHE get a second model each.** SigLIP2 learned from web images, and neither a dive nor a laparoscopic
+hysterectomy looks like the web. For those two collections a second model searches next to it:
+
+| Collection | Model | What it learned from | License |
+|------------|-------|----------------------|---------|
+| MVK | BioCLIP 2.5 Huge (`imageomics/bioclip-2.5-vith14`, ViT-H/14, open_clip) | 200M+ images of living things, with part of LAION mixed back in | MIT |
+| LHE | PeskaVLP (`camma/peskavlp`, ResNet-50 + Bio_ClinicalBERT) | surgical video lectures and their narration | CC BY-NC-SA 4.0, research only |
+
+Both rank the same keyframes in their own space, and their list fuses with SigLIP2's like any other signal
+(`CLIMB_W_DOMAIN`, 1.0, unmeasured), with its own badge. So "a moray eel in a crevice" is lifted by BioCLIP, "a diver
+with a yellow tank" by SigLIP2, and "a diver photographs a turtle" gets votes from both. They run only when the
+dataset dropdown names their collection (their vectors exist for that collection alone, so in an all-datasets search
+they would only add hits from it), and unticking Visual switches them off with SigLIP2. `embed` embeds each one for
+its own collection, about 85,000 MVK and 150,000 LHE keyframes, 2% of V3C's. `CLIMB_COLLECTION_MODELS=` (empty)
+switches both off.
+
+Each model sees the keyframe the way it was trained to, which for both means the centre: BioCLIP takes the middle
+square, PeskaVLP the middle 224 pixels of the frame scaled to 640x360. What they leave out at the edges, SigLIP2 still
+sees. On the laptop's CPU the BioCLIP text tower adds ~0.3 s to an MVK search (it is a ViT-H's), PeskaVLP's BERT next
+to nothing.
+
+PeskaVLP is rebuilt from its weights (`pipeline/peskavlp.py`, 495 MB from the University of Strasbourg on first use)
+rather than installed: CAMMA's package pins transformers 4.30.2, numpy < 2 and mmengine 0.7.0, which would uninstall
+half of this pipeline on the way in. The weights load strictly, and the text vectors match their code to a cosine of
+1.0 (`tests/test_domain_models.py`). Neither model has been measured against SigLIP2 here yet; GynSurg's labelled
+gynaecological laparoscopy frames and MSC's biologist-checked descriptions of the dives are what to measure with.
 
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
@@ -947,6 +1011,17 @@ frame could earn a bonus an MVK frame never can. That is why Info follows the da
 picking anything else (including "All datasets", the start) unticks it. After that the tickbox is yours to flip until
 the next dataset switch.
 
+The Info tickbox also covers **Tags**: the words of your query against the uploader's tags, no `tag:` needed. "a bmx
+rider doing flatland tricks" lifts 00001, tagged `bmx` and `flatland`. Single words and runs of up to four are tried,
+since a third of the tags are several words ("fish eye", "of monsters and men"), and both sides are compared as keys:
+lowercase, no accents, nothing but letters and digits (migration 012), so `fish-eye`, `Fish Eye` and `fisheye` are one
+tag and "velo" finds `vélo`. A rare tag counts for more than a common one (`flatland` in one video against `travel` in
+twelve, ln of how many videos over how many have it). Where the info files lost a character (`v?lo`), the `?` matches
+any one, but only when enough survived: a Korean tag that arrived as `?????` used to let its video through
+`tag:canon`, and would have matched every five-letter word. `tag:` uses the same keys now. Like Info it is a
+video-level prior with its own weight (`CLIMB_W_TAGS`, 1.0, unmeasured) and badge, and like Info it lifts every frame
+of the video it likes, so a well-tagged video can take most of a page.
+
 **ASR** follows the dropdown the same way, the other way round: picking MVK unticks it, everything else ticks it.
 MVK is filmed underwater, nobody talks, and Whisper fills the regulator noise with things it has heard a lot of:
 "Thank you.", "Продолжение следует..." ("to be continued"), "We'll see you next time." Every one of the 36 segments it
@@ -1002,7 +1077,8 @@ When the requirements leave only a handful of videos (300 or fewer, `CLIMB_EXACT
 caption and speech searches rank by exact distance over just those videos instead of going through the index, because
 the index answers for the whole collection and `video:00191 a red car` would otherwise keep whichever of the global top
 1000 happened to be in 00191, which is usually none of them. A query that is *only* requirements, say `video:00191` or
-`tag:bmx`, lists the scenes of what is left in order.
+`tag:bmx`, lists the scenes of what is left in order, up to the 500 results a search fetches (`SEARCH_RESULT_DEPTH`).
+That is the first 500 scenes of a very long video (00193 has 840); Browse shows all of them.
 
 The dataset dropdown next to the sources does what it says: search only V3C, MVK or LHE. At VBS the task tells you which
 collection it is from, and there is no point in letting the other two put look-alikes on the page. Browse has the same
