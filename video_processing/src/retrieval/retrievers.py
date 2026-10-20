@@ -159,6 +159,7 @@ ASR_SCENES = """
              JOIN scenes s ON s.video_id = t.video_id
                  AND s.start_ms < t.end_ms AND s.end_ms > t.start_ms
     WHERE t.segment_id = ANY (%(segment_ids)s)
+      AND NOT t.hallucination
       AND {scope};
 """.format(scope=SEGMENT_SCOPE)
 
@@ -176,6 +177,7 @@ ASR_PHRASE_SEARCH = """
                    JOIN scenes s ON s.video_id = t.video_id
                        AND s.start_ms < t.end_ms AND s.end_ms > t.start_ms
           WHERE t.tsv @@ q.query
+            AND NOT t.hallucination
             AND {scope}
           ORDER BY s.scene_id, rank DESC, t.segment_id) best
     ORDER BY rank DESC, scene_id
@@ -457,6 +459,7 @@ SPEECH_PHRASE_VIDEOS = """
     FROM transcript_segment t
              JOIN videos v ON v.video_id = t.video_id
     WHERE t.tsv @@ to_tsquery('simple', %(tsquery)s)
+      AND NOT t.hallucination
       AND {scope};
 """.format(scope=SEGMENT_SCOPE)
 

@@ -18,6 +18,7 @@ SELECT_PENDING_TRANSCRIPT = """
     FROM transcript_segment s
              JOIN videos v ON v.video_id = s.video_id
     WHERE s.text <> ''
+      AND NOT s.hallucination
       AND NOT EXISTS (SELECT 1
                       FROM transcript_embedding e
                       WHERE e.segment_id = s.segment_id
@@ -187,7 +188,8 @@ def embed_text_pending(conn, collection=None, batch_size=None, shard=0, shards=1
     with conn.cursor() as cur:
         cur.execute(
             "SELECT count(*) FROM transcript_segment s JOIN videos v ON v.video_id = s.video_id "
-            "WHERE s.text <> '' AND NOT EXISTS (SELECT 1 FROM transcript_embedding e "
+            "WHERE s.text <> '' AND NOT s.hallucination "
+            "AND NOT EXISTS (SELECT 1 FROM transcript_embedding e "
             "WHERE e.segment_id = s.segment_id AND e.model_id = %s) "
             "AND (%s IS NULL OR v.collection = %s) AND mod(s.segment_id, %s) = %s",
             (model_id, collection, collection, shards, shard),

@@ -76,6 +76,27 @@ class Config:
                            "and setting, and how they relate to each other.")
     ASR_MODEL: str = os.getenv("CLIMB_ASR_MODEL") or "large-v3"
     ASR_BEAM_SIZE: int = 1
+    # When a segment counts as a Whisper hallucination rather than speech (pipeline/asr.py,
+    # flag_hallucinations). Set from a probe over 61 MVK clips (every segment invented) and 14 V3C
+    # videos with large-v3-turbo; changing them is `python main.py asr --reclassify`, no new
+    # transcription. Whisper's no_speech_prob is stored but not used: it was 0.0 for every segment.
+    # Above 2.4 Whisper itself treats a window as a repetition loop; the probe's highest was 2.34.
+    ASR_MAX_COMPRESSION_RATIO: float = float(os.getenv("CLIMB_ASR_MAX_COMPRESSION_RATIO") or 2.4)
+    # A segment with no other speech this close before or after it is isolated.
+    ASR_ISOLATION_MS: int = int(os.getenv("CLIMB_ASR_ISOLATION_MS") or 30000)
+    # An isolated segment below this mean log probability is dropped. The invented MVK segments
+    # were -1.21 to -0.32, the V3C ones that may be real speech -0.63 and above.
+    ASR_ISOLATED_MIN_AVG_LOGPROB: float = float(os.getenv("CLIMB_ASR_ISOLATED_MIN_AVG_LOGPROB")
+                                                or -0.8)
+    # The phrases Whisper makes from noise and music. An isolated one is dropped whatever its
+    # confidence; inside a conversation it is kept, since people do say "Thank you." Compared
+    # lowercased with whitespace collapsed.
+    ASR_HALLUCINATION_PHRASES: tuple = (
+        "thank you.", "thank you", "thank you!", "thanks for watching!", "thank you for watching!",
+        "thank you for watching.", "you", "oh", "music", "we'll see you next time.",
+        "продолжение следует...", "obrigado.", "ご視聴ありがとうございました",
+        "subtitles by the amara.org community",
+    )
     # Cross-lingual text encoder for OCR strings and transcripts. V3C signage and speech are
     # multilingual while the queries are English, so this has to be a multilingual model.
     TEXT_MODEL: str = os.getenv("CLIMB_TEXT_MODEL") or "intfloat/multilingual-e5-large"
@@ -149,6 +170,9 @@ class Config:
     def search_model(self, dev: str) -> str:
         """The visual model a search on this device prefers (see choose_visual_model)."""
         return self.KIS_CPU_MODEL_NAME if dev == "cpu" else self.KIS_MODEL_NAME
+
+    def asr_hallucination_phrases(self) -> frozenset:
+        return frozenset(" ".join(p.lower().split()) for p in self.ASR_HALLUCINATION_PHRASES)
 
     def collection_models(self) -> dict:
         mapping = {}

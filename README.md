@@ -397,6 +397,7 @@ In case you prefer using a conda environment run
 ```bash:
 conda env create -n climb -f conda_environment.yml
 ```
+from `video_processing`. It is Python 3.13 plus the same `requirements.txt`, so the two cannot drift apart.
 
 All steps can be done by running ```main.py``` with the respective options. In order to have the correct relative paths
 please run
@@ -926,6 +927,20 @@ MVK is filmed underwater, nobody talks, and Whisper fills the regulator noise wi
 "Thank you.", "Продолжение следует..." ("to be continued"), "We'll see you next time." Every one of the 36 segments it
 found in 78 MVK clips was invented, and they still matched queries: "fish on a coral reef" ranked a clip third on the
 strength of a transcript that said "You".
+
+Those segments are now caught when they are transcribed (`flag_hallucinations` in `pipeline/asr.py`), and a caught
+segment is neither embedded nor searched. The tell is not the words but the silence around them: "Thank you." in the
+middle of a conversation is somebody saying thank you, "Thank you." with no other speech within 30 seconds is Whisper
+filling regulator noise. So a segment is dropped when it is one of the phrases Whisper is known to make up (the list
+is `ASR_HALLUCINATION_PHRASES` in `config.py`) and isolated, when it is isolated and Whisper was unsure of it (mean
+log probability below -0.8), when it has no letter or digit in it ("..."), or when it is a repetition loop
+(compression ratio above 2.4, Whisper's own cut-off). On a probe over 61 MVK clips and 14 V3C videos that dropped all
+26 invented MVK segments and 8 of 1,097 V3C ones, all of them lone "You" / "Music" or "...". Whisper's
+`no_speech_prob`, the obvious candidate, was 0.0 for every single segment, which is why it is stored but not used.
+
+The values stay in the database next to the flag, so a changed threshold or phrase is `python main.py asr
+--reclassify` (seconds) rather than another transcription (days), followed by `embed-text` if anything came back.
+The tickbox still starts unticked for MVK: the full collection is 3,190 clips, and the probe saw 61.
 
 This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
 match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the

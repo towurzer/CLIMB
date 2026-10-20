@@ -44,7 +44,7 @@ from db.connection import connection_scope
 from db.index_ops import build_indexes, drop_indexes, index_status
 from db.migrate import migration_status, run_migrations
 from pipeline import datasets, runner
-from pipeline.asr import asr_pending
+from pipeline.asr import asr_pending, reclassify
 from pipeline.caption import caption_pending
 from pipeline.decode import decode_from_database
 from pipeline.embed import embed_pending
@@ -96,7 +96,10 @@ def build_parser():
     embed.add_argument("--model", default=None,
                        help="embed with this model only (default: CLIMB_EMBED_MODEL_CPU, then "
                             "CLIMB_EMBED_MODEL)")
-    add_common(sub.add_parser("asr", help="Whisper transcripts (GPU)"), sharded=True)
+    asr = add_common(sub.add_parser("asr", help="Whisper transcripts (GPU)"), sharded=True)
+    asr.add_argument("--reclassify", action="store_true",
+                     help="no transcription: apply the hallucination rule (CLIMB_ASR_*) to the "
+                          "stored segments again")
     add_common(sub.add_parser("embed-text", help="embed transcripts, captions and video info (GPU)"),
                sharded=True)
 
@@ -180,7 +183,10 @@ def dispatch(args, conn=None):
         caption_pending(conn, collection=collection, limit=limit, shard=shard, shards=shards,
                         scope=scope)
     elif args.command == "asr":
-        asr_pending(conn, collection=collection, limit=limit, shard=shard, shards=shards)
+        if getattr(args, "reclassify", False):
+            reclassify(conn)
+        else:
+            asr_pending(conn, collection=collection, limit=limit, shard=shard, shards=shards)
     elif args.command == "embed-text":
         embed_text_pending(conn, collection=collection, shard=shard, shards=shards)
     elif args.command == "purge":
