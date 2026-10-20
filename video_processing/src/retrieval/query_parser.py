@@ -164,6 +164,30 @@ def distinctive_tokens(text: str) -> list:
                    if len(w) >= MIN_TOKEN_LENGTH and w.lower() not in STOPWORDS)
 
 
+# Tags run up to four words ("of monsters and men"), and 30% of the local V3C tags have more than one.
+TAG_TERM_MAX_WORDS = 4
+
+
+def tag_terms(text: str) -> list:
+    """
+    The pieces of a query that could be a V3C tag: every content word, and every run of two to
+    four words. A word also comes with and without a trailing s, since tags are as often "bikes" as
+    "bike". The database turns each into the same key it made of the tags (migration 012), so the
+    spacing and accents here do not matter.
+    """
+    words = [w.lower() for w in WORD.findall(text)]
+    terms = []
+    for i, word in enumerate(words):
+        if len(word) >= 2 and word not in STOPWORDS:
+            terms.append(word)
+            terms.append(word[:-1] if word.endswith("s") and len(word) > 3 else word + "s")
+        for n in range(2, TAG_TERM_MAX_WORDS + 1):
+            run = words[i:i + n]
+            if len(run) == n and not all(w in STOPWORDS for w in run):
+                terms.append(" ".join(run))
+    return _dedupe(terms)
+
+
 def _dedupe(values) -> list:
     seen, out = set(), []
     for value in values:

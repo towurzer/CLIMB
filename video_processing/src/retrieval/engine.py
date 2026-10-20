@@ -24,8 +24,12 @@ SOURCE_RETRIEVERS = {
     "ocr": ("ocr",),
     "asr": ("transcript",),
     "caption": ("caption",),
-    "info": ("info",),
+    "info": ("info", "tags"),
 }
+
+# Signals that rank videos, not keyframes. They join after the frame-level fusion
+# (fusion.apply_video_prior), re-ordering what the others found.
+VIDEO_SIGNALS = ("info", "tags")
 
 
 def _allowed_retrievers(sources):
@@ -509,6 +513,11 @@ class SearchEngine:
                         self.conn, text_vector, self.text_model["model_id"],
                         self.text_model["dims"], scope, self.conf.INFO_DEPTH))
 
+        # No embedding and no visual model needed: the query's own words against the tags.
+        if parsed.has_free_text and enabled("tags"):
+            run("tags", lambda: retrievers.tags(self.conn, query_parser.tag_terms(parsed.free_text),
+                                                scope, self.conf.INFO_DEPTH))
+
         # Several phrases of one kind share one list, interleaved, so each keeps the phrase
         # weight and the UI's signal names stay what they were.
         if parsed.ocr_phrases:
@@ -526,16 +535,21 @@ class SearchEngine:
             # retriever depth (200) would cut a long video off: 00193 has 840 scenes.
             run("listing", lambda: self._list_scenes(scope, limit))
 
-        # Video ids, not keyframes, so it joins after the frame-level fusion rather than in it.
-        videos = lists.pop("info", None)
-        fused = fusion.fuse(lists, weights, limit=None if videos else limit)
-        if videos:
-            started = time.monotonic()
-            fused = fusion.apply_video_prior(fused, self._video_of(fused), videos,
-                                             weights.get("info", 0.0), limit=limit)
-            timings["info"] = round(timings.get("info", 0.0)
-                                    + (time.monotonic() - started) * 1000, 1)
-            lists["info"] = videos
+        # Video ids, not keyframes, so they join after the frame-level fusion rather than in it,
+        # all of them before the cut to `limit`.
+        video_lists = {name: videos for name in VIDEO_SIGNALS
+                       if (videos := lists.pop(name, None))}
+        fused = fusion.fuse(lists, weights, limit=None if video_lists else limit)
+        if video_lists:
+            video_of = self._video_of(fused)
+            for name, videos in video_lists.items():
+                started = time.monotonic()
+                fused = fusion.apply_video_prior(fused, video_of, videos, weights.get(name, 0.0),
+                                                 name=name)
+                timings[name] = round(timings.get(name, 0.0)
+                                      + (time.monotonic() - started) * 1000, 1)
+                lists[name] = videos
+            fused = fused[:limit]
         return fused, timings, lists, filters
 
     def _video_of(self, fused) -> dict:

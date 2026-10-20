@@ -953,6 +953,17 @@ frame could earn a bonus an MVK frame never can. That is why Info follows the da
 picking anything else (including "All datasets", the start) unticks it. After that the tickbox is yours to flip until
 the next dataset switch.
 
+The Info tickbox also covers **Tags**: the words of your query against the uploader's tags, no `tag:` needed. "a bmx
+rider doing flatland tricks" lifts 00001, tagged `bmx` and `flatland`. Single words and runs of up to four are tried,
+since a third of the tags are several words ("fish eye", "of monsters and men"), and both sides are compared as keys:
+lowercase, no accents, nothing but letters and digits (migration 012), so `fish-eye`, `Fish Eye` and `fisheye` are one
+tag and "velo" finds `vélo`. A rare tag counts for more than a common one (`flatland` in one video against `travel` in
+twelve, ln of how many videos over how many have it). Where the info files lost a character (`v?lo`), the `?` matches
+any one, but only when enough survived: a Korean tag that arrived as `?????` used to let its video through
+`tag:canon`, and would have matched every five-letter word. `tag:` uses the same keys now. Like Info it is a
+video-level prior with its own weight (`CLIMB_W_TAGS`, 1.0, unmeasured) and badge, and like Info it lifts every frame
+of the video it likes, so a well-tagged video can take most of a page.
+
 **ASR** follows the dropdown the same way, the other way round: picking MVK unticks it, everything else ticks it.
 MVK is filmed underwater, nobody talks, and Whisper fills the regulator noise with things it has heard a lot of:
 "Thank you.", "Продолжение следует..." ("to be continued"), "We'll see you next time." Every one of the 36 segments it

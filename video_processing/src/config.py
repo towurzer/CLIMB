@@ -137,7 +137,10 @@ class Config:
     # prior: it re-orders keyframes the other signals found, never adds any. 1.0 like the others
     # until WP9 can measure it.
     RRF_WEIGHT_INFO: float = float(os.getenv("CLIMB_W_INFO") or 1.0)
-    # How many videos the info retriever ranks.
+    # Query words that are tags of a video (retrievers.tags). Video-level like info, re-ordering
+    # what the frame-level signals found; 1.0 until WP9 can measure it.
+    RRF_WEIGHT_TAGS: float = float(os.getenv("CLIMB_W_TAGS") or 1.0)
+    # How many videos the info and tags retrievers rank.
     INFO_DEPTH: int = int(os.getenv("CLIMB_INFO_DEPTH") or 500)
 
     # --- Temporal queries (see retrieval/temporal.py) ---
@@ -193,6 +196,7 @@ class Config:
             "ocr_phrase": self.RRF_WEIGHT_PHRASE,
             "asr_phrase": self.RRF_WEIGHT_PHRASE,
             "info": self.RRF_WEIGHT_INFO,
+            "tags": self.RRF_WEIGHT_TAGS,
         }
 
     DECODE_WORKERS: int = int(os.getenv("CLIMB_DECODE_WORKERS") or 6)
