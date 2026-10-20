@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import custom_logger
 from config import Config
-from pipeline import device, paths
+from pipeline import device, paths, visual_models
 from psycopg2.extras import execute_values
 from tqdm import tqdm
 
@@ -79,23 +79,8 @@ def to_pgvector(values) -> str:
 
 
 def load_model(model_name: str, dev: str):
-    """
-    Loads the full checkpoint and keeps the vision tower.
-
-    Loading `Siglip2VisionModel` directly looks tempting -- it would skip the text weights -- but
-    this checkpoint's config type is `siglip_vision_model`, not `siglip2_vision_model`, so
-    transformers reports mismatched patch and position embeddings and offers to reinitialise them
-    at random. It currently raises instead, but relying on that is one `ignore_mismatched_sizes`
-    default away from silently embedding 12M keyframes with random projection weights. Loading the
-    whole model and discarding the text tower is a few seconds and some transient memory; the
-    alternative failure is invisible.
-    """
-    from transformers import AutoModel, AutoProcessor
-
-    processor = AutoProcessor.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name, dtype=device.pick_dtype(dev))
-    vision = model.vision_model.to(dev).eval()
-    return processor, vision
+    """(image processor, vision encoder) for any visual model, see pipeline/visual_models.py."""
+    return visual_models.load_image_side(model_name, dev)
 
 
 def decode_keyframe(path):
@@ -147,6 +132,24 @@ def resolve_model(conn, model_name: str):
     return row
 
 
+COLLECTION_COVERAGE = """
+    SELECT count(*), count(e.keyframe_id)
+    FROM keyframes k
+             JOIN videos v ON v.video_id = k.video_id
+             LEFT JOIN keyframe_embedding e
+                       ON e.keyframe_id = k.keyframe_id
+                           AND e.model_id = (SELECT model_id FROM embedding_model WHERE name = %s)
+    WHERE v.collection = %s;
+"""
+
+
+def collection_coverage(conn, model_name, collection) -> tuple:
+    """(keyframes of the collection, how many of them have a vector from the model)."""
+    with conn.cursor() as cur:
+        cur.execute(COLLECTION_COVERAGE, (model_name, collection))
+        return cur.fetchone()
+
+
 def vector_counts(conn) -> tuple:
     """({model name: keyframes with a vector from it}, keyframes in total)."""
     with conn.cursor() as cur:
@@ -156,16 +159,31 @@ def vector_counts(conn) -> tuple:
         return counts, cur.fetchone()[0]
 
 
+def embed_jobs(model_name=None, collection=None) -> list:
+    """
+    (model, collection) pairs to embed with, in order. Without a model: every model in
+    Config.embed_models() for `collection` (all of them when None), then each domain model for its
+    own collection, unless `collection` names another. A domain model named on its own embeds its
+    own collection unless told otherwise.
+    """
+    conf = Config()
+    if model_name:
+        return [(model_name, collection or conf.collection_of(model_name))]
+    jobs = [(name, collection) for name in conf.embed_models()]
+    jobs += [(name, owner) for owner, name in conf.collection_models().items()
+             if collection is None or collection == owner]
+    return jobs
+
+
 def embed_pending(conn, model_name=None, collection=None, batch_size=None, limit=None,
                   shard=0, shards=1, prefer_device=None) -> EmbedResult:
     """
-    Embeds the pending keyframes with `model_name`, or with every model in
-    Config.embed_models() when it is None, one after the other. `limit` applies to each model.
+    Embeds the pending keyframes for every job of embed_jobs(), one after the other. `limit`
+    applies to each job.
     """
-    models = [model_name] if model_name else Config().embed_models()
     total = EmbedResult()
-    for name in models:
-        result = _embed_with(conn, name, collection, batch_size, limit, shard, shards,
+    for name, job_collection in embed_jobs(model_name, collection):
+        result = _embed_with(conn, name, job_collection, batch_size, limit, shard, shards,
                              prefer_device)
         total.embedded += result.embedded
         total.skipped += result.skipped

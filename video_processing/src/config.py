@@ -165,7 +165,16 @@ class Config:
     QUERY_EMBED_CACHE_SIZE: int = int(os.getenv("CLIMB_QUERY_EMBED_CACHE") or 512)
 
     # --- Per-collection visual models ---
-    COLLECTION_MODELS_RAW: str = os.getenv("CLIMB_COLLECTION_MODELS") or ""
+    # A second visual model for one collection, searching next to SigLIP2 when the dataset
+    # dropdown names that collection: BioCLIP 2.5 (trained on biology images) for the dives,
+    # PeskaVLP (surgical video lectures) for the hysterectomies. `embed` embeds each one for its
+    # collection only. Empty switches them off.
+    COLLECTION_MODELS_RAW: str = (os.getenv("CLIMB_COLLECTION_MODELS")
+                                  if os.getenv("CLIMB_COLLECTION_MODELS") is not None
+                                  else "MVK:imageomics/bioclip-2.5-vith14,LHE:camma/peskavlp")
+    # The domain model's signal in the fusion, next to SigLIP2's RRF_WEIGHT_VISUAL. 1.0 until
+    # it can be measured (GynSurg's labels for LHE, MSC's descriptions for MVK).
+    RRF_WEIGHT_DOMAIN: float = float(os.getenv("CLIMB_W_DOMAIN") or 1.0)
 
     def embed_models(self) -> list:
         """
@@ -180,6 +189,10 @@ class Config:
 
     def asr_hallucination_phrases(self) -> frozenset:
         return frozenset(" ".join(p.lower().split()) for p in self.ASR_HALLUCINATION_PHRASES)
+
+    def collection_of(self, model_name: str) -> str | None:
+        """The collection a domain model is for, or None for a model every collection uses."""
+        return next((c for c, m in self.collection_models().items() if m == model_name), None)
 
     def collection_models(self) -> dict:
         mapping = {}

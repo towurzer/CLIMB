@@ -384,7 +384,7 @@ this is just the order.
    python main.py migrate
    python main.py check          # fix every FAIL before going on
    python main.py run            # ingest + decode/select/purge in batches, CPU only
-   python main.py embed          # SigLIP2 large; 1.7 says how to add a bigger model
+   python main.py embed          # SigLIP2 large, plus BioCLIP for MVK and PeskaVLP for LHE (1.7)
    python main.py ocr
    python main.py caption
    python main.py asr
@@ -796,6 +796,33 @@ changes nothing: every machine keeps searching with large (with a warning in the
 this machine searches with, and `embed --model <name>` runs one of them on its own. Dropping it again is deleting the
 line; to get the space back, `DELETE FROM keyframe_embedding WHERE model_id = 3;` (3 is so400m, see
 `migrations/010_so400m.sql`), before `index build`, or it builds an index over them too.
+
+**MVK and LHE get a second model each.** SigLIP2 learned from web images, and neither a dive nor a laparoscopic
+hysterectomy looks like the web. For those two collections a second model searches next to it:
+
+| Collection | Model | What it learned from | License |
+|------------|-------|----------------------|---------|
+| MVK | BioCLIP 2.5 Huge (`imageomics/bioclip-2.5-vith14`, ViT-H/14, open_clip) | 200M+ images of living things, with part of LAION mixed back in | MIT |
+| LHE | PeskaVLP (`camma/peskavlp`, ResNet-50 + Bio_ClinicalBERT) | surgical video lectures and their narration | CC BY-NC-SA 4.0, research only |
+
+Both rank the same keyframes in their own space, and their list fuses with SigLIP2's like any other signal
+(`CLIMB_W_DOMAIN`, 1.0, unmeasured), with its own badge. So "a moray eel in a crevice" is lifted by BioCLIP, "a diver
+with a yellow tank" by SigLIP2, and "a diver photographs a turtle" gets votes from both. They run only when the
+dataset dropdown names their collection (their vectors exist for that collection alone, so in an all-datasets search
+they would only add hits from it), and unticking Visual switches them off with SigLIP2. `embed` embeds each one for
+its own collection, about 85,000 MVK and 150,000 LHE keyframes, 2% of V3C's. `CLIMB_COLLECTION_MODELS=` (empty)
+switches both off.
+
+Each model sees the keyframe the way it was trained to, which for both means the centre: BioCLIP takes the middle
+square, PeskaVLP the middle 224 pixels of the frame scaled to 640x360. What they leave out at the edges, SigLIP2 still
+sees. On the laptop's CPU the BioCLIP text tower adds ~0.3 s to an MVK search (it is a ViT-H's), PeskaVLP's BERT next
+to nothing.
+
+PeskaVLP is rebuilt from its weights (`pipeline/peskavlp.py`, 495 MB from the University of Strasbourg on first use)
+rather than installed: CAMMA's package pins transformers 4.30.2, numpy < 2 and mmengine 0.7.0, which would uninstall
+half of this pipeline on the way in. The weights load strictly, and the text vectors match their code to a cosine of
+1.0 (`tests/test_domain_models.py`). Neither model has been measured against SigLIP2 here yet; GynSurg's labelled
+gynaecological laparoscopy frames and MSC's biologist-checked descriptions of the dives are what to measure with.
 
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 

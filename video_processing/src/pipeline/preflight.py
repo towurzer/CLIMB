@@ -128,9 +128,9 @@ def check_gpu(report):
                                 "(embedding alone is ~0.4 images/s there)")
 
 
-def _cached(repo) -> bool:
+def _cached(repo, filename="config.json") -> bool:
     from huggingface_hub import try_to_load_from_cache
-    return isinstance(try_to_load_from_cache(repo, "config.json"), str)
+    return isinstance(try_to_load_from_cache(repo, filename), str)
 
 
 def _reachable(repo) -> bool:
@@ -155,14 +155,47 @@ def check_models(report):
     except ImportError:
         pass
 
+    from pipeline import peskavlp, visual_models
+
+    # Each collection's model, next to SigLIP2. open_clip repos carry open_clip_config.json instead
+    # of config.json; PeskaVLP's weights come from the University of Strasbourg, its text model
+    # from the hub.
+    files = {}
+    for collection, model in Config().collection_models().items():
+        stage = f"embed ({collection})"
+        if visual_models.family(model) == "peskavlp":
+            _check_peskavlp(report, stage)
+            repos[f"{stage} text"] = peskavlp.TEXT_MODEL
+        else:
+            repos[stage] = model
+            if visual_models.family(model) == "open_clip":
+                files[stage] = "open_clip_config.json"
+
     for stage, repo in repos.items():
-        if _cached(repo):
+        if _cached(repo, files.get(stage, "config.json")):
             report.add(OK, "models", f"{stage}: {repo} is cached")
         elif _reachable(repo):
             report.add(OK, "models", f"{stage}: {repo} will download on first use")
         else:
             report.add(FAIL, "models", f"{stage}: {repo} is neither cached nor reachable on the "
                                        f"Hugging Face hub")
+
+
+def _check_peskavlp(report, stage):
+    import urllib.request
+    from pipeline import peskavlp
+
+    if peskavlp.weights_path(download=False).exists():
+        report.add(OK, "models", f"{stage}: PeskaVLP weights are cached")
+        return
+    try:
+        request = urllib.request.Request(peskavlp.WEIGHTS_URL, method="HEAD")
+        with urllib.request.urlopen(request, timeout=15):
+            report.add(OK, "models", f"{stage}: PeskaVLP weights will download on first use "
+                                     f"(495 MB)")
+    except Exception as e:
+        report.add(FAIL, "models", f"{stage}: PeskaVLP weights are not cached and "
+                                   f"{peskavlp.WEIGHTS_URL} is not reachable ({e})")
 
 
 # --- source collections ----------------------------------------------------------------------
@@ -361,9 +394,12 @@ def check_database(report) -> tuple:
         with conn.cursor() as cur:
             cur.execute("SELECT name FROM embedding_model;")
             registered = {r[0] for r in cur.fetchall()}
-            for setting, model in (("CLIMB_EMBED_MODEL", conf.KIS_MODEL_NAME),
-                                   ("CLIMB_EMBED_MODEL_CPU", conf.KIS_CPU_MODEL_NAME),
-                                   ("CLIMB_TEXT_MODEL", conf.TEXT_MODEL)):
+            settings = [("CLIMB_EMBED_MODEL", conf.KIS_MODEL_NAME),
+                        ("CLIMB_EMBED_MODEL_CPU", conf.KIS_CPU_MODEL_NAME),
+                        ("CLIMB_TEXT_MODEL", conf.TEXT_MODEL)]
+            settings += [(f"CLIMB_COLLECTION_MODELS ({collection})", model)
+                         for collection, model in conf.collection_models().items()]
+            for setting, model in settings:
                 if model not in registered:
                     report.add(FAIL, "database", f"{setting}={model} is not in embedding_model; "
                                                  f"its stage refuses to run")
@@ -382,7 +418,7 @@ def check_database(report) -> tuple:
 
 def _check_visual_vectors(report, conn, conf):
     """How far each visual model has got, and which one a search on this machine uses."""
-    from pipeline.embed import vector_counts
+    from pipeline.embed import collection_coverage, vector_counts
     from retrieval.engine import choose_visual_model
 
     counts, keyframes = vector_counts(conn)
@@ -395,6 +431,16 @@ def _check_visual_vectors(report, conn, conf):
         if counts.get(name, 0) < keyframes:
             report.add(WARN, "database", f"{keyframes - counts.get(name, 0):,} keyframe(s) have no "
                                          f"{name} vector yet: python main.py embed")
+
+    for collection, name in conf.collection_models().items():
+        total, done = collection_coverage(conn, name, collection)
+        if not total:
+            continue
+        if done < total:
+            report.add(WARN, "database", f"{total - done:,} of {total:,} {collection} keyframe(s) "
+                                         f"have no {name} vector yet: python main.py embed")
+        else:
+            report.add(OK, "database", f"{collection}: {name} has all {total:,} keyframes")
 
     try:
         from pipeline import device

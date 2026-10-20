@@ -18,9 +18,13 @@ SO400M = "google/siglip2-so400m-patch16-384"
 LARGE = "google/siglip2-large-patch16-384"
 
 
-def two_models():
+BIOCLIP = "imageomics/bioclip-2.5-vith14"
+PESKA = "camma/peskavlp"
+
+
+def two_models(domain=""):
     # Passed in rather than read from the environment: the local .env may pin either one.
-    return Config(KIS_MODEL_NAME=SO400M, KIS_CPU_MODEL_NAME=LARGE)
+    return Config(KIS_MODEL_NAME=SO400M, KIS_CPU_MODEL_NAME=LARGE, COLLECTION_MODELS_RAW=domain)
 
 
 @pytest.fixture
@@ -89,8 +93,8 @@ def test_one_model_without_vectors_has_nothing_to_fall_back_to():
 def embedded_with(monkeypatch):
     seen = []
 
-    def fake(conn, model_name, *args):
-        seen.append(model_name)
+    def fake(conn, model_name, collection, *args):
+        seen.append(model_name if collection is None else (model_name, collection))
         return embed.EmbedResult(embedded=3, batches=1)
 
     monkeypatch.setattr(embed, "_embed_with", fake)
@@ -106,6 +110,43 @@ def test_embed_runs_every_model_and_adds_up(config_with_two_models, embedded_wit
 def test_a_named_model_runs_alone(config_with_two_models, embedded_with):
     embed.embed_pending(object(), model_name=LARGE)
     assert embedded_with == [LARGE]
+
+
+@pytest.fixture
+def config_with_domain_models(monkeypatch):
+    monkeypatch.setattr(embed, "Config", lambda: two_models(f"MVK:{BIOCLIP},LHE:{PESKA}"))
+
+
+def test_embed_also_runs_each_domain_model_for_its_own_collection(config_with_domain_models,
+                                                                  embedded_with):
+    embed.embed_pending(object())
+    assert embedded_with == [LARGE, SO400M, (BIOCLIP, "MVK"), (PESKA, "LHE")]
+
+
+def test_one_collection_gets_its_own_domain_model_only(config_with_domain_models, embedded_with):
+    embed.embed_pending(object(), collection="LHE")
+    assert embedded_with == [(LARGE, "LHE"), (SO400M, "LHE"), (PESKA, "LHE")]
+
+
+def test_a_collection_without_a_domain_model_gets_none(config_with_domain_models, embedded_with):
+    embed.embed_pending(object(), collection="V3C")
+    assert embedded_with == [(LARGE, "V3C"), (SO400M, "V3C")]
+
+
+def test_a_domain_model_named_alone_embeds_its_own_collection(config_with_domain_models,
+                                                              embedded_with):
+    embed.embed_pending(object(), model_name=BIOCLIP)
+    assert embedded_with == [(BIOCLIP, "MVK")]
+
+
+def test_a_domain_model_knows_its_collection():
+    conf = two_models(f"MVK:{BIOCLIP},LHE:{PESKA}")
+    assert (conf.collection_of(PESKA), conf.collection_of(BIOCLIP)) == ("LHE", "MVK")
+    assert conf.collection_of(LARGE) is None
+
+
+def test_an_empty_setting_switches_the_domain_models_off():
+    assert two_models("").collection_models() == {}
 
 
 def test_the_model_flag_reaches_the_stage(monkeypatch):
