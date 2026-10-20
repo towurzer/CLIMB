@@ -16,9 +16,15 @@ def pick_device(prefer: str | None = None) -> str:
 
 
 def pick_dtype(device: str):
-    """fp16 on CUDA, fp32 everywhere else; half precision on CPU is slower, not faster."""
+    """
+    bf16 on CUDA where the card supports it, else fp16; fp32 everywhere else, since half precision
+    on CPU is slower, not faster. The Qwen3-VL weights ship in bf16, and fp16 has a smaller
+    range, so activations that fit in bf16 can overflow to inf in fp16.
+    """
     import torch
-    return torch.float16 if device == "cuda" else torch.float32
+    if device != "cuda":
+        return torch.float32
+    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 
 def describe(device: str) -> str:

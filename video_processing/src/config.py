@@ -12,7 +12,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 @dataclass
 class Config:
     # --- KIS Model parameters ---
-    KIS_MODEL_NAME: str = "google/siglip2-large-patch16-384"
+    # The model a search embeds its query with must be the one that embedded the keyframes, so a
+    # machine searching a database embedded with another model sets this to match.
+    KIS_MODEL_NAME: str = os.getenv("CLIMB_EMBED_MODEL") or "google/siglip2-giant-opt-patch16-384"
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("CLIMB_EMBED_BATCH") or 16)
     SEARCH_TOP_K: int = 48
 
@@ -50,6 +52,8 @@ class Config:
     # Drop batch sizes via env
     OCR_BATCH_SIZE: int = int(os.getenv("CLIMB_OCR_BATCH") or 32)
     OCR_MIN_CONFIDENCE: float = 0.5
+    # paddle only: text detection runs on the frame upscaled to this short side (see PaddleReader).
+    OCR_DET_MIN_SIDE: int = int(os.getenv("CLIMB_OCR_DET_MIN_SIDE") or 736)
     # 'auto' prefers paddle and falls back to rapidocr-onnxruntime, so when a GPU is available it uses
     # the better model without configuration.
     OCR_BACKEND: str = os.getenv("CLIMB_OCR_BACKEND") or "auto"
@@ -58,18 +62,18 @@ class Config:
     # 'shot' are exactly the ones most likely to show different text
     OCR_SCOPE: str = os.getenv("CLIMB_OCR_SCOPE") or "all"
     CAPTION_SCOPE: str = os.getenv("CLIMB_CAPTION_SCOPE") or "shot"
-    CAPTION_MODEL: str = os.getenv("CLIMB_CAPTION_MODEL") or "Qwen/Qwen2-VL-2B-Instruct"
+    CAPTION_MODEL: str = os.getenv("CLIMB_CAPTION_MODEL") or "Qwen/Qwen3-VL-4B-Instruct"
     CAPTION_BATCH_SIZE: int = int(os.getenv("CLIMB_CAPTION_BATCH") or 8)
     CAPTION_MAX_TOKENS: int = 64
     CAPTION_IMAGE_SPLITTING: bool = (os.getenv("CLIMB_CAPTION_IMAGE_SPLITTING") or "0") \
         .lower() in ("1", "true", "yes") # true takes 5xlonger without any benefit since there will be no new details found through upscaling
     CAPTION_PROMPT: str = ("Describe this video frame in one sentence. Name the objects, people "
                            "and setting, and how they relate to each other.")
-    ASR_MODEL: str = os.getenv("CLIMB_ASR_MODEL") or "large-v3-turbo"
+    ASR_MODEL: str = os.getenv("CLIMB_ASR_MODEL") or "large-v3"
     ASR_BEAM_SIZE: int = 1
     # Cross-lingual text encoder for OCR strings and transcripts. V3C signage and speech are
     # multilingual while the queries are English, so this has to be a multilingual model.
-    TEXT_MODEL: str = os.getenv("CLIMB_TEXT_MODEL") or "intfloat/multilingual-e5-base"
+    TEXT_MODEL: str = os.getenv("CLIMB_TEXT_MODEL") or "intfloat/multilingual-e5-large"
     TEXT_BATCH_SIZE: int = int(os.getenv("CLIMB_TEXT_BATCH") or 128)
     TEXT_MAX_TOKENS: int = 256
 

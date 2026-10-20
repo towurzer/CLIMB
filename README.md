@@ -334,7 +334,10 @@ For whoever is kind enough to run this somewhere with GPUs. Everything below is 
 this is just the order.
 
 1. **Install.** Python 3.13 or older (PaddleOCR has no wheel for 3.14 and OCR quietly falls back to a worse engine),
-   `pip install -r requirements.txt`, and FFmpeg with the `libopus` encoder.
+   `pip install -r requirements.txt`, and FFmpeg with the `libopus` encoder. On Python ≤ 3.13 the requirements bring
+   `paddleocr`; the Paddle runtime for the GPU is not on PyPI, so it is one more line:
+   `pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/` (pick the `cuXXX`
+   that matches the driver, cu118 / cu126 / cu129 / cu130 exist). `main.py check` warns if it is missing.
 2. **Database.** `python main.py schema` prints the podman command. Keep the `--shm-size=8g` in it, without it the
    index build at the end crawls.
 3. **`.env`** in the repo root: the `POSTGRES_*` / `DB_*` lines from "Environment Variables", plus
@@ -381,9 +384,14 @@ Two things that are easy to lose an evening to:
   `Unrecognized image processor`, which sends you hunting through the model repo instead of the venv. It is pinned to
   `0.27.1` because that is the version that matches `torch==2.12.1`; a bare `pip install torchvision` will happily
   upgrade torch to 2.13.0 behind your back.
-- **PaddleOCR needs Python ≤ 3.13.** There is no `paddlepaddle` wheel for 3.14 at all, so on a 3.14 venv OCR falls
-  back to `rapidocr-onnxruntime` automatically. `CLIMB_OCR_BACKEND` forces the issue either way
-  (`auto` / `paddle` / `rapidocr`); the interface is the same.
+- **PaddleOCR needs Python ≤ 3.13 and paddleocr 3.x.** There is no `paddlepaddle` wheel for 3.14 at all, so on a
+  3.14 venv OCR falls back to `rapidocr-onnxruntime` automatically, which runs the older PP-OCRv3 models.
+  `CLIMB_OCR_BACKEND` forces the issue either way (`auto` / `paddle` / `rapidocr`); the interface is the same.
+  paddleocr 3 renamed its arguments and rejects the 2.x ones with `Unknown argument: use_gpu`, so a 2.x install is a
+  FAIL in `main.py check` rather than a surprise at the start of the OCR stage. paddleocr wants `numpy<2.4` and
+  `PyYAML==6.0.2`, so below 3.14 `requirements.txt` pins those lower. It also brings `opencv-contrib-python==4.10.0.84`
+  while rapidocr brings `opencv-python`, and both install `cv2` over each other, so `opencv-python` is pinned to the
+  same 4.10 there.
 
 In case you prefer using a conda environment run
 ```bash:
@@ -720,8 +728,9 @@ python main.py caption       # a sentence describing each shot
 python main.py asr           # Whisper transcripts of the speech
 ```
 
-**Embeddings** encode each keyframe into a 1024-dimensional vector, so a search query can be encoded into the same space
-and answered with a nearest-neighbour lookup. This is the one that matters most.
+**Embeddings** encode each keyframe into a 1536-dimensional vector (SigLIP2 giant, `CLIMB_EMBED_MODEL`), so a search
+query can be encoded into the same space and answered with a nearest-neighbour lookup. This is the one that matters
+most.
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
 **OCR, captions and transcripts** exist because embeddings are vague where text is exact. If a hint says the shop sign
@@ -740,12 +749,18 @@ full-resolution photo. Our keyframes are 480x270, so that means 13 crops of 512x
 *upscale* of a piece of an already-small picture, for detail that was never in there. It costs 5.3x
 (17.57 s/shot versus 3.34) and buys nothing; the untiled captions were if anything slightly better, since the untiled
 one mentioned on-screen text the tiled one missed. `CLIMB_CAPTION_IMAGE_SPLITTING` defaults to off for exactly this
-reason. Qwen2-VL does not tile and is unaffected.
+reason. The Qwen VLMs do not tile and are unaffected.
 
 Which model you point at it is `CLIMB_CAPTION_MODEL`. Measured on 12 CPU cores over the full 200-video set:
 **SmolVLM-256M at 1.9-2.1 s/shot, Qwen2-VL-2B at ~13 s/shot.** SmolVLM is roughly 6x cheaper despite being the one
 you would expect to be worse , but only after the tiling fix above. Before it, the 256M model was the *more*
 expensive of the two despite having eight times fewer parameters, which is a fun thing to discover at 2am.
+
+Those were CPU numbers for picking something the laptop could live with. The default is now **Qwen3-VL-4B**, chosen
+for the GPU server: captions are written once and only their text is searched, so a bigger model costs server time
+and nothing at search time. 4B rather than 8B because on Qwen's own benchmarks 2B to 4B gains 7-11 points on general
+image understanding (MMStar 58.3 to 69.8, RealWorldQA 63.9 to 70.9) and 4B to 8B about one (70.9, 71.5), for twice
+the GPU time per caption. It does not fit the laptop: 4.4B parameters are ~18 GB in the fp32 the CPU path runs in.
 
 **Text embeddings** are the fourth-and-a-half stage:
 

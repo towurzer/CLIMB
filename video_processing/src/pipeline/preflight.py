@@ -8,6 +8,7 @@ Nothing here downloads a model or writes anywhere except one probe file in each 
 """
 
 import hashlib
+import importlib.metadata
 import importlib.util
 import os
 import shutil
@@ -89,7 +90,16 @@ def check_packages(report):
     paddle = importlib.util.find_spec("paddleocr") is not None
     rapid = importlib.util.find_spec("rapidocr_onnxruntime") is not None
     pinned = (Config.OCR_BACKEND or "auto").lower()
-    if pinned == "paddle" and not paddle or pinned == "rapidocr" and not rapid:
+    paddle_version = importlib.metadata.version("paddleocr") if paddle else ""
+    if paddle and int(paddle_version.split(".")[0]) < 3:
+        # The 2.x constructor arguments raise in 3.x and the other way round; the reader is 3.x.
+        report.add(FAIL, "python", f"paddleocr {paddle_version} is installed, the OCR stage needs "
+                                   "3.x: pip install 'paddleocr>=3'")
+    elif paddle and importlib.util.find_spec("paddle") is None:
+        report.add(FAIL if pinned == "paddle" else WARN, "python",
+                   "paddleocr is installed without paddlepaddle, so OCR falls back to rapidocr: "
+                   "install paddlepaddle-gpu for this CUDA version")
+    elif pinned == "paddle" and not paddle or pinned == "rapidocr" and not rapid:
         report.add(FAIL, "python", f"CLIMB_OCR_BACKEND={pinned} but it is not installed")
     elif not (paddle or rapid):
         report.add(FAIL, "python", "no OCR backend: pip install rapidocr-onnxruntime")
