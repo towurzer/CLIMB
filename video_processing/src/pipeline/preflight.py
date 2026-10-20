@@ -145,8 +145,10 @@ def _reachable(repo) -> bool:
 def check_models(report):
     if importlib.util.find_spec("huggingface_hub") is None:
         return
-    repos = {"embed": Config.KIS_MODEL_NAME, "caption": Config.CAPTION_MODEL,
+    repos = {"embed": Config.KIS_CPU_MODEL_NAME, "caption": Config.CAPTION_MODEL,
              "embed-text": Config.TEXT_MODEL}
+    if Config.KIS_MODEL_NAME != Config.KIS_CPU_MODEL_NAME:
+        repos["embed (GPU search)"] = Config.KIS_MODEL_NAME
     try:
         from faster_whisper.utils import _MODELS
         repos["asr"] = _MODELS.get(Config.ASR_MODEL, Config.ASR_MODEL)
@@ -359,7 +361,8 @@ def check_database(report) -> tuple:
         with conn.cursor() as cur:
             cur.execute("SELECT name FROM embedding_model;")
             registered = {r[0] for r in cur.fetchall()}
-            for setting, model in (("KIS_MODEL_NAME", conf.KIS_MODEL_NAME),
+            for setting, model in (("CLIMB_EMBED_MODEL", conf.KIS_MODEL_NAME),
+                                   ("CLIMB_EMBED_MODEL_CPU", conf.KIS_CPU_MODEL_NAME),
                                    ("CLIMB_TEXT_MODEL", conf.TEXT_MODEL)):
                 if model not in registered:
                     report.add(FAIL, "database", f"{setting}={model} is not in embedding_model; "
@@ -368,12 +371,41 @@ def check_database(report) -> tuple:
             videos, hours = cur.fetchone()
         report.add(OK, "database", f"{conf.db_host}:{conf.db_port}/{conf.db_name}, schema "
                                    f"current, {videos:,} videos ingested")
+        _check_visual_vectors(report, conn, conf)
         hours = float(hours) or None
     finally:
         conn.close()
 
     _check_container_shm(report, conf)
     return videos, hours
+
+
+def _check_visual_vectors(report, conn, conf):
+    """How far each visual model has got, and which one a search on this machine uses."""
+    from pipeline.embed import vector_counts
+    from retrieval.engine import choose_visual_model
+
+    counts, keyframes = vector_counts(conn)
+    if not keyframes:
+        return
+    models = conf.embed_models()
+    report.add(OK, "database", "keyframe vectors: " + ", ".join(
+        f"{name} {counts.get(name, 0):,}" for name in models) + f" of {keyframes:,}")
+    for name in models:
+        if counts.get(name, 0) < keyframes:
+            report.add(WARN, "database", f"{keyframes - counts.get(name, 0):,} keyframe(s) have no "
+                                         f"{name} vector yet: python main.py embed")
+
+    try:
+        from pipeline import device
+        dev = device.pick_device()
+    except ImportError:
+        return
+    preferred = conf.search_model(dev)
+    other = next((m for m in models if m != preferred), preferred)
+    visual, warning = choose_visual_model(preferred, other, counts, keyframes)
+    report.add(WARN if warning else OK, "database",
+               f"search here ({dev}) uses {visual}" + (f": {warning}" if warning else ""))
 
 
 def _check_container_shm(report, conf):

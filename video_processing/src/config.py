@@ -12,9 +12,14 @@ load_dotenv(PROJECT_ROOT / ".env")
 @dataclass
 class Config:
     # --- KIS Model parameters ---
-    # The model a search embeds its query with must be the one that embedded the keyframes, so a
-    # machine searching a database embedded with another model sets this to match.
-    KIS_MODEL_NAME: str = os.getenv("CLIMB_EMBED_MODEL") or "google/siglip2-giant-opt-patch16-384"
+    # The visual model for machines with a GPU and the one for machines without. Both default to
+    # SigLIP2 large, so `embed` embeds once and every machine searches with large. Naming a bigger
+    # model in CLIMB_EMBED_MODEL adds a second pass after large, and machines with a GPU then
+    # search with it (see search_model): the text tower runs on every query, which a CPU machine
+    # keeps doing with large.
+    KIS_MODEL_NAME: str = os.getenv("CLIMB_EMBED_MODEL") or "google/siglip2-large-patch16-384"
+    KIS_CPU_MODEL_NAME: str = (os.getenv("CLIMB_EMBED_MODEL_CPU")
+                               or "google/siglip2-large-patch16-384")
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("CLIMB_EMBED_BATCH") or 16)
     SEARCH_TOP_K: int = 48
 
@@ -133,6 +138,17 @@ class Config:
 
     # --- Per-collection visual models ---
     COLLECTION_MODELS_RAW: str = os.getenv("CLIMB_COLLECTION_MODELS") or ""
+
+    def embed_models(self) -> list:
+        """
+        The visual models `embed` embeds with, each once. The CPU one goes first: every machine
+        can search with it, so a run stopped during the second pass still leaves one complete.
+        """
+        return list(dict.fromkeys([self.KIS_CPU_MODEL_NAME, self.KIS_MODEL_NAME]))
+
+    def search_model(self, dev: str) -> str:
+        """The visual model a search on this device prefers (see choose_visual_model)."""
+        return self.KIS_CPU_MODEL_NAME if dev == "cpu" else self.KIS_MODEL_NAME
 
     def collection_models(self) -> dict:
         mapping = {}

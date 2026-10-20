@@ -50,6 +50,13 @@ INSERT_EMBEDDINGS = """
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
 
+COUNT_VECTORS = """
+    SELECT m.name, count(*)
+    FROM keyframe_embedding e
+             JOIN embedding_model m USING (model_id)
+    GROUP BY m.name;
+"""
+
 
 @dataclass
 class EmbedResult:
@@ -104,11 +111,36 @@ def resolve_model(conn, model_name: str):
     return row
 
 
+def vector_counts(conn) -> tuple:
+    """({model name: keyframes with a vector from it}, keyframes in total)."""
+    with conn.cursor() as cur:
+        cur.execute(COUNT_VECTORS)
+        counts = dict(cur.fetchall())
+        cur.execute("SELECT count(*) FROM keyframes;")
+        return counts, cur.fetchone()[0]
+
+
 def embed_pending(conn, model_name=None, collection=None, batch_size=None, limit=None,
                   shard=0, shards=1, prefer_device=None) -> EmbedResult:
+    """
+    Embeds the pending keyframes with `model_name`, or with every model in
+    Config.embed_models() when it is None, one after the other. `limit` applies to each model.
+    """
+    models = [model_name] if model_name else Config().embed_models()
+    total = EmbedResult()
+    for name in models:
+        result = _embed_with(conn, name, collection, batch_size, limit, shard, shards,
+                             prefer_device)
+        total.embedded += result.embedded
+        total.skipped += result.skipped
+        total.batches += result.batches
+    return total
+
+
+def _embed_with(conn, model_name, collection, batch_size, limit, shard, shards,
+                prefer_device) -> EmbedResult:
     conf = Config()
     logger = custom_logger.get_logger("embed")
-    model_name = model_name or conf.KIS_MODEL_NAME
     batch_size = batch_size or conf.EMBEDDING_BATCH_SIZE
 
     model_id, registered_name, dims = resolve_model(conn, model_name)

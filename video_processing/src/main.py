@@ -91,7 +91,11 @@ def build_parser():
     add_common(sub.add_parser("ingest-shots", help="probe videos, load their scenes and info"))
     add_common(sub.add_parser("decode", help="one FFmpeg pass: candidate frames and audio"))
     add_common(sub.add_parser("select", help="pick keyframes and write images"))
-    add_common(sub.add_parser("embed", help="SigLIP2 vectors (GPU)"), sharded=True, limit="keyframes")
+    embed = add_common(sub.add_parser("embed", help="SigLIP2 vectors (GPU)"), sharded=True,
+                       limit="keyframes, per model")
+    embed.add_argument("--model", default=None,
+                       help="embed with this model only (default: CLIMB_EMBED_MODEL_CPU, then "
+                            "CLIMB_EMBED_MODEL)")
     add_common(sub.add_parser("asr", help="Whisper transcripts (GPU)"), sharded=True)
     add_common(sub.add_parser("embed-text", help="embed transcripts, captions and video info (GPU)"),
                sharded=True)
@@ -168,7 +172,8 @@ def dispatch(args, conn=None):
     elif args.command == "select":
         select_from_database(conn, collection=collection, limit=limit)
     elif args.command == "embed":
-        embed_pending(conn, collection=collection, limit=limit, shard=shard, shards=shards)
+        embed_pending(conn, model_name=getattr(args, "model", None), collection=collection,
+                      limit=limit, shard=shard, shards=shards)
     elif args.command == "ocr":
         ocr_pending(conn, collection=collection, limit=limit, shard=shard, shards=shards, scope=scope)
     elif args.command == "caption":

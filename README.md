@@ -353,7 +353,7 @@ this is just the order.
    python main.py migrate
    python main.py check          # fix every FAIL before going on
    python main.py run            # ingest + decode/select/purge in batches, CPU only
-   python main.py embed
+   python main.py embed          # SigLIP2 large; 1.7 says how to add a bigger model
    python main.py ocr
    python main.py caption
    python main.py asr
@@ -728,9 +728,37 @@ python main.py caption       # a sentence describing each shot
 python main.py asr           # Whisper transcripts of the speech
 ```
 
-**Embeddings** encode each keyframe into a 1536-dimensional vector (SigLIP2 giant, `CLIMB_EMBED_MODEL`), so a search
-query can be encoded into the same space and answered with a nearest-neighbour lookup. This is the one that matters
-most.
+**Embeddings** encode each keyframe into a 1024-dimensional vector with SigLIP2 large, so a search query can be encoded
+into the same space and answered with a nearest-neighbour lookup. This is the one that matters most.
+
+Large is the model on every machine, the CPU-only laptop included, because every query goes through the model's text
+tower. The bigger SigLIP2 models are not worth their embed time here. From the SigLIP2 paper (Table 1), text-to-image
+recall@1:
+
+| Model  | COCO | Flickr | Compute per keyframe |
+|--------|------|--------|----------------------|
+| large  | 55.3 | 85.0   | 0.36 TFLOP           |
+| so400m | 56.0 | 85.3   | 0.49 TFLOP           |
+| giant  | 56.1 | 86.0   | 1.34 TFLOP           |
+
+One point at rank 1 in a gallery of 5,000 images, while what counts at VBS is the target landing on the first pages
+out of millions. And a second model costs more than its compute suggests: every keyframe spends ~4.7 ms on the CPU
+being decoded and preprocessed before the GPU sees it (measured on the laptop), whichever model it is for, so a second
+pass roughly doubles the embed time.
+
+**If there is GPU time to spare**, a second model for the machines with a GPU is one line in `.env`:
+
+```text
+CLIMB_EMBED_MODEL=google/siglip2-so400m-patch16-384
+```
+
+`embed` then embeds with large first and so400m after it, and search picks by hardware: so400m on a GPU, large on CPU.
+A model only counts once it has a vector for every keyframe, so a so400m pass that is still running, or was stopped,
+changes nothing: every machine keeps searching with large (with a warning in the log). `main.py check` says which model
+this machine searches with, and `embed --model <name>` runs one of them on its own. Dropping it again is deleting the
+line; to get the space back, `DELETE FROM keyframe_embedding WHERE model_id = 3;` (3 is so400m, see
+`migrations/010_so400m.sql`), before `index build`, or it builds an index over them too.
+
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
 **OCR, captions and transcripts** exist because embeddings are vague where text is exact. If a hint says the shop sign
