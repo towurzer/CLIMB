@@ -110,7 +110,7 @@ module.exports = {
     /**
      * Every clip of the recordings the given clips belong to.
      *
-     * An MVK dive is cut into 10-40 s clips, and a teammate's correct hit in one clip covers the
+     * An MVK dive is cut into clips (median 27 s, up to 5 min), and a teammate's correct hit in one clip covers the
      * whole dive, not just that clip. The AVS service only knows clips, so the widening happens
      * here, on the way to the frontend. If the lookup fails the clips come back unchanged: dimming
      * too little is better than the session view breaking.

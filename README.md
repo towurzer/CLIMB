@@ -359,7 +359,10 @@ For whoever is kind enough to run this somewhere with GPUs. Everything below is 
 this is just the order.
 
 1. **Install.** Python 3.13 or older (PaddleOCR has no wheel for 3.14 and OCR quietly falls back to a worse engine),
-   `pip install -r requirements.txt`, and FFmpeg with the `libopus` encoder.
+   `pip install -r requirements.txt`, and FFmpeg with the `libopus` encoder. On Python ≤ 3.13 the requirements bring
+   `paddleocr`; the Paddle runtime for the GPU is not on PyPI, so it is one more line:
+   `pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/` (pick the `cuXXX`
+   that matches the driver, cu118 / cu126 / cu129 / cu130 exist). `main.py check` warns if it is missing.
 2. **Database.** `python main.py schema` prints the podman command. Keep the `--shm-size=8g` in it, without it the
    index build at the end crawls.
 3. **`.env`** in the repo root: the `POSTGRES_*` / `DB_*` lines from "Environment Variables", plus
@@ -375,7 +378,7 @@ this is just the order.
    python main.py migrate
    python main.py check          # fix every FAIL before going on
    python main.py run            # ingest + decode/select/purge in batches, CPU only
-   python main.py embed
+   python main.py embed          # SigLIP2 large; 1.7 says how to add a bigger model
    python main.py ocr
    python main.py caption
    python main.py asr
@@ -406,14 +409,20 @@ Two things that are easy to lose an evening to:
   `Unrecognized image processor`, which sends you hunting through the model repo instead of the venv. It is pinned to
   `0.27.1` because that is the version that matches `torch==2.12.1`; a bare `pip install torchvision` will happily
   upgrade torch to 2.13.0 behind your back.
-- **PaddleOCR needs Python ≤ 3.13.** There is no `paddlepaddle` wheel for 3.14 at all, so on a 3.14 venv OCR falls
-  back to `rapidocr-onnxruntime` automatically. `CLIMB_OCR_BACKEND` forces the issue either way
-  (`auto` / `paddle` / `rapidocr`); the interface is the same.
+- **PaddleOCR needs Python ≤ 3.13 and paddleocr 3.x.** There is no `paddlepaddle` wheel for 3.14 at all, so on a
+  3.14 venv OCR falls back to `rapidocr-onnxruntime` automatically, which runs the older PP-OCRv3 models.
+  `CLIMB_OCR_BACKEND` forces the issue either way (`auto` / `paddle` / `rapidocr`); the interface is the same.
+  paddleocr 3 renamed its arguments and rejects the 2.x ones with `Unknown argument: use_gpu`, so a 2.x install is a
+  FAIL in `main.py check` rather than a surprise at the start of the OCR stage. paddleocr wants `numpy<2.4` and
+  `PyYAML==6.0.2`, so below 3.14 `requirements.txt` pins those lower. It also brings `opencv-contrib-python==4.10.0.84`
+  while rapidocr brings `opencv-python`, and both install `cv2` over each other, so `opencv-python` is pinned to the
+  same 4.10 there.
 
 In case you prefer using a conda environment run
 ```bash:
 conda env create -n climb -f conda_environment.yml
 ```
+from `video_processing`. It is Python 3.13 plus the same `requirements.txt`, so the two cannot drift apart.
 
 All steps can be done by running ```main.py``` with the respective options. In order to have the correct relative paths
 please run
@@ -745,8 +754,37 @@ python main.py caption       # a sentence describing each shot
 python main.py asr           # Whisper transcripts of the speech
 ```
 
-**Embeddings** encode each keyframe into a 1024-dimensional vector, so a search query can be encoded into the same space
-and answered with a nearest-neighbour lookup. This is the one that matters most.
+**Embeddings** encode each keyframe into a 1024-dimensional vector with SigLIP2 large, so a search query can be encoded
+into the same space and answered with a nearest-neighbour lookup. This is the one that matters most.
+
+Large is the model on every machine, the CPU-only laptop included, because every query goes through the model's text
+tower. The bigger SigLIP2 models are not worth their embed time here. From the SigLIP2 paper (Table 1), text-to-image
+recall@1:
+
+| Model  | COCO | Flickr | Compute per keyframe |
+|--------|------|--------|----------------------|
+| large  | 55.3 | 85.0   | 0.36 TFLOP           |
+| so400m | 56.0 | 85.3   | 0.49 TFLOP           |
+| giant  | 56.1 | 86.0   | 1.34 TFLOP           |
+
+One point at rank 1 in a gallery of 5,000 images, while what counts at VBS is the target landing on the first pages
+out of millions. And a second model costs more than its compute suggests: every keyframe spends ~4.7 ms on the CPU
+being decoded and preprocessed before the GPU sees it (measured on the laptop), whichever model it is for, so a second
+pass roughly doubles the embed time.
+
+**If there is GPU time to spare**, a second model for the machines with a GPU is one line in `.env`:
+
+```text
+CLIMB_EMBED_MODEL=google/siglip2-so400m-patch16-384
+```
+
+`embed` then embeds with large first and so400m after it, and search picks by hardware: so400m on a GPU, large on CPU.
+A model only counts once it has a vector for every keyframe, so a so400m pass that is still running, or was stopped,
+changes nothing: every machine keeps searching with large (with a warning in the log). `main.py check` says which model
+this machine searches with, and `embed --model <name>` runs one of them on its own. Dropping it again is deleting the
+line; to get the space back, `DELETE FROM keyframe_embedding WHERE model_id = 3;` (3 is so400m, see
+`migrations/010_so400m.sql`), before `index build`, or it builds an index over them too.
+
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
 **OCR, captions and transcripts** exist because embeddings are vague where text is exact. If a hint says the shop sign
@@ -765,12 +803,18 @@ full-resolution photo. Our keyframes are 480x270, so that means 13 crops of 512x
 *upscale* of a piece of an already-small picture, for detail that was never in there. It costs 5.3x
 (17.57 s/shot versus 3.34) and buys nothing; the untiled captions were if anything slightly better, since the untiled
 one mentioned on-screen text the tiled one missed. `CLIMB_CAPTION_IMAGE_SPLITTING` defaults to off for exactly this
-reason. Qwen2-VL does not tile and is unaffected.
+reason. The Qwen VLMs do not tile and are unaffected.
 
 Which model you point at it is `CLIMB_CAPTION_MODEL`. Measured on 12 CPU cores over the full 200-video set:
 **SmolVLM-256M at 1.9-2.1 s/shot, Qwen2-VL-2B at ~13 s/shot.** SmolVLM is roughly 6x cheaper despite being the one
 you would expect to be worse , but only after the tiling fix above. Before it, the 256M model was the *more*
 expensive of the two despite having eight times fewer parameters, which is a fun thing to discover at 2am.
+
+Those were CPU numbers for picking something the laptop could live with. The default is now **Qwen3-VL-4B**, chosen
+for the GPU server: captions are written once and only their text is searched, so a bigger model costs server time
+and nothing at search time. 4B rather than 8B because on Qwen's own benchmarks 2B to 4B gains 7-11 points on general
+image understanding (MMStar 58.3 to 69.8, RealWorldQA 63.9 to 70.9) and 4B to 8B about one (70.9, 71.5), for twice
+the GPU time per caption. It does not fit the laptop: 4.4B parameters are ~18 GB in the fp32 the CPU path runs in.
 
 **Text embeddings** are the fourth-and-a-half stage:
 
@@ -903,6 +947,26 @@ frame could earn a bonus an MVK frame never can. That is why Info follows the da
 picking anything else (including "All datasets", the start) unticks it. After that the tickbox is yours to flip until
 the next dataset switch.
 
+**ASR** follows the dropdown the same way, the other way round: picking MVK unticks it, everything else ticks it.
+MVK is filmed underwater, nobody talks, and Whisper fills the regulator noise with things it has heard a lot of:
+"Thank you.", "Продолжение следует..." ("to be continued"), "We'll see you next time." Every one of the 36 segments it
+found in 78 MVK clips was invented, and they still matched queries: "fish on a coral reef" ranked a clip third on the
+strength of a transcript that said "You".
+
+Those segments are now caught when they are transcribed (`flag_hallucinations` in `pipeline/asr.py`), and a caught
+segment is neither embedded nor searched. The tell is not the words but the silence around them: "Thank you." in the
+middle of a conversation is somebody saying thank you, "Thank you." with no other speech within 30 seconds is Whisper
+filling regulator noise. So a segment is dropped when it is one of the phrases Whisper is known to make up (the list
+is `ASR_HALLUCINATION_PHRASES` in `config.py`) and isolated, when it is isolated and Whisper was unsure of it (mean
+log probability below -0.8), when it has no letter or digit in it ("..."), or when it is a repetition loop
+(compression ratio above 2.4, Whisper's own cut-off). On a probe over 61 MVK clips and 14 V3C videos that dropped all
+26 invented MVK segments and 8 of 1,097 V3C ones, all of them lone "You" / "Music" or "...". Whisper's
+`no_speech_prob`, the obvious candidate, was 0.0 for every single segment, which is why it is stored but not used.
+
+The values stay in the database next to the flag, so a changed threshold or phrase is `python main.py asr
+--reclassify` (seconds) rather than another transcription (days), followed by `embed-text` if anything came back.
+The tickbox still starts unticked for MVK: the full collection is 3,190 clips, and the probe saw 61.
+
 This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
 match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the
 lexical pass falls back to ORing every content word, so `a snowboarder doing a backflip` goes hunting for scenes whose
@@ -967,8 +1031,9 @@ stage: `(d120)` and `(120)` are both 120 seconds, `(d500ms)` is half a second, a
 The splitting is quote-aware, so `text:"a >> b"` stays one phrase rather than becoming a sequence. An empty stage is
 not a stage either , `A >>` is just a search for A, not a sequence missing its second half.
 
-MVK recordings count as one video here too: an MVK dive is cut into 10-40 second clips, so `a turtle >> a diver` links
-across clip boundaries on the recording's own clock, and the result still points at the right clip for DRES.
+MVK recordings count as one video here too: an MVK dive is cut into clips (median 27 seconds, a few up to 5
+minutes), so `a turtle >> a diver` links across clip boundaries on the recording's own clock, and the result still
+points at the right clip for DRES.
 
 Interesting to know is: 
 

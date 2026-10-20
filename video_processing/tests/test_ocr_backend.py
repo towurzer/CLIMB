@@ -2,9 +2,9 @@
 The OCR backend adapters.
 
 Both engines are wrapped so `ocr_pending` never learns which one it got. The shapes they return
-are genuinely different -- paddle nests lines inside pages and gives a float confidence, rapidocr
-returns a flat list, `None` instead of an empty one, and a confidence as a *string* -- so the
-adapters are exactly where a silent failure would live.
+are genuinely different -- paddle returns one result per image holding parallel text and
+confidence lists, rapidocr returns a flat list, `None` instead of an empty one, and a confidence
+as a *string* -- so the adapters are exactly where a silent failure would live.
 
 The engines themselves are faked here: this is about the translation, and neither model belongs in
 a unit test. The real engines are exercised by the smoke test.
@@ -25,7 +25,7 @@ class FakeReader:
 
 def paddle_reader(pages):
     reader = object.__new__(PaddleReader)
-    reader._engine = type("E", (), {"ocr": lambda self, path, cls=True: pages})()
+    reader._engine = type("E", (), {"predict": lambda self, path: pages})()
     return reader
 
 
@@ -70,17 +70,17 @@ def test_surrounding_whitespace_is_stripped():
 
 # --- the paddle adapter --------------------------------------------------------------------------
 
-def test_paddle_pages_are_flattened():
-    pages = [[[[0, 0], ("HELLO", 0.9)], [[0, 0], ("WORLD", 0.8)]]]
+def test_paddle_texts_and_scores_are_paired():
+    pages = [{"rec_texts": ["HELLO", "WORLD"], "rec_scores": [0.9, 0.8], "rec_polys": []}]
     assert paddle_reader(pages).read("x") == [("HELLO", 0.9), ("WORLD", 0.8)]
+
+
+def test_paddle_frame_without_text_is_no_lines():
+    assert paddle_reader([{"rec_texts": [], "rec_scores": []}]).read("x") == []
 
 
 def test_paddle_none_result_is_no_lines():
     assert paddle_reader(None).read("x") == []
-
-
-def test_paddle_none_page_is_skipped():
-    assert paddle_reader([None]).read("x") == []
 
 
 # --- the rapidocr adapter ------------------------------------------------------------------------

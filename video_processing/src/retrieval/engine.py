@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import custom_logger
 from config import Config
 from pipeline import device
+from pipeline.embed import vector_counts
 from retrieval import fusion, query_parser, retrievers, temporal
 from retrieval.retrievers import Scope
 
@@ -98,7 +99,7 @@ ENRICH = """
 # enriching a whole stage is work thrown away: linking reads video_id, ts_ms, scene_id and score,
 # never the filmstrip.
 #
-# Linked per recording, on the recording's clock: an MVK dive is one recording cut into 10-40 s
+# Linked per recording, on the recording's clock: an MVK dive is one recording cut into short
 # clips, and `A >> B` should not stop at a clip boundary. For everything else the recording is the
 # video and the offset is 0.
 LINK_ROWS = """
@@ -149,6 +150,26 @@ class SearchResult:
     filters: list = None
 
 
+def choose_visual_model(preferred, other, counts, keyframes):
+    """
+    The visual model to search with, and a warning when it is not simply the preferred one.
+
+    `preferred` is the model for this machine's hardware, `other` the second one `embed` embeds
+    with, `counts` how many keyframes have a vector from each, out of `keyframes`. A model only
+    finds the keyframes it has vectors for, so one that covers all of them wins: a second pass
+    stopped half way must not be what the GPU machines search with.
+    """
+    have = {name: counts.get(name, 0) for name in (preferred, other)}
+    if have[preferred] >= keyframes:
+        return preferred, None
+    if other != preferred and have[other] >= keyframes:
+        return other, (f"{preferred} has vectors for {have[preferred]:,} of {keyframes:,} "
+                       f"keyframes, searching with {other}")
+    best = max((preferred, other), key=lambda name: have[name])
+    return best, (f"no visual model has vectors for all {keyframes:,} keyframes, searching with "
+                  f"{best} ({have[best]:,})")
+
+
 class SearchEngine:
     """
     Holds the query-side models.
@@ -181,6 +202,7 @@ class SearchEngine:
         with self.conn.cursor() as cur:
             cur.execute(SELECT_MODEL, (name,))
             return cur.fetchone()
+
 
     def _load_visual(self, model_name):
         """Loads a visual model's text tower, or None when it is not registered."""
@@ -215,23 +237,29 @@ class SearchEngine:
     def _load_models(self):
         from transformers import AutoModel, AutoTokenizer
 
-        self.visual_model = self._load_visual(self.conf.KIS_MODEL_NAME)
+        counts, keyframes = vector_counts(self.conn)
+        preferred = self.conf.search_model(self.device)
+        other = next((m for m in self.conf.embed_models() if m != preferred), preferred)
+        visual, warning = choose_visual_model(preferred, other, counts, keyframes)
+        if warning:
+            self.logger.warning(warning)
+        self.visual_model = self._load_visual(visual)
 
         # Domain models, one per collection that needs one. Only loaded when the model is both
         # configured and actually registered with embeddings -- otherwise a typo in the env var
         # would silently route a collection at a model that has no vectors, and every search of it
         # would come back empty rather than merely mediocre.
         for collection, model_name in self.conf.collection_models().items():
-            if model_name == self.conf.KIS_MODEL_NAME:
+            if model_name == visual:
                 continue
-            spec = self._load_visual(model_name)
+            spec = self._load_visual(model_name) if counts.get(model_name) else None
             if spec:
                 self.collection_models[collection.upper()] = spec
                 self.logger.info(f"{collection}: routed to {model_name}")
             else:
                 self.logger.warning(
-                    f"{collection}: '{model_name}' is not registered in embedding_model, "
-                    f"falling back to {self.conf.KIS_MODEL_NAME}")
+                    f"{collection}: '{model_name}' is not registered in embedding_model or has "
+                    f"no keyframe vectors, falling back to {visual}")
 
         text = self._resolve(self.conf.TEXT_MODEL)
         if text:

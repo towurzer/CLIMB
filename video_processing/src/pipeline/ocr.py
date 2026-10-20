@@ -6,9 +6,9 @@ resolves hints SigLIP2 cannot express at all.
 
 Scope is Config.OCR_SCOPE. 'all' (default) reads every keyframe; 'shot' only the first of each
 
-The engine is pluggable (Config.OCR_BACKEND). Both backends run the same PP-OCR models; paddle is
-the better of the two, but it needs a `paddlepaddle` wheel that does
-not exist for every interpreter, so rapidocr-onnxruntime is the portable fallback.
+The engine is pluggable (Config.OCR_BACKEND). paddle (paddleocr 3.x, PP-OCRv6) is the better of
+the two, but it needs a `paddlepaddle` wheel that does not exist for every interpreter, so
+rapidocr-onnxruntime (PP-OCRv3 models, CPU only) is the portable fallback.
 """
 
 from dataclasses import dataclass
@@ -65,24 +65,38 @@ class PaddleReader:
     """
 
     def __init__(self, dev: str):
+        # paddleocr imports fine without the paddlepaddle runtime and only fails once it builds
+        # the pipeline, with a RuntimeError. Importing paddle first makes that the ImportError
+        # load_reader falls back on.
+        import paddle  # noqa: F401
         from paddleocr import PaddleOCR
-        self._engine = PaddleOCR(use_angle_cls=True, lang="en",
-                                 use_gpu=(dev == "cuda"), show_log=False)
+        # paddleocr 3.x. No `lang`: the default PP-OCRv6 model reads Chinese, Japanese and
+        # English and kept the accent in "Una producción de"; lang="en" reads English only.
+        # Page orientation and unwarping are for scanned documents, so they are off; text line
+        # orientation is the old use_angle_cls.
+        # Detection runs on the frame scaled so its short side is OCR_DET_MIN_SIDE. On 480x270
+        # keyframes at their own size it found no text on a title card reading "SREBRENITSA" and
+        # missed a URL in the credits; at 736 (rapidocr's default) it read both.
+        # oneDNN is off: on CPU, paddlepaddle 3.3.1 with it fails on the first frame with
+        # "NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support". It does
+        # nothing on GPU.
+        self._engine = PaddleOCR(device="gpu" if dev == "cuda" else "cpu", enable_mkldnn=False,
+                                 text_det_limit_type="min",
+                                 text_det_limit_side_len=Config.OCR_DET_MIN_SIDE,
+                                 use_doc_orientation_classify=False, use_doc_unwarping=False,
+                                 use_textline_orientation=True)
 
     def read(self, image_path) -> list:
-        result = self._engine.ocr(str(image_path), cls=True)
         lines = []
-        for page in result or []:
-            for line in page or []:
-                # PaddleOCR returns [box, (text, confidence)]
-                if len(line) >= 2 and isinstance(line[1], (list, tuple)) and line[1]:
-                    lines.append((line[1][0], line[1][1]))
+        # One result per input image, each holding parallel lists of texts and confidences.
+        for page in self._engine.predict(str(image_path)) or []:
+            lines.extend(zip(page["rec_texts"], page["rec_scores"]))
         return lines
 
 
 class RapidReader:
     """
-    rapidocr-onnxruntime: the same PP-OCR models exported to ONNX, CPU-only, no paddle runtime.
+    rapidocr-onnxruntime: PP-OCRv3 models exported to ONNX, CPU-only, no paddle runtime.
 
     Its models ride along inside the wheel, so unlike paddle there is nothing to download and
     nothing to go stale. Measured here at ~1.6 s/frame.
@@ -129,7 +143,7 @@ def load_reader(dev: str):
     raise ImportError(
         "No OCR backend available. Install one of:\n"
         "  pip install rapidocr-onnxruntime      # CPU, self-contained, works everywhere\n"
-        "  pip install paddleocr paddlepaddle-gpu # better, needs a paddle wheel for this Python"
+        "  pip install paddleocr paddlepaddle-gpu # better, Python <= 3.13, GPU wheel: see README"
     )
 
 
