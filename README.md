@@ -774,9 +774,15 @@ recall@1:
 | giant  | 56.1 | 86.0   | 1.34 TFLOP           |
 
 One point at rank 1 in a gallery of 5,000 images, while what counts at VBS is the target landing on the first pages
-out of millions. And a second model costs more than its compute suggests: every keyframe spends ~4.7 ms on the CPU
-being decoded and preprocessed before the GPU sees it (measured on the laptop), whichever model it is for, so a second
-pass roughly doubles the embed time.
+out of millions. And a second model is a second pass over every keyframe: so400m on top of large is about 2.4 times
+the compute of large alone.
+
+Keyframes are read ahead: `CLIMB_EMBED_LOADERS` threads (4) decode the next batches while the model works on this one,
+and the image processor resizes and normalises them on the model's device. Done one after the other, that took ~4.7 ms
+per keyframe on the laptop and capped the stage at about 160 keyframes/s whatever the GPU. Decoding alone runs at
+~1,300 keyframes/s in four threads, the processor gives the same pixel values on decoded frames as on PIL images, and
+what is left on the main thread, turning vectors into text and inserting them, is about 1 ms per keyframe. How fast it
+is on the server's GPU is still to be measured, on the trial run.
 
 **If there is GPU time to spare**, a second model for the machines with a GPU is one line in `.env`:
 

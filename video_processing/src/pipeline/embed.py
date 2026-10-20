@@ -5,8 +5,15 @@ Work is found by "keyframes with no row in keyframe_embedding for this model", w
 stage naturally resumable and idempotent. Multi-host sharding is `mod(keyframe_id, shards)`:
 deterministic, needs no coordination and no claims table, so multiple GPUs can be pointed at the
 same database and will not collide.
+
+Reading keyframes off disk overlaps with the model: CLIMB_EMBED_LOADERS threads decode the next
+batches while this one is embedded, and resizing and normalising happens in the image processor on
+the model's device. Done one after the other, decoding and preprocessing alone capped the stage at
+about 160 keyframes/s on the laptop, whatever the GPU.
 """
 
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import custom_logger
@@ -26,6 +33,7 @@ SELECT_PENDING = """
                         AND e.model_id = %(model_id)s)
       AND (%(collection)s IS NULL OR v.collection = %(collection)s)
       AND mod(k.keyframe_id, %(shards)s) = %(shard)s
+      AND k.keyframe_id > %(after)s
     ORDER BY k.keyframe_id
     LIMIT %(limit)s;
 """
@@ -66,7 +74,8 @@ class EmbedResult:
 
 
 def to_pgvector(values) -> str:
-    return "[" + ",".join(f"{v:.6f}" for v in values) + "]"
+    # tolist() first: formatting Python floats is 1.6x faster than numpy scalars, same text.
+    return "[" + ",".join(f"{v:.6f}" for v in values.tolist()) + "]"
 
 
 def load_model(model_name: str, dev: str):
@@ -89,10 +98,37 @@ def load_model(model_name: str, dev: str):
     return processor, vision
 
 
+def decode_keyframe(path):
+    """
+    A keyframe as a uint8 (channels, height, width) tensor, for the image processor to resize and
+    normalise. Gives the same pixel values as handing it the PIL image, and leaves the work that
+    holds the GIL to the device; decoding alone runs in parallel threads.
+    """
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return torch.from_numpy(np.array(image.convert("RGB"))).permute(2, 0, 1)
+
+
+def _load_batch(rows):
+    """(keyframe ids, images, [(keyframe id, path, error)]) for one batch of pending rows."""
+    ids, images, failed = [], [], []
+    for keyframe_id, video_id, shot_index, kf_index in rows:
+        path = paths.keyframe_path(video_id, shot_index, kf_index)
+        try:
+            images.append(decode_keyframe(path))
+            ids.append(keyframe_id)
+        except Exception as e:
+            failed.append((keyframe_id, path, e))
+    return ids, images, failed
+
+
 def embed_images(images, processor, vision, dev):
     import torch
 
-    inputs = processor(images=images, return_tensors="pt").to(dev)
+    inputs = processor(images=images, return_tensors="pt", device=dev).to(dev)
     with torch.no_grad():
         features = vision(**inputs).pooler_output
         features = features / features.norm(p=2, dim=-1, keepdim=True)
@@ -163,30 +199,42 @@ def _embed_with(conn, model_name, collection, batch_size, limit, shard, shards,
 
     processor, vision = load_model(registered_name, dev)
     result = EmbedResult()
-    remaining = limit if limit else pending
     progress_total = min(pending, limit) if limit else pending
+    loaders = max(1, conf.EMBED_LOADERS)
 
-    with tqdm(total=progress_total, desc="Embedding keyframes", unit="keyframe") as progress:
-        while remaining > 0:
-            take = min(batch_size, remaining)
-            with conn.cursor() as cur:
-                cur.execute(SELECT_PENDING, {**params, "limit": take})
-                rows = cur.fetchall()
-            if not rows:
-                break
+    # Pending rows are read in keyframe_id order from where the last batch ended, not re-queried
+    # from the start. The next batches are read and decoding before this one is written, so a
+    # fresh query would hand them out twice; and a keyframe whose file is missing is still
+    # pending, so a fresh query also returned it first every time, and a run of them filling a
+    # batch stalled the stage.
+    after, taken = -1, 0
+    in_flight = deque()
 
-            images, ids = [], []
-            for keyframe_id, video_id, shot_index, kf_index in rows:
-                path = paths.keyframe_path(video_id, shot_index, kf_index)
-                try:
-                    from PIL import Image
-                    images.append(Image.open(path).convert("RGB"))
-                    ids.append(keyframe_id)
-                except Exception as e:
-                    # A missing keyframe file must not stall the stage; it stays pending and will be
-                    # picked up again once selection has been re-run for that video.
-                    logger.warning(f"keyframe {keyframe_id}: cannot read {path} ({e})")
-                    result.skipped += 1
+    def submit_next():
+        nonlocal after, taken
+        take = min(batch_size, progress_total - taken)
+        if take <= 0:
+            return
+        with conn.cursor() as cur:
+            cur.execute(SELECT_PENDING, {**params, "after": after, "limit": take})
+            rows = cur.fetchall()
+        if rows:
+            after, taken = rows[-1][0], taken + len(rows)
+            in_flight.append((len(rows), pool.submit(_load_batch, rows)))
+
+    with ThreadPoolExecutor(loaders, thread_name_prefix="embed-load") as pool, \
+            tqdm(total=progress_total, desc="Embedding keyframes", unit="keyframe") as progress:
+        for _ in range(2 * loaders):
+            submit_next()
+        while in_flight:
+            count, loading = in_flight.popleft()
+            ids, images, failed = loading.result()
+            submit_next()
+            for keyframe_id, path, e in failed:
+                # A missing keyframe file must not stall the stage; it stays pending and will be
+                # picked up again once selection has been re-run for that video.
+                logger.warning(f"keyframe {keyframe_id}: cannot read {path} ({e})")
+            result.skipped += len(failed)
 
             if images:
                 vectors = embed_images(images, processor, vision, dev)
@@ -202,8 +250,7 @@ def _embed_with(conn, model_name, collection, batch_size, limit, shard, shards,
                 result.embedded += len(payload)
                 result.batches += 1
 
-            remaining -= len(rows)
-            progress.update(len(rows))
+            progress.update(count)
 
     logger.info(f"Embedded {result.embedded} keyframe(s), skipped {result.skipped}")
     return result

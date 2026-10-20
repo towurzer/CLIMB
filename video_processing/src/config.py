@@ -21,6 +21,10 @@ class Config:
     KIS_CPU_MODEL_NAME: str = (os.getenv("CLIMB_EMBED_MODEL_CPU")
                                or "google/siglip2-large-patch16-384")
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("CLIMB_EMBED_BATCH") or 16)
+    # Threads decoding the next keyframes while the model works on this batch. On the laptop,
+    # decoding ran at 522 keyframes/s with one thread, 1137 with two, 1310 with four and 1049
+    # with eight.
+    EMBED_LOADERS: int = int(os.getenv("CLIMB_EMBED_LOADERS") or 4)
     SEARCH_TOP_K: int = 48
 
     # --- Decode stage ---
