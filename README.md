@@ -838,6 +838,15 @@ sealer-divider (0.71 of the first page against 0.28), the needle holder and the 
 forceps (0.76 against 0.32) and the fallopian tube (0.42 against 0.02), so for anatomy unticking PeskaVLP is the
 better search. BioCLIP is not measured: MVK has no labels like these.
 
+To repeat it (no database needed), download GynSurg's two segmentation sets:
+[instruments](https://ftp.itec.aau.at/datasets/GynSurge/Semantic_Segmentation_Dataset/GynSurg_Instrument_Dataset.zip),
+2.4 GB, and [anatomy](https://ftp.itec.aau.at/datasets/GynSurge/Semantic_Segmentation_Dataset/GynSurg_Anatomy_Dataset.zip),
+345 MB. They are for research use only and to be cited (Nasirihaghighi et al., ACM MM 2025). Unpack both into one
+folder and run `python main.py eval-gynsurg --data <that folder>`; the queries and mask values are in
+`evaluation/gynsurg.py`. The first run embeds the 1,973 frames, which takes 78 minutes of SigLIP2 and 2 of PeskaVLP
+on the laptop's CPU, so it fits a lunch break. The vectors stay in `CLIMB_WORK_DIR/gynsurg-eval`, so trying other
+queries or weights afterwards takes half a minute.
+
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
 **OCR, captions and transcripts** exist because embeddings are vague where text is exact. If a hint says the shop sign
