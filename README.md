@@ -806,12 +806,13 @@ hysterectomy looks like the web. For those two collections a second model search
 | LHE | PeskaVLP (`camma/peskavlp`, ResNet-50 + Bio_ClinicalBERT) | surgical video lectures and their narration | CC BY-NC-SA 4.0, research only |
 
 Both rank the same keyframes in their own space, and their list fuses with SigLIP2's like any other signal
-(`CLIMB_W_DOMAIN`, 1.0, unmeasured), with its own badge. So "a moray eel in a crevice" is lifted by BioCLIP, "a diver
-with a yellow tank" by SigLIP2, and "a diver photographs a turtle" gets votes from both. They run only when the
-dataset dropdown names their collection (their vectors exist for that collection alone, so in an all-datasets search
-they would only add hits from it), and unticking Visual switches them off with SigLIP2. `embed` embeds each one for
-its own collection, about 85,000 MVK and 150,000 LHE keyframes, 2% of V3C's. `CLIMB_COLLECTION_MODELS=` (empty)
-switches both off.
+(`CLIMB_W_DOMAIN`, 1.0, measured for LHE below), with its own badge. So "a moray eel in a crevice" is lifted by
+BioCLIP, "a diver with a yellow tank" by SigLIP2, and "a diver photographs a turtle" gets votes from both. They run
+only when the dataset dropdown names their collection (their vectors exist for that collection alone, so in an
+all-datasets search they would only add hits from it), and each has its own tickbox, second after Visual and only
+there while its dataset is picked, so SigLIP2 and the dataset's model can each be searched alone. `embed` embeds each
+one for its own collection, about 85,000 MVK and 150,000 LHE keyframes, 2% of V3C's. `CLIMB_COLLECTION_MODELS=`
+(empty) switches both off.
 
 Each model sees the keyframe the way it was trained to, which for both means the centre: BioCLIP takes the middle
 square, PeskaVLP the middle 224 pixels of the frame scaled to 640x360. What they leave out at the edges, SigLIP2 still
@@ -821,8 +822,21 @@ to nothing.
 PeskaVLP is rebuilt from its weights (`pipeline/peskavlp.py`, 495 MB from the University of Strasbourg on first use)
 rather than installed: CAMMA's package pins transformers 4.30.2, numpy < 2 and mmengine 0.7.0, which would uninstall
 half of this pipeline on the way in. The weights load strictly, and the text vectors match their code to a cosine of
-1.0 (`tests/test_domain_models.py`). Neither model has been measured against SigLIP2 here yet; GynSurg's labelled
-gynaecological laparoscopy frames and MSC's biologist-checked descriptions of the dives are what to measure with.
+1.0 (`tests/test_domain_models.py`).
+
+**Measured for LHE** on GynSurg's labelled frames (the same group's gynaecological laparoscopy, 1,248 instrument and
+725 anatomy frames scaled to the 270 lines of the VBS copies, two phrasings per class, a frame relevant when its mask
+holds the class):
+
+| | SigLIP2 | PeskaVLP alone | both, `CLIMB_W_DOMAIN` 0.5 | both, 1.0 | both, 2.0 |
+|---|---|---|---|---|---|
+| 7 instrument classes, average precision / first 48 | 0.334 / 0.42 | 0.337 / 0.46 | 0.370 / 0.45 | **0.376 / 0.51** | 0.367 / 0.49 |
+| 3 anatomy classes | **0.535 / 0.57** | 0.478 / 0.49 | 0.518 / 0.58 | 0.504 / 0.54 | 0.494 / 0.51 |
+
+At the default 1.0, 52% of the first page is relevant against SigLIP2's 46%. PeskaVLP is the one that knows the
+sealer-divider (0.71 of the first page against 0.28), the needle holder and the irrigator; SigLIP2 knows the bipolar
+forceps (0.76 against 0.32) and the fallopian tube (0.42 against 0.02), so for anatomy unticking PeskaVLP is the
+better search. BioCLIP is not measured: MVK has no labels like these.
 
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
@@ -976,7 +990,8 @@ sorting the badges by rank would cheerfully credit the wrong one. Sequence hits 
 
 Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and the first four start ticked. Untick one and
 it is not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
-embedded.
+embedded. MVK and LHE get a sixth, second in line: the dataset's own model, BioCLIP or PeskaVLP (see 1.7), ticked
+whenever that dataset is picked.
 
 **Info** is the odd one out. It matches your words against what the uploader wrote about the whole video (title, tags,
 description, see 1.4.1), so it cannot say *which frame*. Instead of adding frames it re-orders the ones the other
