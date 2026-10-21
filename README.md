@@ -811,8 +811,9 @@ tickbox, second after Visual and only there while LHE is picked, so SigLIP2 and 
 `embed` embeds it for LHE only, about 150,000 keyframes, 1% of V3C's. `CLIMB_COLLECTION_MODELS=` (empty) switches it
 off.
 
-PeskaVLP sees the keyframe the way it was trained to: the middle 224 pixels of the frame scaled to 640x360. What it
-leaves out at the edges, SigLIP2 still sees. On the laptop's CPU its BERT adds next to nothing to a search.
+PeskaVLP sees the whole keyframe, squashed to 224x224. It was trained on the middle 224 pixels of the frame at
+640x360, which is a third of the width, and on GynSurg the whole frame found more (below; migration 015 re-embeds
+from it). On the laptop's CPU its BERT adds next to nothing to a search.
 
 PeskaVLP is rebuilt from its weights (`pipeline/peskavlp.py`, 495 MB from the University of Strasbourg on first use)
 rather than installed: CAMMA's package pins transformers 4.30.2, numpy < 2 and mmengine 0.7.0, which would uninstall
@@ -826,13 +827,16 @@ model's 200 best (`CLIMB_RETRIEVER_DEPTH`):
 
 | | SigLIP2 | PeskaVLP alone | both, `CLIMB_W_DOMAIN` 0.5 | both, 1.0 | both, 2.0 |
 |---|---|---|---|---|---|
-| 7 instrument classes, average precision / first 48 | 0.334 / 0.42 | 0.337 / 0.46 | 0.370 / 0.45 | **0.376 / 0.50** | 0.367 / 0.49 |
-| 3 anatomy classes | **0.535** / 0.57 | 0.478 / 0.49 | 0.518 / **0.59** | 0.504 / 0.55 | 0.494 / 0.52 |
+| 7 instrument classes, average precision / first 48 | 0.334 / 0.42 | 0.409 / 0.55 | 0.391 / 0.45 | 0.414 / 0.53 | **0.426 / 0.56** |
+| 3 anatomy classes | **0.535** / 0.57 | 0.504 / 0.55 | 0.528 / **0.58** | 0.520 / 0.57 | 0.514 / 0.56 |
 
-At the default 1.0, 51% of the first page is relevant against SigLIP2's 46%. PeskaVLP is the one that knows the
-sealer-divider (0.71 of the first page against 0.28), the needle holder and the irrigator; SigLIP2 knows the bipolar
-forceps (0.76 against 0.32) and the fallopian tube (0.42 against 0.02), so for anatomy at the default weight
-unticking PeskaVLP is the better search.
+At the default 1.0, 54% of the first page is relevant against SigLIP2's 46%; 2.0 is not significantly better, and 0.5
+is significantly worse. PeskaVLP is the one that knows the sealer-divider (0.78 of the first page against 0.28), the
+suturing instruments (0.91 against 0.67), the hook and the ovary; SigLIP2 knows the fallopian tube (0.42 against 0.05)
+and the scissors, and fused at 1.0 the two find the bipolar forceps better than either alone (0.83). With the centre
+crop PeskaVLP was trained on, the same table read 0.337 / 0.46 and 0.478 / 0.49 for PeskaVLP alone and 51% fused:
+the whole frame wins on frames cut to LHE's 16:9 at 480x270 too (0.432 against 0.377 average precision), where three
+crops across the frame, averaged, did not.
 
 To repeat it (no database needed), download GynSurg's two segmentation sets:
 [instruments](https://ftp.itec.aau.at/datasets/GynSurge/Semantic_Segmentation_Dataset/GynSurg_Instrument_Dataset.zip),

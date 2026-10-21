@@ -61,15 +61,19 @@ class _Pooled:
         return SimpleNamespace(pooler_output=self.encode(pixel_values))
 
 
+def peskavlp_processor() -> FramePreprocess:
+    """The whole frame, squashed to peskavlp.SIZE square, normalised the way PeskaVLP was trained."""
+    from torchvision.transforms import InterpolationMode
+
+    return FramePreprocess([peskavlp.SIZE, peskavlp.SIZE], peskavlp.SIZE, peskavlp.MEAN,
+                           peskavlp.STD, InterpolationMode.BILINEAR)
+
+
 def load_image_side(name: str, dev: str):
     """(processor, vision) for the embed stage."""
     kind, dtype = family(name), device.pick_dtype(dev)
     if kind == "peskavlp":
-        from torchvision.transforms import InterpolationMode
-
-        processor = FramePreprocess(list(peskavlp.RESIZE), peskavlp.CROP, peskavlp.MEAN,
-                                    peskavlp.STD, InterpolationMode.BILINEAR)
-        return processor, _Pooled(peskavlp.ImageEncoder(dev, dtype))
+        return peskavlp_processor(), _Pooled(peskavlp.ImageEncoder(dev, dtype))
 
     from transformers import AutoModel, AutoProcessor
 

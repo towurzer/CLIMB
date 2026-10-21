@@ -173,8 +173,8 @@ class Config:
                                   if os.getenv("CLIMB_COLLECTION_MODELS") is not None
                                   else "LHE:camma/peskavlp")
     # The domain model's signal in the fusion, next to SigLIP2's RRF_WEIGHT_VISUAL. On GynSurg's
-    # labelled frames 1.0 gave PeskaVLP + SigLIP2 the best first page of 0.25, 0.5, 1 and 2 (README
-    # 1.7).
+    # labelled frames 1.0 gave PeskaVLP + SigLIP2 54% of the first page and 2.0 56%, not
+    # significantly more; 0.5 was significantly worse (README 1.7).
     RRF_WEIGHT_DOMAIN: float = float(os.getenv("CLIMB_W_DOMAIN") or 1.0)
 
     def embed_models(self) -> list:

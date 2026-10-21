@@ -11,7 +11,6 @@ import pytest
 import torch
 import torchvision.transforms as T
 from PIL import Image
-from torchvision.transforms import InterpolationMode
 
 from pipeline import peskavlp, visual_models
 
@@ -27,13 +26,12 @@ def _as_decoded(image):
     return torch.from_numpy(np.array(image)).permute(2, 0, 1)
 
 
-def test_the_peskavlp_preprocessing_matches_its_own_transform():
-    theirs = T.Compose([T.Resize((360, 640)), T.CenterCrop(224), T.ToTensor(),
+def test_peskavlp_sees_the_whole_frame_resized_to_224():
+    """Not their centre crop of 640x360 (peskavlp.SIZE): the whole frame, squashed, normalised as theirs."""
+    theirs = T.Compose([T.Resize((224, 224)), T.ToTensor(),
                         T.Normalize(mean=list(peskavlp.MEAN), std=list(peskavlp.STD))])
-    ours = visual_models.FramePreprocess(list(peskavlp.RESIZE), peskavlp.CROP, peskavlp.MEAN,
-                                         peskavlp.STD, InterpolationMode.BILINEAR)
     image = _frame()
-    pixels = ours(images=[_as_decoded(image)], device="cpu")["pixel_values"]
+    pixels = visual_models.peskavlp_processor()(images=[_as_decoded(image)], device="cpu")["pixel_values"]
     assert tuple(pixels.shape) == (1, 3, 224, 224)
     # PIL and torch resample slightly differently; a channel swap or a missing normalisation would
     # be off by whole units, not hundredths.

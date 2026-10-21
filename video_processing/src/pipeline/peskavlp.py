@@ -24,9 +24,10 @@ WEIGHTS_URL = "https://seafile.unistra.fr/f/65a2b1bf113e428280d0/?dl=1"
 TEXT_MODEL = "emilyalsentzer/Bio_ClinicalBERT"
 TEXT_MAX_TOKENS = 77
 TEXT_LAST_LAYERS = 4
-# Their transform: Resize((360, 640)), CenterCrop(224), ImageNet normalisation.
-RESIZE = (360, 640)
-CROP = 224
+# Their transform: Resize((360, 640)), CenterCrop(224), ImageNet normalisation. CLIMB gives it the
+# whole frame resized to SIZE x SIZE instead: the centre crop is a third of the width, and on
+# GynSurg's labelled frames the whole frame found more (README 1.7).
+SIZE = 224
 MEAN = (0.485, 0.456, 0.406)
 STD = (0.229, 0.224, 0.225)
 
