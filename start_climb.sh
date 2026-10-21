@@ -11,11 +11,21 @@ cleanup() {
             kill "$pid" 2>/dev/null || true
         fi
     done
-    podman stop climb_caching 2>/dev/null
-    podman stop climb 2>/dev/null
+    $CONTAINERS stop "$CACHE_CONTAINER" 2>/dev/null
+    $CONTAINERS stop "$DB_CONTAINER" 2>/dev/null
     echo "All background processes stopped."
     exit 0
 }
+
+# The containers setup_climb.sh created, by the names in .env, with podman or docker
+env_value() {
+    local value
+    value=$(grep -E "^$1=" .env 2>/dev/null | tail -n 1 | cut -d= -f2-)
+    echo "${value:-$2}"
+}
+DB_CONTAINER=$(env_value CLIMB_DB_CONTAINER climb)
+CACHE_CONTAINER=$(env_value CLIMB_CACHE_CONTAINER climb_caching)
+CONTAINERS=$(basename "$(command -v podman || command -v docker || echo podman)")
 
 # Determine Python command
 PYTHON_CMD="python"
@@ -64,10 +74,10 @@ run_in_new_terminal() {
     fi
 }
 
-# Start Podman Containers
-echo "Starting Podman containers..."
-podman start climb_caching 2>/dev/null || echo "Notice: 'climb_caching' container not found or already running."
-podman start climb 2>/dev/null || echo "Notice: 'climb_db' container not found or already running."
+# Start the containers
+echo "Starting the $CONTAINERS containers..."
+$CONTAINERS start "$CACHE_CONTAINER" 2>/dev/null || echo "Notice: '$CACHE_CONTAINER' container not found or already running."
+$CONTAINERS start "$DB_CONTAINER" 2>/dev/null || echo "Notice: '$DB_CONTAINER' container not found or already running."
 
 # Wait briefly for them to spin up
 sleep 1

@@ -25,19 +25,22 @@ In order to run CLIMB, you will need to make sure that the following things are 
 - You will need the source collections mounted somewhere and `CLIMB_SOURCE_ROOT` pointing at them. The videos are
   played straight from there, there is no separate web copy any more
 - (To see how to produce all of that, see the "Video Processing" section under "Getting Started - Developer")
-- Make sure the database exists and the migrations are applied. There is no dump to restore any more , the old
-  `dataset/climb_db.dump` was from the pre-pg17 schema and would not load even if you still had it (see the word of
-  warning under "The Database"). `python main.py schema` prints the podman command, `python main.py migrate` does the
-  rest, and then you embed, (Which means yes, given you don't have a new dump, you will need to embed everything 
-  yourself, for that follow the "Getting Started - Developer" Section)
-- Verify that there is a `.env` file in the root directory having all the necessary Parameters (listed in Section "
-  Environment Variables")
+- A filled database: a dump of one, `dataset/climb_db.dump` from whoever ran the pipeline (`pg_dump -Fc`, see 1.0),
+  or your own run of the pipeline ("Getting Started - Developer"). An old pre-pg17 dump does not load (see the word
+  of warning under "The Database")
 
-If all that is done, you can run `setup_climb.sh` (found in the root directory)
+Then run `setup_climb.sh` (found in the root directory), with podman or docker installed:
 
 ```bash:
 ./setup_climb.sh
 ```
+
+The first time it copies `.env.example` to `.env` and stops, so you can set `POSTGRES_PASSWORD` and
+`CLIMB_SOURCE_ROOT` (see "Environment Variables"). Run it again and it creates `video_processing/.venv` (with
+Python 3.13 if there is one, see 1.1) and installs the requirements; where `nvidia-smi` finds a GPU, that includes
+torch for CUDA 12.6 and `paddlepaddle-gpu` (1.0). It creates and starts the `climb` and `climb_caching` containers,
+restores `dataset/climb_db.dump` into the database if there is one and the database is still empty, and migrates
+the schema. Running it again later only starts what exists and applies new migrations.
 
 Once you are set up, simply run `start_climb.sh` (also found in the root directory)
 
@@ -166,9 +169,8 @@ Well and that's it.
 
 ## Environment Variables
 
-In order for CLIMB to work correctly you will need to create a `.env` file in the root directory.
-
-And example file is provided here (please change the password):
+In order for CLIMB to work correctly you will need a `.env` file in the root directory: copy `.env.example`, which
+`setup_climb.sh` does for you the first time, and change the password. Its service lines:
 
 ```text:
 POSTGRES_DB_NAME=CLIMB_DB
@@ -333,14 +335,34 @@ cd video_processing
 For whoever is kind enough to run this somewhere with GPUs. Everything below is explained in the sections that follow;
 this is just the order.
 
-1. **Install.** Python 3.13 or older (PaddleOCR has no wheel for 3.14 and OCR quietly falls back to a worse engine),
-   `pip install -r requirements.txt`, and FFmpeg with the `libopus` encoder. On Python ≤ 3.13 the requirements bring
-   `paddleocr`; the Paddle runtime for the GPU is not on PyPI, so it is one more line:
-   `pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/` (pick the `cuXXX`
-   that matches the driver, cu118 / cu126 / cu129 / cu130 exist). `main.py check` warns if it is missing.
-2. **Database.** `python main.py schema` prints the podman command. Keep the `--shm-size=8g` in it, without it the
-   index build at the end crawls.
-3. **`.env`** in the repo root: the `POSTGRES_*` / `DB_*` lines from "Environment Variables", plus
+1. **Install.** Python 3.13 (PaddleOCR has no wheel for 3.14 and OCR quietly falls back to a worse engine), FFmpeg
+   with the `libopus` encoder, and an NVIDIA driver whose `nvidia-smi` header says `CUDA Version: 12.6` or higher.
+   `./setup_climb.sh` installs everything else ("Getting Started - User"). By hand, from `video_processing`:
+
+   ```bash
+   pip install -r requirements.txt torch==2.12.1+cu126 torchvision==0.27.1+cu126 \
+       --extra-index-url https://download.pytorch.org/whl/cu126
+   pip install paddlepaddle-gpu==3.3.1 --timeout 120 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+   pip install nvidia-cudnn-cu12==9.10.2.21 nvidia-cusparselt-cu12==0.7.1 nvidia-nccl-cu12==2.29.3 \
+       nvidia-nvshmem-cu12==3.4.5
+   ```
+
+   The third line is not optional. paddlepaddle-gpu pins older NCCL, cuDNN and cuSPARSELt than torch and installs
+   them over torch's: with Paddle's NCCL, `import torch` fails (`undefined symbol: ncclGetLsaMultimemDevicePointer`),
+   and with Paddle's cuDNN, torch refuses its first convolution. The line puts torch's back. cuDNN 9 and NCCL 2 run
+   code built for an older minor version, so Paddle runs on them as well, and pip listing Paddle's pins as conflicts
+   afterwards is expected.
+
+   CUDA 12.6 is where the three GPU libraries meet. faster-whisper's ctranslate2 exists for CUDA 12 only (it opens
+   `libcublas.so.12`); Paddle's GPU runtime is not on PyPI and comes per CUDA version; and torch's own PyPI wheel is
+   CUDA 13.0, which wants driver 580 and leaves Whisper without its cuBLAS. torch for cu126 brings CUDA 12's cuBLAS
+   and cuDNN as pip packages, the ASR stage loads cuBLAS from there, and Paddle for cu126 runs on the same libraries.
+   `main.py check` FAILs, with the line that fixes it, when torch cannot use the GPU or Whisper finds no CUDA 12
+   cuBLAS, and warns about a Paddle built for another CUDA, a card under 12 GB or one without bf16.
+2. **Database.** `python main.py schema` prints the podman command (docker takes the same arguments), and
+   `setup_climb.sh` runs it for you. Keep the `--shm-size=8g` in it, without it the index build at the end crawls.
+3. **`.env`** in the repo root, copied from `.env.example`: the `POSTGRES_*` / `DB_*` lines from "Environment
+   Variables", plus
 
    ```text
    CLIMB_SOURCE_ROOT=/where/the/collections/are   # VBS/videos/..., V3Cmeta/..., MVKmeta/..., LHEmeta/...
@@ -366,7 +388,9 @@ this is just the order.
    )
    ```
 
-   Every stage logs `Running on cuda (...)`; `cpu` there means the GPU was not found. Then look at what came out:
+   Every stage logs `Running on cuda (...)`; `cpu` there means the GPU was not found. While the caption model loads,
+   transformers 5.12 prints a few `[ERROR] ... is part of Qwen3VLCausalLMOutputWithPast.__init__'s signature, but not
+   documented` lines: that is its own docstring check, not a failure. Then look at what came out:
 
    ```bash
    podman exec climb psql -U postgres climb_trial -c "SELECT caption FROM keyframe_caption LIMIT 10;"
@@ -407,7 +431,9 @@ Run
 pip install -r requirements.txt
 ```
 
-to install neccessary requirements.
+to install neccessary requirements. That gives torch's PyPI wheel, which runs on any CPU; on a machine with an
+NVIDIA GPU install torch for CUDA 12.6 and `paddlepaddle-gpu` as in 1.0 instead, or let `setup_climb.sh` do it.
+`requirements.txt` leaves torch's CUDA libraries to torch, so that either one brings its own.
 
 Two things that are easy to lose an evening to:
 
