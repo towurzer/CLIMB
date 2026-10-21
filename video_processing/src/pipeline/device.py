@@ -27,6 +27,34 @@ def pick_dtype(device: str):
     return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 
+def load_ctranslate2_cuda() -> bool:
+    """
+    Loads the CUDA 12 cuBLAS that faster-whisper's ctranslate2 opens by name (`libcublas.so.12`;
+    every ctranslate2 4.x wheel is built for CUDA 12 only). pip's nvidia-cublas-cu12, which torch
+    for cu126 brings, keeps it where the dynamic loader does not look, so it is loaded from there
+    with RTLD_GLOBAL; ctranslate2's own dlopen then finds it already loaded. False when there is
+    none, as with torch for CUDA 13, whose venv holds only libcublas.so.13.
+    """
+    import ctypes
+    import importlib.util
+    from pathlib import Path
+
+    name = "libcublas.so.12"
+    try:
+        ctypes.CDLL(name, mode=ctypes.RTLD_GLOBAL)
+        return True
+    except OSError:
+        pass
+    spec = importlib.util.find_spec("nvidia.cublas")
+    for folder in (spec.submodule_search_locations or []) if spec else []:
+        try:
+            ctypes.CDLL(str(Path(folder) / "lib" / name), mode=ctypes.RTLD_GLOBAL)
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def describe(device: str) -> str:
     import torch
 

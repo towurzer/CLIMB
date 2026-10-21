@@ -110,22 +110,102 @@ def check_packages(report):
         report.add(OK, "python", "packages present, OCR backend: paddle")
 
 
+# torch from PyPI is built for CUDA 13.0, which needs driver 580 or newer, and faster-whisper only
+# runs on CUDA 12; CUDA 12.6 serves torch, Whisper and paddlepaddle-gpu alike (README 1.0).
+TORCH_CU126 = ("pip install torch==2.12.1 torchvision==0.27.1 "
+               "--index-url https://download.pytorch.org/whl/cu126")
+
+
+def _torch_cuda_pins() -> str:
+    """torch's own pins of the CUDA libraries paddlepaddle-gpu replaces, as the pip line restoring them."""
+    pins = [r.split(";")[0].replace(" ", "") for r in importlib.metadata.requires("torch") or []
+            if r.startswith("nvidia-")]
+    return "pip install " + " ".join(pins) if pins else "reinstall torch"
+
+
+def _nvidia_gpu():
+    """(name, driver version) from nvidia-smi, or None without an NVIDIA driver."""
+    if shutil.which("nvidia-smi") is None:
+        return None
+    out = _run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"])
+    line = out.stdout.strip().splitlines()[0] if out and out.returncode == 0 and out.stdout.strip() else ""
+    return tuple(part.strip() for part in line.split(",", 1)) if "," in line else None
+
+
 def check_gpu(report):
     try:
         import torch
-    except ImportError:
+    except ImportError as e:
+        if importlib.util.find_spec("torch") is not None:
+            # paddlepaddle-gpu's NCCL under torch: "undefined symbol: nccl..."
+            report.add(FAIL, "gpu", f"torch is installed but does not import ({e}); if "
+                                    f"paddlepaddle-gpu went in after it: {_torch_cuda_pins()}")
         return
+    if torch.version.cuda:
+        try:
+            torch.backends.cudnn.version()
+        except RuntimeError as e:
+            report.add(FAIL, "gpu", f"{str(e).splitlines()[0]} {_torch_cuda_pins()}")
     if torch.cuda.is_available():
         count = torch.cuda.device_count()
         names = ", ".join(torch.cuda.get_device_name(i) for i in range(count))
         memory = min(torch.cuda.get_device_properties(i).total_memory for i in range(count))
-        report.add(OK, "gpu", f"{count} CUDA device(s): {names}, {memory / 1024 ** 3:.0f} GB")
+        report.add(OK, "gpu", f"{count} CUDA device(s): {names}, {memory / 1024 ** 3:.0f} GB, "
+                              f"torch for CUDA {torch.version.cuda}")
         if count > 1:
             report.add(OK, "gpu", f"one process uses one GPU; run {count} with "
                                   f"CUDA_VISIBLE_DEVICES=i and --shard i --shards {count}")
+        if memory < 12 * 1024 ** 3 and Config.CAPTION_MODEL == "Qwen/Qwen3-VL-4B-Instruct":
+            report.add(WARN, "gpu", f"caption: Qwen3-VL-4B's weights alone are ~9 GB in bf16, "
+                                    f"next to {memory / 1024 ** 3:.0f} GB here; if it runs out, "
+                                    f"CLIMB_CAPTION_BATCH=2 or "
+                                    f"CLIMB_CAPTION_MODEL=Qwen/Qwen3-VL-2B-Instruct")
+        if not torch.cuda.is_bf16_supported():
+            report.add(WARN, "gpu", "no bf16 on this card, so the models run in fp16, where "
+                                    "Qwen3-VL activations can overflow: read the trial run's "
+                                    "captions (README 1.0)")
+        _check_other_cuda_users(report, torch)
+        return
+    gpu = _nvidia_gpu()
+    if gpu:
+        fix = (TORCH_CU126 if not (torch.version.cuda or "").startswith("12.") else
+               "torch is built for CUDA 12 already, so the driver must run it (the CUDA version in "
+               "nvidia-smi's header) and CUDA_VISIBLE_DEVICES must not hide the card")
+        report.add(FAIL, "gpu", f"{gpu[0]} with driver {gpu[1]} is here, but torch "
+                                f"{torch.__version__} (CUDA {torch.version.cuda or 'none'}) cannot "
+                                f"use it, so the GPU stages would run on CPU: {fix}")
     else:
         report.add(WARN, "gpu", "no CUDA device, the GPU stages run on CPU "
                                 "(embedding alone is ~0.4 images/s there)")
+
+
+def _check_other_cuda_users(report, torch):
+    """faster-whisper (ctranslate2) and Paddle bring their own CUDA expectations next to torch's."""
+    from pipeline import device
+
+    if importlib.util.find_spec("ctranslate2") is not None:
+        import ctranslate2
+
+        if not device.load_ctranslate2_cuda():
+            report.add(FAIL, "gpu", f"asr: faster-whisper runs on CUDA 12 and this venv has no "
+                                    f"libcublas.so.12 (torch is CUDA {torch.version.cuda}): "
+                                    f"{TORCH_CU126}")
+        elif ctranslate2.get_cuda_device_count() == 0:
+            report.add(WARN, "gpu", "asr: ctranslate2 sees no CUDA device, Whisper runs on CPU")
+        else:
+            report.add(OK, "gpu", "asr: faster-whisper finds CUDA 12's cuBLAS")
+    if importlib.util.find_spec("paddle") is not None:
+        import paddle
+
+        if not paddle.device.is_compiled_with_cuda():
+            report.add(WARN, "gpu", "ocr: paddlepaddle is the CPU build, so OCR runs on CPU: "
+                                    "install paddlepaddle-gpu (README 1.0)")
+        elif paddle.version.cuda().split(".")[0] != (torch.version.cuda or "").split(".")[0]:
+            report.add(WARN, "gpu", f"ocr: paddlepaddle-gpu is built for CUDA {paddle.version.cuda()}"
+                                    f" and torch for {torch.version.cuda}; take the cuXXX of one "
+                                    f"for both (README 1.0)")
+        else:
+            report.add(OK, "gpu", f"ocr: paddlepaddle-gpu for CUDA {paddle.version.cuda()}")
 
 
 def _cached(repo, filename="config.json") -> bool:
@@ -220,8 +300,8 @@ def _check_scene_match(report, dataset, videos, paired):
     video's real frame count, on a few videos, is what catches a wrong or renamed archive.
     """
     sample = sorted(paired)
-    sample = [sample[i * (len(sample) - 1) // max(1, SAMPLE_VIDEOS_PER_COLLECTION - 1)]
-              for i in range(min(SAMPLE_VIDEOS_PER_COLLECTION, len(sample)))]
+    count = min(SAMPLE_VIDEOS_PER_COLLECTION, len(sample))
+    sample = [sample[i * (len(sample) - 1) // max(1, count - 1)] for i in range(count)]
     texts = dataset.scenes.read_many(sample)
     for video_id in sample:
         frames = _frame_count(videos[video_id])

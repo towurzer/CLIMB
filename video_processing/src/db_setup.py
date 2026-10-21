@@ -2,16 +2,14 @@ import custom_logger
 from config import Config
 
 
-def get_container_command():
+def container_command(tool: str = "podman") -> str:
+    """The command that creates and starts the database container; `tool` is podman or docker."""
     conf = Config()
-    logger = custom_logger.get_logger("db_setup")
-    command = "echo \"Something went wrong\""
-    try:
-        command = f"""podman run --name {conf.DB_CONTAINER_NAME} \\
+    return f"""{tool} run --name {conf.DB_CONTAINER_NAME} \\
             -e POSTGRES_PASSWORD={conf.db_password} \\
             -e POSTGRES_DB={conf.db_name} \\
             -e POSTGRES_USER={conf.db_user} \\
-            -v postgres_data:{conf.DB_CONTAINER_MOUNT_PATH} \\
+            -v {conf.DB_VOLUME}:{conf.DB_CONTAINER_MOUNT_PATH} \\
             -p {conf.db_port}:5432 \\
             --shm-size={conf.DB_SHM_SIZE} \\
             -d {conf.DB_IMAGE} \\
@@ -21,6 +19,13 @@ def get_container_command():
               -c work_mem={conf.PG_SERVE_WORK_MEM} \\
               -c max_parallel_maintenance_workers={conf.PG_BUILD_PARALLEL_WORKERS}"""
 
+
+def get_container_command():
+    conf = Config()
+    logger = custom_logger.get_logger("db_setup")
+    command = "echo \"Something went wrong\""
+    try:
+        command = container_command()
         logger.debug("Created Database Command")
     except ValueError as e:
         logger.error(e)
@@ -35,6 +40,6 @@ def get_container_command():
     print(
         f"\n\nNote: {conf.DB_IMAGE} is PostgreSQL 17. A data volume written by the previous "
         f"image (ankane/pgvector, PostgreSQL 16) cannot be reused across a major version, and "
-        f"neither can dataset/climb_db.dump. Use a fresh volume name if 'postgres_data' still "
-        f"holds the old cluster."
+        f"neither can dataset/climb_db.dump. Use a fresh volume name (CLIMB_DB_VOLUME) if "
+        f"'{conf.DB_VOLUME}' still holds the old cluster."
     )

@@ -98,7 +98,9 @@ app.use('/kf', express.static(path.join(MEDIA_DIR, 'kf'), immutable));
 app.get('/videos/:file', (req, res) => {
     const videoId = req.params.file.replace(/\.mp4$/, '');
     const file = sourceVideoPath(videoId);
-    if (file) return res.sendFile(file, {maxAge: '365d'});
+    // root + name: sendFile refuses a path with a dot-folder anywhere in it (a source root under
+    // ~/.local, say); with `root` it only looks at the name, which VIDEO_ID already pins down.
+    if (file) return res.sendFile(path.basename(file), {root: path.dirname(file), maxAge: '365d'});
     // The player shows this text, so it says why.
     const unreachable = unreachableVideoDirs();
     res.status(404).type('text/plain').send(unreachable.length

@@ -137,6 +137,14 @@ def load_model(dev: str):
         raise ImportError(
             "faster-whisper is not installed: pip install faster-whisper"
         ) from e
+    if dev == "cuda" and not device.load_ctranslate2_cuda():
+        import torch
+
+        # ctranslate2's own error for this, "Library libcublas.so.12 is not found or cannot be
+        # loaded", names no fix.
+        raise RuntimeError(f"faster-whisper runs on CUDA 12 and this venv has no libcublas.so.12 "
+                           f"(torch here is built for CUDA {torch.version.cuda}): install torch for "
+                           f"cu126, README 1.0")
     compute_type = "float16" if dev == "cuda" else "int8"
     return WhisperModel(conf.ASR_MODEL, device=("cuda" if dev == "cuda" else "cpu"),
                         compute_type=compute_type)

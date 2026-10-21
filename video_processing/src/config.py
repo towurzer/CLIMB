@@ -246,7 +246,9 @@ class Config:
     LOG_LEVEL_ERROR: str = "WARN"
 
     # --- Database ---
-    DB_CONTAINER_NAME: str = "climb"
+    DB_CONTAINER_NAME: str = os.getenv("CLIMB_DB_CONTAINER") or "climb"
+    # The volume the cluster lives in; another name is another, empty database.
+    DB_VOLUME: str = os.getenv("CLIMB_DB_VOLUME") or "postgres_data"
     # The official postgres image (which pgvector/pgvector is built on) puts PGDATA at
     # /var/lib/postgresql/data. Mounting the parent instead leaves the cluster inside the
     # container's own filesystem, so the volume holds nothing and the data dies with the container.
