@@ -1,9 +1,9 @@
 """
-The visual models, by family: SigLIP2 through Hugging Face transformers, BioCLIP through open_clip,
-PeskaVLP through pipeline/peskavlp.py.
+The visual models, by family: SigLIP2 through Hugging Face transformers, PeskaVLP through
+pipeline/peskavlp.py.
 
 Each loads two ways, for the two sides of retrieval. The image side is for the embed stage and is
-shaped like a Hugging Face image processor and vision tower, so embed.embed_images treats all three
+shaped like a Hugging Face image processor and vision tower, so embed.embed_images treats both
 alike. The text side is for the search engine: a function from query strings to unit vectors.
 """
 
@@ -11,16 +11,11 @@ from types import SimpleNamespace
 
 from pipeline import device, peskavlp
 
-OPEN_CLIP_MODELS = {"imageomics/bioclip-2.5-vith14", "imageomics/bioclip-2"}
-
 # The name a model's results go by in the fusion and on the result badges. SigLIP2 is "visual".
-SIGNALS = {"imageomics/bioclip-2.5-vith14": "bioclip", "imageomics/bioclip-2": "bioclip",
-           peskavlp.NAME: "peskavlp"}
+SIGNALS = {peskavlp.NAME: "peskavlp"}
 
 
 def family(name: str) -> str:
-    if name in OPEN_CLIP_MODELS:
-        return "open_clip"
     if name == peskavlp.NAME:
         return "peskavlp"
     return "hf"
@@ -69,25 +64,6 @@ class _Pooled:
 def load_image_side(name: str, dev: str):
     """(processor, vision) for the embed stage."""
     kind, dtype = family(name), device.pick_dtype(dev)
-    if kind == "open_clip":
-        import open_clip
-        import torch
-        from torchvision.transforms import InterpolationMode
-
-        model = open_clip.create_model(f"hf-hub:{name}")
-        cfg = model.visual.preprocess_cfg
-        visual = model.visual.to(dev, dtype).eval()
-        del model
-        size = cfg["size"][0] if isinstance(cfg["size"], (tuple, list)) else cfg["size"]
-
-        def encode(pixel_values):
-            with torch.no_grad():
-                return visual(pixel_values.to(dtype))
-
-        # resize_mode 'shortest', open_clip's default: the short side to `size`, then the centre.
-        processor = FramePreprocess(size, size, cfg["mean"], cfg["std"],
-                                    InterpolationMode(cfg["interpolation"]))
-        return processor, _Pooled(encode)
     if kind == "peskavlp":
         from torchvision.transforms import InterpolationMode
 
@@ -112,18 +88,7 @@ def load_text_side(name: str, dev: str):
     import torch
 
     kind, dtype = family(name), device.pick_dtype(dev)
-    if kind == "open_clip":
-        import open_clip
-
-        model = open_clip.create_model(f"hf-hub:{name}")
-        model.visual = None  # 632M parameters a query never needs
-        model = model.to(dev, dtype).eval()
-        tokenizer = open_clip.get_tokenizer(f"hf-hub:{name}")
-
-        def run(texts):
-            with torch.no_grad():
-                return model.encode_text(tokenizer(list(texts)).to(dev))
-    elif kind == "peskavlp":
+    if kind == "peskavlp":
         run = peskavlp.TextEncoder(dev, dtype)
     else:
         from transformers import AutoModel, AutoProcessor

@@ -1,41 +1,15 @@
 """
-The GynSurg evaluation's own arithmetic (evaluation/gynsurg.py), on made-up data.
+The GynSurg evaluation's reading of GynSurg's masks (evaluation/gynsurg.py), on made-up data.
 
-README 1.7's table for LHE comes from it, so a wrong average precision or a fusion that differs from
-the search's would put wrong numbers in the README without anything failing.
+README 1.7's table for LHE comes from it, so a frame paired with another frame's mask or a mask value
+read as the wrong class would put wrong numbers in the README without anything failing. Its ranking,
+fusion and average precision are evaluation/search.py's (tests/test_eval_search.py).
 """
 
 import numpy as np
 from PIL import Image
 
 from evaluation import gynsurg
-from retrieval import fusion
-
-
-def test_a_perfect_ranking_has_average_precision_one():
-    relevant = np.array([True, True, False, False])
-    assert gynsurg.average_precision([0, 1, 2, 3], relevant) == 1.0
-
-
-def test_average_precision_counts_the_ranks_of_the_hits():
-    """Hits at ranks 2 and 4: (1/2 + 2/4) / 2."""
-    relevant = np.array([False, True, False, True])
-    assert gynsurg.average_precision([0, 1, 2, 3], relevant) == 0.5
-
-
-def test_a_class_without_frames_scores_zero_rather_than_dividing_by_zero():
-    assert gynsurg.average_precision([0, 1], np.array([False, False])) == 0.0
-
-
-def test_fusion_orders_like_the_search():
-    """The "both" columns stand for what a search returns, ties included (at weight 1 they are common)."""
-    rng = np.random.default_rng(0)
-    for weight in gynsurg.WEIGHTS:
-        visual, domain = rng.permutation(100), rng.permutation(100)
-        search = fusion.fuse({"visual": [(int(i), int(i)) for i in visual],
-                              "peskavlp": [(int(i), int(i)) for i in domain]},
-                             {"visual": 1.0, "peskavlp": weight})
-        assert list(gynsurg.fuse([visual, domain], [1.0, weight], 100)) == [r.keyframe_id for r in search]
 
 
 def test_a_mask_names_the_classes_it_holds():

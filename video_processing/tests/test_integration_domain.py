@@ -13,7 +13,7 @@ from pipeline import visual_models
 
 pytestmark = pytest.mark.integration
 
-QUERIES = {"MVK": "a fish swimming over a coral reef", "LHE": "bipolar forceps coagulating tissue"}
+QUERIES = {"LHE": "bipolar forceps coagulating tissue"}
 
 
 def _domain_models(db):

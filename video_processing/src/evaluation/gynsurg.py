@@ -1,7 +1,7 @@
 """
 Text-to-frame retrieval on GynSurg's labelled frames: SigLIP2 alone, PeskaVLP alone, and both fused
-the way the search fuses them (RRF, SigLIP2 at weight 1, PeskaVLP at CLIMB_W_DOMAIN). This is what
-README 1.7's table for LHE comes from: `python main.py eval-gynsurg --data <folder>`.
+the way the search fuses them (evaluation/search.py, SigLIP2 at weight 1, PeskaVLP at CLIMB_W_DOMAIN).
+This is what README 1.7's table for LHE comes from: `python main.py eval-gynsurg --data <folder>`.
 
 GynSurg (Nasirihaghighi et al., ACM MM 2025) is gynaecological laparoscopy from the same group as LHE,
 for research use only, to be cited. Its two segmentation sets go into one folder, unpacked:
@@ -9,7 +9,9 @@ for research use only, to be cited. Its two segmentation sets go into one folder
   https://ftp.itec.aau.at/datasets/GynSurge/Semantic_Segmentation_Dataset/GynSurg_Anatomy_Dataset.zip
 
 A frame is relevant to a class when its mask holds the class. Instrument queries rank the instrument
-frames, anatomy queries the anatomy frames, two VBS-style phrasings per class, averaged. Frames are
+frames, anatomy queries the anatomy frames, two VBS-style phrasings per class, averaged. Average
+precision is over every frame of the set, fused from the full rankings; the first page is what the
+search shows, from each model's CLIMB_RETRIEVER_DEPTH best frames. Frames are
 scaled to 270 lines, the height of the VBS copies of LHE, and go through the pipeline's own decoding and
 preprocessing. Vectors are cached in CLIMB_WORK_DIR/gynsurg-eval with the list of frames they belong
 to, so a second run with the same frames only re-ranks.
@@ -20,8 +22,8 @@ from pathlib import Path
 
 import custom_logger
 from config import Config
+from evaluation import search
 from pipeline import peskavlp, visual_models
-from retrieval.fusion import RRF_K
 
 # Mask value -> class. No label map ships with the data; these are the values whose frame counts match
 # the paper's (Fig. 2) exactly, for the classes it says the released sets keep (Sec. 3.2): grasper
@@ -107,28 +109,11 @@ def _vectors(frames, model_name, cache: Path, dev):
     return vectors
 
 
-def average_precision(order, relevant) -> float:
-    hits, total = 0, 0.0
-    for rank, index in enumerate(order, start=1):
-        if relevant[index]:
-            hits += 1
-            total += hits / rank
-    return total / max(1, int(relevant.sum()))
-
-
-def fuse(ranked, weights, n):
-    """Ranked index arrays fused by RRF, as retrieval.fusion does it, ties on the index."""
-    import numpy as np
-    score = np.zeros(n)
-    for order, weight in zip(ranked, weights):
-        score[order] += weight / (RRF_K + np.arange(1, n + 1))
-    return np.lexsort((np.arange(n), -score))
-
-
 def evaluate(frames, vectors, encoders) -> list:
     """One row per class: {variant: (average precision, precision in the first PAGE)}."""
     import numpy as np
 
+    depth = Config().RETRIEVER_DEPTH
     rows = []
     for cls, phrasings in QUERIES.items():
         anatomy = cls in ANATOMY.values()
@@ -136,17 +121,14 @@ def evaluate(frames, vectors, encoders) -> list:
         relevant = np.array([cls in frames[i]["labels"] for i in pool])
         scores = {}
         for query in phrasings:
-            orders = {}
-            for model, encode in encoders.items():
-                sims = vectors[model][pool] @ encode([query])[0]
-                orders[model] = np.lexsort((np.arange(len(pool)), -sims))
-            variants = {"SigLIP2": orders["visual"], "PeskaVLP": orders["peskavlp"]}
-            for w in WEIGHTS:
-                variants[f"both, {w}"] = fuse([orders["visual"], orders["peskavlp"]], [1.0, w],
-                                              len(pool))
-            for name, order in variants.items():
+            similarities = {model: vectors[model][pool] @ encode([query])[0]
+                            for model, encode in encoders.items()}
+            every = search.variants(similarities, WEIGHTS)
+            searched = search.variants(similarities, WEIGHTS, depth)
+            for name in every:
                 scores.setdefault(name, []).append(
-                    (average_precision(order, relevant), float(relevant[order[:PAGE]].mean())))
+                    (search.average_precision(every[name], relevant),
+                     float(relevant[searched[name][:PAGE]].mean())))
         rows.append({"class": cls, "frames": len(pool), "relevant": int(relevant.sum()),
                      **{name: (float(np.mean([s[0] for s in v])), float(np.mean([s[1] for s in v])))
                         for name, v in scores.items()}})
@@ -184,5 +166,6 @@ def run(data, dev="cpu"):
         print(f"{'mean ' + label:20s} {'':>10s}  " + "  ".join(
             f"{sum(r[n][0] for r in chosen) / len(chosen):.3f} / "
             f"{sum(r[n][1] for r in chosen) / len(chosen):.2f}" for n in names))
-    print(f"\naverage precision over the frames of the class's set / precision in the first {PAGE}")
+    print(f"\naverage precision over the frames of the class's set / precision in the first {PAGE} "
+          f"of what the search returns")
     return rows

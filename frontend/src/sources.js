@@ -14,7 +14,6 @@ export const SOURCES = [
 // The second visual model of a dataset (CLIMB_COLLECTION_MODELS), searching next to SigLIP2. Its
 // tickbox only shows while that dataset is picked; `key` is the model's signal name in engine.py.
 export const DOMAIN_SOURCES = {
-    MVK: {key: "bioclip", label: "BioCLIP", title: "BioCLIP 2.5, trained on images of living things and their species names, next to SigLIP2"},
     LHE: {key: "peskavlp", label: "PeskaVLP", title: "PeskaVLP, trained on surgical video lectures and their narration, next to SigLIP2"},
 };
 
@@ -60,7 +59,6 @@ export const COLLECTIONS = [
 
 export const SIGNAL_LABELS = {
     visual: "Visual",
-    bioclip: "BioCLIP",
     peskavlp: "PeskaVLP",
     ocr: "OCR",
     ocr_phrase: "OCR",

@@ -51,7 +51,6 @@ nvidia-nvjitlink==13.0.88
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
 onnxruntime==1.28.0
-open_clip_torch==3.3.0
 opencv-python==4.13.0.92; python_version >= "3.14"
 opencv-python==4.10.0.84; python_version < "3.14"
 packaging==26.2

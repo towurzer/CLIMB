@@ -17,8 +17,6 @@ from retrieval.engine import choose_visual_model
 SO400M = "google/siglip2-so400m-patch16-384"
 LARGE = "google/siglip2-large-patch16-384"
 
-
-BIOCLIP = "imageomics/bioclip-2.5-vith14"
 PESKA = "camma/peskavlp"
 
 
@@ -114,13 +112,13 @@ def test_a_named_model_runs_alone(config_with_two_models, embedded_with):
 
 @pytest.fixture
 def config_with_domain_models(monkeypatch):
-    monkeypatch.setattr(embed, "Config", lambda: two_models(f"MVK:{BIOCLIP},LHE:{PESKA}"))
+    monkeypatch.setattr(embed, "Config", lambda: two_models(f"LHE:{PESKA}"))
 
 
 def test_embed_also_runs_each_domain_model_for_its_own_collection(config_with_domain_models,
                                                                   embedded_with):
     embed.embed_pending(object())
-    assert embedded_with == [LARGE, SO400M, (BIOCLIP, "MVK"), (PESKA, "LHE")]
+    assert embedded_with == [LARGE, SO400M, (PESKA, "LHE")]
 
 
 def test_one_collection_gets_its_own_domain_model_only(config_with_domain_models, embedded_with):
@@ -135,13 +133,13 @@ def test_a_collection_without_a_domain_model_gets_none(config_with_domain_models
 
 def test_a_domain_model_named_alone_embeds_its_own_collection(config_with_domain_models,
                                                               embedded_with):
-    embed.embed_pending(object(), model_name=BIOCLIP)
-    assert embedded_with == [(BIOCLIP, "MVK")]
+    embed.embed_pending(object(), model_name=PESKA)
+    assert embedded_with == [(PESKA, "LHE")]
 
 
 def test_a_domain_model_knows_its_collection():
-    conf = two_models(f"MVK:{BIOCLIP},LHE:{PESKA}")
-    assert (conf.collection_of(PESKA), conf.collection_of(BIOCLIP)) == ("LHE", "MVK")
+    conf = two_models(f"LHE:{PESKA}")
+    assert conf.collection_of(PESKA) == "LHE"
     assert conf.collection_of(LARGE) is None
 
 

@@ -25,7 +25,7 @@ SOURCE_RETRIEVERS = {
     "asr": ("transcript",),
     "caption": ("caption",),
     "info": ("info", "tags"),
-    # A collection's own visual model (BioCLIP, PeskaVLP), with its own tickbox for that dataset.
+    # A collection's own visual model (PeskaVLP for LHE), with its own tickbox for that dataset.
     **{signal: (signal,) for signal in sorted(set(visual_models.SIGNALS.values()))},
 }
 
@@ -192,7 +192,7 @@ class SearchEngine:
         self.visual_model = None
         self.text_model = None
         # collection -> loaded spec of the domain model that runs next to SigLIP2 there
-        # (CLIMB_COLLECTION_MODELS): BioCLIP for MVK, PeskaVLP for LHE.
+        # (CLIMB_COLLECTION_MODELS): PeskaVLP for LHE.
         self.collection_models = {}
         # (tower, model_id, text) -> pgvector literal, most recently used last. See
         # QUERY_EMBED_CACHE_SIZE: query embedding dominates a search, and refining a sequence
@@ -231,6 +231,10 @@ class SearchEngine:
         """
         return self.collection_models.get(collection.upper()) if collection else None
 
+    # Loading reads the vector counts and embedding_model. Left open, that transaction holds its
+    # locks until the first search, which a pending migration refuses, so `main.py migrate` waited
+    # on the worker for as long as it ran.
+    @_ends_transaction
     def _load_models(self):
         from transformers import AutoModel, AutoTokenizer
 

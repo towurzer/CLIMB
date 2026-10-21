@@ -86,6 +86,10 @@ def build_parser():
                                                   "frames (README 1.7)")
     gynsurg.add_argument("--data", required=True,
                          help="folder with GynSurg's instrument and anatomy sets unpacked")
+    msc = sub.add_parser("eval-msc", help="SigLIP2, and MVK's own model if one is set, on MSC's "
+                                          "described MVK clips (README 1.7)")
+    msc.add_argument("--data", required=True,
+                     help="folder with the MSC download, laid out as on its server")
     add_common(sub.add_parser("status", help="what is done and what is left"))
 
     enqueue = add_common(sub.add_parser("enqueue", help="load a manifest of videos into the queue"))
@@ -148,6 +152,10 @@ def dispatch(args, conn=None):
         from evaluation import gynsurg
         from pipeline import device
         return gynsurg.run(args.data, device.pick_device())
+    if args.command == "eval-msc":
+        from evaluation import msc
+        from pipeline import device
+        return msc.run(args.data, device.pick_device())
     if args.command == "check":
         # Owns its database connection: an unreachable database is one of the things it reports.
         raise SystemExit(0 if run_checks(collection) else 1)
