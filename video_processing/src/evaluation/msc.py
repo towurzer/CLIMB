@@ -1,9 +1,9 @@
 """
-Text-to-video search on MSC's described MVK clips with SigLIP2 and, when CLIMB_COLLECTION_MODELS gives
-MVK a model of its own, that model alone and both fused the way the search fuses them
-(evaluation/search.py, SigLIP2 at weight 1, the other at CLIMB_W_DOMAIN). README 1.7's table for MVK
-comes from it, with BioCLIP 2.5 as MVK's model before it was taken out:
-`python main.py eval-msc --data <folder>`.
+Text-to-video search on MSC's described MVK clips with SigLIP2 and a second model, when `--model` names
+one or CLIMB_COLLECTION_MODELS gives MVK one: that model alone and both fused the way the search fuses
+them (evaluation/search.py, SigLIP2 at weight 1, the other at CLIMB_W_DOMAIN), each difference to SigLIP2
+alone with a paired bootstrap interval. README 1.7's table for MVK comes from it, with BioCLIP 2.5 as
+MVK's model before it was taken out: `python main.py eval-msc --data <folder> [--model <name>]`.
 
 MSC (Truong et al., ACM MM 2025) describes 92 of MVK's own videos, for non-commercial research only, to be
 cited. The form at https://msc.hkustvgd.com gives a login for https://hkust-vgd.ust.hk/MSC/; this reads
@@ -151,13 +151,34 @@ def decoded(path: Path, time: float):
     raise RuntimeError(f"no frame at {time} s in {path}")
 
 
+def model_key(model_name) -> str:
+    """A second model's name in the fusion and the tables: its own name, without the owner."""
+    return model_name.rsplit("/", 1)[-1]
+
+
+def _cached(cache: Path, model_name, kind=None) -> Path:
+    """Cache files are named by model: two SigLIP2 models share the signal "visual"."""
+    slug = model_name.replace("/", "--")
+    return cache / (f"{slug}-{kind}.npy" if kind else f"{slug}.npy")
+
+
+def interval(differences, rounds=10_000, seed=0) -> tuple:
+    """(mean, low, high): the mean of paired differences and its 95% bootstrap interval."""
+    import numpy as np
+
+    d = np.asarray(differences, dtype=float)
+    means = d[np.random.default_rng(seed).integers(0, len(d), (rounds, len(d)))].mean(axis=1)
+    low, high = np.percentile(means, [2.5, 97.5])
+    return float(d.mean()), float(low), float(high)
+
+
 def _vectors(frames, model_name, videos: Path, cache: Path, dev):
     import numpy as np
     from tqdm import tqdm
 
     from pipeline import embed
 
-    target = cache / f"{visual_models.signal_name(model_name)}.npy"
+    target = _cached(cache, model_name)
     if target.exists():
         return np.load(target)
     processor, vision = visual_models.load_image_side(model_name, dev)
@@ -178,8 +199,7 @@ def _text_vectors(sets: dict, model_name, cache: Path, dev) -> dict:
     """{kind: vectors} for {kind: texts}, cached per kind; the model loads only for what is missing."""
     import numpy as np
 
-    signal = visual_models.signal_name(model_name)
-    targets = {kind: cache / f"{signal}-{kind}.npy" for kind in sets}
+    targets = {kind: _cached(cache, model_name, kind) for kind in sets}
     missing = [kind for kind, target in targets.items() if not target.exists()]
     if missing:
         encode = visual_models.load_text_side(model_name, dev)
@@ -207,7 +227,11 @@ def first_hit(order, target):
 
 
 def evaluate(frames, asked, image, text) -> dict:
-    """{query set: {variant: (share found on the first PAGE, mean reciprocal rank)}}, with "captions"."""
+    """
+    {query set: {variant: (share found on the first PAGE, mean reciprocal rank)}}, with "captions" for
+    the three captioners together. "delta" holds each variant's difference to SigLIP2 alone in both,
+    as interval() gives it, paired by query.
+    """
     import numpy as np
 
     depth = Config().RETRIEVER_DEPTH
@@ -223,13 +247,26 @@ def evaluate(frames, asked, image, text) -> dict:
     ranks["captions"] = {name: [r for s in CAPTIONERS if s in ranks for r in ranks[s][name]]
                          for name in ranks["summary"]}
 
-    def scored(found):
-        return (sum(r is not None and r <= PAGE for r in found) / len(found),
-                sum(1 / r for r in found if r is not None) / len(found))
+    def per_query(found):
+        return (np.array([r is not None and r <= PAGE for r in found], float),
+                np.array([1 / r if r is not None else 0.0 for r in found]))
 
-    return {s: {"queries": len(next(iter(by_name.values()))),
-                **{name: scored(found) for name, found in by_name.items()}}
-            for s, by_name in ranks.items()}
+    rows = {}
+    for s, by_name in ranks.items():
+        values = {name: per_query(found) for name, found in by_name.items()}
+        base = values["SigLIP2"]
+        rows[s] = {"queries": len(base[0]),
+                   **{name: (float(v[0].mean()), float(v[1].mean())) for name, v in values.items()},
+                   "delta": {name: (interval(v[0] - base[0]), interval(v[1] - base[1]))
+                             for name, v in values.items() if name != "SigLIP2"}}
+    return rows
+
+
+def species_delta(species) -> dict:
+    """Each variant's difference to SigLIP2 alone in average precision and first page, paired by species."""
+    names = [n for n in species[0] if n not in ("species", "clips", "frames", "SigLIP2")]
+    return {n: (interval([r[n][0] - r["SigLIP2"][0] for r in species]),
+                interval([r[n][1] - r["SigLIP2"][1] for r in species])) for n in names}
 
 
 def evaluate_species(frames, summaries, image, text) -> list:
@@ -263,7 +300,14 @@ def evaluate_species(frames, summaries, image, text) -> list:
     return rows
 
 
-def run(data, dev="cpu"):
+def _signed(value) -> str:
+    mean, low, high = value
+    mark = "*" if low > 0 or high < 0 else " "
+    return f"{mean:+.3f} [{low:+.3f}, {high:+.3f}]{mark}"
+
+
+def run(data, dev="cpu", model=None):
+    """`model`: the second visual model to measure next to SigLIP2, by default MVK's own, if it has one."""
     logger = custom_logger.get_logger("eval")
     data = Path(data).resolve()
     videos = data / "videos_480"
@@ -278,39 +322,52 @@ def run(data, dev="cpu"):
     if missing:
         raise SystemExit(f"{len(missing)} described clips are not in {videos}, e.g. {missing[0]}")
 
-    own = Config().collection_models().get("MVK")
-    models = (SIGLIP, own) if own else (SIGLIP,)
-    signals = [visual_models.signal_name(m) for m in models]
+    other = model or Config().collection_models().get("MVK")
+    models = {"visual": SIGLIP, **({model_key(other): other} if other else {})}
     texts = {"text": [q["text"] for q in asked],
              "species": [p for ps in SPECIES_QUERIES.values() for p in ps]}
-    _keep(cache / "frames.json", frames, [cache / f"{s}.npy" for s in signals])
-    _keep(cache / "queries.json", texts["text"], [cache / f"{s}-text.npy" for s in signals])
-    _keep(cache / "species.json", texts["species"], [cache / f"{s}-species.npy" for s in signals])
+    _keep(cache / "frames.json", frames,
+          [p for p in cache.glob("*.npy") if not p.stem.endswith(("-text", "-species"))])
+    _keep(cache / "queries.json", texts["text"], list(cache.glob("*-text.npy")))
+    _keep(cache / "species.json", texts["species"], list(cache.glob("*-species.npy")))
     logger.info(f"{len(frames)} frames of {len(segments)} segments, {len(asked)} queries, "
-                f"vectors in {cache}")
+                f"models {', '.join(models.values())}, vectors in {cache}")
 
-    image = {s: _vectors(frames, m, videos, cache, dev) for s, m in zip(signals, models)}
-    text = {s: _text_vectors(texts, m, cache, dev) for s, m in zip(signals, models)}
-    rows = evaluate(frames, asked, image, {s: t["text"] for s, t in text.items()})
-    species = evaluate_species(frames, summaries, image, {s: t["species"] for s, t in text.items()})
+    image = {key: _vectors(frames, m, videos, cache, dev) for key, m in models.items()}
+    text = {key: _text_vectors(texts, m, cache, dev) for key, m in models.items()}
+    rows = evaluate(frames, asked, image, {key: t["text"] for key, t in text.items()})
+    species = evaluate_species(frames, summaries, image, {key: t["species"] for key, t in text.items()})
 
     labels = {"summary": "summary -> its video", **{c: f"{c} -> its segment" for c in CAPTIONERS},
               "captions": "all captions"}
-    names = [n for n in rows["summary"] if n != "queries"]
-    print(f"\n{'queries':22s} {'n':>5s}  " + "  ".join(f"{n:>11s}" for n in names))
+    names = [n for n in rows["summary"] if n not in ("queries", "delta")]
+    width = max(13, *(len(n) for n in names))
+    print(f"\n{'queries':22s} {'n':>5s}  " + "  ".join(f"{n:>{width}s}" for n in names))
     for key, label in labels.items():
         if key in rows:
-            print(f"{label:22s} {rows[key]['queries']:5d}  "
-                  + "  ".join(f"{rows[key][n][0]:.2f} / {rows[key][n][1]:.2f}" for n in names))
+            print(f"{label:22s} {rows[key]['queries']:5d}  " + "  ".join(
+                f"{f'{rows[key][n][0]:.2f} / {rows[key][n][1]:.2f}':>{width}s}" for n in names))
     print(f"\nfound among the first {PAGE} of what the search returns / mean reciprocal rank")
 
-    print(f"\n{'species':16s} {'clips':>5s} {'frames':>6s}  " + "  ".join(f"{n:>12s}" for n in names))
+    print(f"\n{'species':16s} {'clips':>5s} {'frames':>6s}  " + "  ".join(f"{n:>{width}s}" for n in names))
     for row in species:
-        print(f"{row['species']:16s} {row['clips']:5d} {row['frames']:6d}  "
-              + "  ".join(f"{row[n][0]:.3f} / {row[n][1]:.2f}" for n in names))
+        print(f"{row['species']:16s} {row['clips']:5d} {row['frames']:6d}  " + "  ".join(
+            f"{f'{row[n][0]:.3f} / {row[n][1]:.2f}':>{width}s}" for n in names))
+    means = {n: [sum(r[n][i] for r in species) / len(species) for i in (0, 1)] for n in names}
     print(f"{'mean':16s} {'':5s} {'':6s}  " + "  ".join(
-        f"{sum(r[n][0] for r in species) / len(species):.3f} / "
-        f"{sum(r[n][1] for r in species) / len(species):.2f}" for n in names))
+        f"{f'{means[n][0]:.3f} / {means[n][1]:.2f}':>{width}s}" for n in names))
     print(f"\naverage precision over the frames of the clips with a summary / precision in the first "
           f"{PAGE} of what the search returns")
+
+    deltas = species_delta(species)
+    if deltas:
+        print("\ndifference to SigLIP2 alone with its 95% interval, paired bootstrap over queries or "
+              "species (* where the interval leaves out 0)")
+        for title, by_name in (("summary -> its video: first page, reciprocal rank",
+                                rows["summary"]["delta"]),
+                               ("all captions: first page, reciprocal rank", rows["captions"]["delta"]),
+                               ("species: average precision, first 48", deltas)):
+            print(title)
+            for name, (first, second) in by_name.items():
+                print(f"  {name:{width}s}  {_signed(first)}  {_signed(second)}")
     return rows, species

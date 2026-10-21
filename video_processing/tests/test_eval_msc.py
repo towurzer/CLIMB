@@ -6,6 +6,7 @@ segment or a rank counted from 0 would put wrong numbers there without anything 
 """
 
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -91,6 +92,22 @@ def test_each_query_set_scores_where_its_target_first_appears():
     assert rows["Gemini"]["SigLIP2"] == (1.0, 1.0) and rows["Gemini"]["PeskaVLP"] == (1.0, 0.25)
     assert rows["captions"] == rows["Gemini"]
     assert rows["summary"]["queries"] == 1
+    # One query each, so every resample is that query: found the same, reciprocal rank 0.5 lower.
+    assert rows["summary"]["delta"]["PeskaVLP"] == ((0.0, 0.0, 0.0), (-0.5, -0.5, -0.5))
+
+
+def test_the_interval_is_around_the_mean_difference_and_covers_noise():
+    assert msc.interval([1.0] * 20) == (1.0, 1.0, 1.0)
+    mean, low, high = msc.interval([1.0, -1.0] * 40)
+    assert mean == 0.0 and low < 0 < high
+
+
+def test_two_siglip2_models_keep_apart_in_the_cache_and_the_tables():
+    """Both have the signal "visual"; keyed by signal, so400m's vectors would overwrite large's."""
+    large, so400m = "google/siglip2-large-patch16-384", "google/siglip2-so400m-patch16-384"
+    assert msc._cached(Path("c"), large) != msc._cached(Path("c"), so400m)
+    assert msc._cached(Path("c"), so400m, "text") == Path("c/google--siglip2-so400m-patch16-384-text.npy")
+    assert msc.model_key(so400m) == "siglip2-so400m-patch16-384"
 
 
 @pytest.fixture

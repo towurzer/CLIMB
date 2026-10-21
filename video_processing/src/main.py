@@ -90,6 +90,8 @@ def build_parser():
                                           "described MVK clips (README 1.7)")
     msc.add_argument("--data", required=True,
                      help="folder with the MSC download, laid out as on its server")
+    msc.add_argument("--model", help="a second visual model to measure next to SigLIP2 "
+                                     "(default: MVK's own from CLIMB_COLLECTION_MODELS, if any)")
     add_common(sub.add_parser("status", help="what is done and what is left"))
 
     enqueue = add_common(sub.add_parser("enqueue", help="load a manifest of videos into the queue"))
@@ -155,7 +157,7 @@ def dispatch(args, conn=None):
     if args.command == "eval-msc":
         from evaluation import msc
         from pipeline import device
-        return msc.run(args.data, device.pick_device())
+        return msc.run(args.data, device.pick_device(), args.model)
     if args.command == "check":
         # Owns its database connection: an unreachable database is one of the things it reports.
         raise SystemExit(0 if run_checks(collection) else 1)

@@ -864,13 +864,21 @@ more of the worker's memory, it was taken out again; migration 014 drops its vec
 summary's clip on the first page 36% of the time and the caption's segment 10%: the pool is small, so every number
 here is higher than it would be on the whole index, and it is the comparison that carries over.
 
+Its smaller predecessor, BioCLIP 2 (ViT-L/14), did worse still (0.179 average precision on the species) and went the
+same way. `eval-msc` prints a 95% paired bootstrap interval for every difference to SigLIP2 alone, and neither BioCLIP
+gains anywhere without losing significantly somewhere else. The one significant gain came from the other side:
+SigLIP2 so400m, the opt-in GPU model, is no better than large on its own, but the two fused lift the captions by
+5 points of the first page (+3.0 to +7.1) and the species by 0.016 average precision, with the summaries unchanged.
+CLIMB searches with one SigLIP2 per machine, so for now that is a number, not a feature.
+
 To repeat it, MSC needs a login, which the form at https://msc.hkustvgd.com gives. From https://hkust-vgd.ust.hk/MSC/
 download `videos_480/` and `information/annotations/` (0.8 GB; the 25 GB of PNG frames next to them are not needed)
 into one folder, laid out as on the server. They are for non-commercial research only and to be cited. Then
 `python main.py eval-msc --data <that folder>` ranks with SigLIP2, and with MVK's own model next to it if
-`CLIMB_COLLECTION_MODELS` gives MVK one again; BioCLIP's columns come from the version that still had it. The first
-run embeds the 867 frames, about half an hour of SigLIP2 on the laptop's CPU, and the vectors stay in
-`CLIMB_WORK_DIR/msc-eval`.
+`CLIMB_COLLECTION_MODELS` gives MVK one again; `--model <name>` measures any other model the pipeline can load
+instead. BioCLIP's columns come from the version that still had its loader. The first run embeds the 867 frames,
+about half an hour of SigLIP2 on the laptop's CPU (so400m: 41 minutes), and the vectors stay in
+`CLIMB_WORK_DIR/msc-eval`, named by model.
 
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
