@@ -1,9 +1,9 @@
 """
-The domain models next to SigLIP2: BioCLIP for MVK, PeskaVLP for LHE (pipeline/visual_models.py).
+The domain model next to SigLIP2: PeskaVLP for LHE (pipeline/visual_models.py, pipeline/peskavlp.py).
 
 A preprocessing that differs from the model's own transform, or a checkpoint loaded into the wrong
-layers, does not raise anything: the vectors just mean less. So both are pinned against the models'
-own definitions here.
+layers, does not raise anything: the vectors just mean less. So both are pinned against the model's
+own definition here.
 """
 
 import numpy as np
@@ -11,7 +11,6 @@ import pytest
 import torch
 import torchvision.transforms as T
 from PIL import Image
-from torchvision.transforms import InterpolationMode
 
 from pipeline import peskavlp, visual_models
 
@@ -27,36 +26,21 @@ def _as_decoded(image):
     return torch.from_numpy(np.array(image)).permute(2, 0, 1)
 
 
-def test_the_peskavlp_preprocessing_matches_its_own_transform():
-    theirs = T.Compose([T.Resize((360, 640)), T.CenterCrop(224), T.ToTensor(),
+def test_peskavlp_sees_the_whole_frame_resized_to_224():
+    """Not their centre crop of 640x360 (peskavlp.SIZE): the whole frame, squashed, normalised as theirs."""
+    theirs = T.Compose([T.Resize((224, 224)), T.ToTensor(),
                         T.Normalize(mean=list(peskavlp.MEAN), std=list(peskavlp.STD))])
-    ours = visual_models.FramePreprocess(list(peskavlp.RESIZE), peskavlp.CROP, peskavlp.MEAN,
-                                         peskavlp.STD, InterpolationMode.BILINEAR)
     image = _frame()
-    pixels = ours(images=[_as_decoded(image)], device="cpu")["pixel_values"]
+    pixels = visual_models.peskavlp_processor()(images=[_as_decoded(image)], device="cpu")["pixel_values"]
     assert tuple(pixels.shape) == (1, 3, 224, 224)
     # PIL and torch resample slightly differently; a channel swap or a missing normalisation would
     # be off by whole units, not hundredths.
     assert (pixels[0] - theirs(image)).abs().max() < 0.05
 
 
-def test_the_open_clip_preprocessing_keeps_the_short_side_and_the_centre():
-    """resize_mode 'shortest': the short side to 224, then the centre square, as open_clip does."""
-    mean, std = (0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)
-    theirs = T.Compose([T.Resize(224, interpolation=InterpolationMode.BICUBIC), T.CenterCrop(224),
-                        T.ToTensor(), T.Normalize(mean=list(mean), std=list(std))])
-    ours = visual_models.FramePreprocess(224, 224, mean, std, InterpolationMode.BICUBIC)
-    image = _frame(1)
-    pixels = ours(images=[_as_decoded(image)], device="cpu")["pixel_values"]
-    assert tuple(pixels.shape) == (1, 3, 224, 224)
-    assert (pixels[0] - theirs(image)).abs().max() < 0.05
-
-
 def test_each_model_has_its_family_and_signal():
-    assert visual_models.family("imageomics/bioclip-2.5-vith14") == "open_clip"
     assert visual_models.family(peskavlp.NAME) == "peskavlp"
     assert visual_models.family("google/siglip2-large-patch16-384") == "hf"
-    assert visual_models.signal_name("imageomics/bioclip-2.5-vith14") == "bioclip"
     assert visual_models.signal_name(peskavlp.NAME) == "peskavlp"
     assert visual_models.signal_name("google/siglip2-large-patch16-384") == "visual"
 

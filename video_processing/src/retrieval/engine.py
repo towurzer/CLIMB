@@ -25,6 +25,8 @@ SOURCE_RETRIEVERS = {
     "asr": ("transcript",),
     "caption": ("caption",),
     "info": ("info", "tags"),
+    # A collection's own visual model (PeskaVLP for LHE), with its own tickbox for that dataset.
+    **{signal: (signal,) for signal in sorted(set(visual_models.SIGNALS.values()))},
 }
 
 # Signals that rank videos, not keyframes. They join after the frame-level fusion
@@ -190,7 +192,7 @@ class SearchEngine:
         self.visual_model = None
         self.text_model = None
         # collection -> loaded spec of the domain model that runs next to SigLIP2 there
-        # (CLIMB_COLLECTION_MODELS): BioCLIP for MVK, PeskaVLP for LHE.
+        # (CLIMB_COLLECTION_MODELS): PeskaVLP for LHE.
         self.collection_models = {}
         # (tower, model_id, text) -> pgvector literal, most recently used last. See
         # QUERY_EMBED_CACHE_SIZE: query embedding dominates a search, and refining a sequence
@@ -229,6 +231,10 @@ class SearchEngine:
         """
         return self.collection_models.get(collection.upper()) if collection else None
 
+    # Loading reads the vector counts and embedding_model. Left open, that transaction holds its
+    # locks until the first search, which a pending migration refuses, so `main.py migrate` waited
+    # on the worker for as long as it ran.
+    @_ends_transaction
     def _load_models(self):
         from transformers import AutoModel, AutoTokenizer
 
@@ -473,8 +479,8 @@ class SearchEngine:
                     self.conn, vector, visual_spec["model_id"], visual_spec["dims"],
                     scope, depth))
             # The collection's own model, searching the same keyframes in its own space; its
-            # ranking fuses with SigLIP2's like any other signal. Unticking Visual turns both off.
-            if domain and enabled("visual"):
+            # ranking fuses with SigLIP2's like any other signal. Its tickbox is its signal name.
+            if domain and enabled(domain["signal"]):
                 domain_vector = embed(domain["signal"],
                                       lambda: self.embed_query_visual(parsed.free_text, domain))
                 run(domain["signal"], lambda: retrievers.visual(
@@ -575,9 +581,9 @@ class SearchEngine:
         if enabled("visual"):
             for index, vector in zip(wanted, self.embed_query_visual_batch(texts, visual_spec)):
                 vectors[index]["visual"] = vector
-            if domain:
-                for index, vector in zip(wanted, self.embed_query_visual_batch(texts, domain)):
-                    vectors[index][domain["signal"]] = vector
+        if domain and enabled(domain["signal"]):
+            for index, vector in zip(wanted, self.embed_query_visual_batch(texts, domain)):
+                vectors[index][domain["signal"]] = vector
         if self.text_model and (enabled("caption") or enabled("transcript") or enabled("info")):
             for index, vector in zip(wanted, self.embed_query_text_batch(texts)):
                 vectors[index]["text"] = vector

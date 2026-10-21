@@ -42,6 +42,12 @@ def test_phrase_retrievers_are_never_gated():
 
 
 def test_every_source_maps_somewhere():
-    """The frontend's SOURCES list in frontend/src/sources.js has to line up with these keys."""
-    assert set(SOURCE_RETRIEVERS) == {"visual", "ocr", "asr", "caption", "info"}
+    """SOURCES and DOMAIN_SOURCES in frontend/src/sources.js have to line up with these keys."""
+    assert set(SOURCE_RETRIEVERS) == {"visual", "ocr", "asr", "caption", "info", "peskavlp"}
     assert all(names for names in SOURCE_RETRIEVERS.values())
+
+
+def test_a_collection_model_has_a_source_of_its_own():
+    """Its tickbox is separate from Visual: either can be switched off alone."""
+    assert _allowed_retrievers(["peskavlp"]) == {"peskavlp"}
+    assert _allowed_retrievers(["visual"]) == {"visual"}

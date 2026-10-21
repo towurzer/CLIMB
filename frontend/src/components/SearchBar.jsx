@@ -1,5 +1,5 @@
 import {useState, useRef, useEffect} from "react";
-import {COLLECTIONS, SOURCES} from "../sources";
+import {COLLECTIONS, sourcesFor} from "../sources";
 
 // The query syntax has nowhere else to be discovered, so it hangs off the input as a tooltip.
 const SYNTAX_HELP = [
@@ -100,7 +100,7 @@ function SearchBar({onSearch, loading, history, sources, onToggleSource, collect
                     ))}
                 </select>
                 <span className="source-picker-label">Sources</span>
-                {SOURCES.map(({key, label, title}) => {
+                {sourcesFor(collection).map(({key, label, title}) => {
                     const active = sources.includes(key);
                     // Searching nothing is not a search. The last one standing cannot be unticked.
                     const isLast = active && sources.length === 1;

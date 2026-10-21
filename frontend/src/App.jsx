@@ -1,5 +1,5 @@
 import {useState, useCallback, useEffect, useRef} from "react";
-import {ALL_SOURCE_KEYS, sourcesForCollection} from "./sources";
+import {ALL_SOURCE_KEYS, sourceKeysFor, sourcesForCollection} from "./sources";
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
@@ -206,9 +206,10 @@ function App() {
             // In AVS mode the backend hides scenes already submitted in our session
             const {mode, code} = avsFilterRef.current;
             const avsParam = mode === "avs" && code ? `&avs_session=${code}` : "";
-            // Omitted when everything is ticked, which the backend already reads as "all sources".
+            // Omitted when everything this dataset shows is ticked, which the backend already reads
+            // as "all sources".
             const picked = sourcesRef.current;
-            const sourcesParam = picked.length < ALL_SOURCE_KEYS.length
+            const sourcesParam = picked.length < sourceKeysFor(collectionRef.current).length
                 ? `&sources=${picked.join(",")}`
                 : "";
 

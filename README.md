@@ -409,7 +409,7 @@ this is just the order.
    python main.py migrate
    python main.py check          # fix every FAIL before going on
    python main.py run            # ingest + decode/select/purge in batches, CPU only
-   python main.py embed          # SigLIP2 large, plus BioCLIP for MVK and PeskaVLP for LHE (1.7)
+   python main.py embed          # SigLIP2 large, plus PeskaVLP for LHE (1.7)
    python main.py ocr
    python main.py caption
    python main.py asr
@@ -822,32 +822,92 @@ this machine searches with, and `embed --model <name>` runs one of them on its o
 line; to get the space back, `DELETE FROM keyframe_embedding WHERE model_id = 3;` (3 is so400m, see
 `migrations/010_so400m.sql`), before `index build`, or it builds an index over them too.
 
-**MVK and LHE get a second model each.** SigLIP2 learned from web images, and neither a dive nor a laparoscopic
-hysterectomy looks like the web. For those two collections a second model searches next to it:
+**LHE gets a second model.** SigLIP2 learned from web images, and a laparoscopic hysterectomy looks nothing like the
+web. For LHE a second model searches next to it:
 
 | Collection | Model | What it learned from | License |
 |------------|-------|----------------------|---------|
-| MVK | BioCLIP 2.5 Huge (`imageomics/bioclip-2.5-vith14`, ViT-H/14, open_clip) | 200M+ images of living things, with part of LAION mixed back in | MIT |
 | LHE | PeskaVLP (`camma/peskavlp`, ResNet-50 + Bio_ClinicalBERT) | surgical video lectures and their narration | CC BY-NC-SA 4.0, research only |
 
-Both rank the same keyframes in their own space, and their list fuses with SigLIP2's like any other signal
-(`CLIMB_W_DOMAIN`, 1.0, unmeasured), with its own badge. So "a moray eel in a crevice" is lifted by BioCLIP, "a diver
-with a yellow tank" by SigLIP2, and "a diver photographs a turtle" gets votes from both. They run only when the
-dataset dropdown names their collection (their vectors exist for that collection alone, so in an all-datasets search
-they would only add hits from it), and unticking Visual switches them off with SigLIP2. `embed` embeds each one for
-its own collection, about 85,000 MVK and 150,000 LHE keyframes, 2% of V3C's. `CLIMB_COLLECTION_MODELS=` (empty)
-switches both off.
+It ranks the same keyframes in its own space, and its list fuses with SigLIP2's like any other signal
+(`CLIMB_W_DOMAIN`, 1.0, measured below), with its own badge. It runs only when the dataset dropdown names LHE (its
+vectors exist for LHE alone, so in an all-datasets search it would only add hits from there), and it has its own
+tickbox, second after Visual and only there while LHE is picked, so SigLIP2 and PeskaVLP can each be searched alone.
+`embed` embeds it for LHE only, about 150,000 keyframes, 1% of V3C's. `CLIMB_COLLECTION_MODELS=` (empty) switches it
+off.
 
-Each model sees the keyframe the way it was trained to, which for both means the centre: BioCLIP takes the middle
-square, PeskaVLP the middle 224 pixels of the frame scaled to 640x360. What they leave out at the edges, SigLIP2 still
-sees. On the laptop's CPU the BioCLIP text tower adds ~0.3 s to an MVK search (it is a ViT-H's), PeskaVLP's BERT next
-to nothing.
+PeskaVLP sees the whole keyframe, squashed to 224x224. It was trained on the middle 224 pixels of the frame at
+640x360, which is a third of the width, and on GynSurg the whole frame found more (below; migration 015 re-embeds
+from it). On the laptop's CPU its BERT adds next to nothing to a search.
 
 PeskaVLP is rebuilt from its weights (`pipeline/peskavlp.py`, 495 MB from the University of Strasbourg on first use)
 rather than installed: CAMMA's package pins transformers 4.30.2, numpy < 2 and mmengine 0.7.0, which would uninstall
 half of this pipeline on the way in. The weights load strictly, and the text vectors match their code to a cosine of
-1.0 (`tests/test_domain_models.py`). Neither model has been measured against SigLIP2 here yet; GynSurg's labelled
-gynaecological laparoscopy frames and MSC's biologist-checked descriptions of the dives are what to measure with.
+1.0 (`tests/test_domain_models.py`).
+
+**Measured for LHE** on GynSurg's labelled frames (the same group's gynaecological laparoscopy, 1,248 instrument and
+725 anatomy frames scaled to the 270 lines of the VBS copies, two phrasings per class, a frame relevant when its mask
+holds the class). Average precision ranks every frame; the first 48 are what the search would show, which fuses each
+model's 200 best (`CLIMB_RETRIEVER_DEPTH`):
+
+| | SigLIP2 | PeskaVLP alone | both, `CLIMB_W_DOMAIN` 0.5 | both, 1.0 | both, 2.0 |
+|---|---|---|---|---|---|
+| 7 instrument classes, average precision / first 48 | 0.334 / 0.42 | 0.409 / 0.55 | 0.391 / 0.45 | 0.414 / 0.53 | **0.426 / 0.56** |
+| 3 anatomy classes | **0.535** / 0.57 | 0.504 / 0.55 | 0.528 / **0.58** | 0.520 / 0.57 | 0.514 / 0.56 |
+
+At the default 1.0, 54% of the first page is relevant against SigLIP2's 46%; 2.0 is not significantly better, and 0.5
+is significantly worse. PeskaVLP is the one that knows the sealer-divider (0.78 of the first page against 0.28), the
+suturing instruments (0.91 against 0.67), the hook and the ovary; SigLIP2 knows the fallopian tube (0.42 against 0.05)
+and the scissors, and fused at 1.0 the two find the bipolar forceps better than either alone (0.83). With the centre
+crop PeskaVLP was trained on, the same table read 0.337 / 0.46 and 0.478 / 0.49 for PeskaVLP alone and 51% fused:
+the whole frame wins on frames cut to LHE's 16:9 at 480x270 too (0.432 against 0.377 average precision), where three
+crops across the frame, averaged, did not.
+
+To repeat it (no database needed), download GynSurg's two segmentation sets:
+[instruments](https://ftp.itec.aau.at/datasets/GynSurge/Semantic_Segmentation_Dataset/GynSurg_Instrument_Dataset.zip),
+2.4 GB, and [anatomy](https://ftp.itec.aau.at/datasets/GynSurge/Semantic_Segmentation_Dataset/GynSurg_Anatomy_Dataset.zip),
+345 MB. They are for research use only and to be cited (Nasirihaghighi et al., ACM MM 2025). Unpack both into one
+folder and run `python main.py eval-gynsurg --data <that folder>`; the queries and mask values are in
+`evaluation/gynsurg.py`. The first run embeds the 1,973 frames, which takes 78 minutes of SigLIP2 and 2 of PeskaVLP
+on the laptop's CPU, so it fits a lunch break. The vectors stay in `CLIMB_WORK_DIR/gynsurg-eval`, so trying other
+queries or weights afterwards takes half a minute.
+
+**MVK had one too, until it was measured.** BioCLIP 2.5 Huge (`imageomics/bioclip-2.5-vith14`, 200M+ images of living
+things) searched next to SigLIP2 for the dives, the same way PeskaVLP does for LHE. MSC (Truong et al., ACM MM 2025)
+describes 92 of MVK's own clips: a summary written by a person for 81 of them, and Gemini, GPT and Qwen captions for
+each of their 449 segments (cut at scene changes, median 4 s). The measurement ranks 867 frames, one every 4 s of each
+segment, at the VBS copies' 480x270. A summary looks for its clip and a caption for its segment, and either counts as
+found when a frame of it is on the first page (48). The species are the 15 that at least three summaries name
+("a grouper", "a grouper swimming"), scored like GynSurg, a frame relevant when its clip's summary names the species:
+
+| | SigLIP2 | BioCLIP alone | both, `CLIMB_W_DOMAIN` 0.5 | both, 1.0 | both, 2.0 |
+|---|---|---|---|---|---|
+| 81 summaries, found on the first page / mean reciprocal rank | **0.93 / 0.44** | 0.64 / 0.20 | 0.89 / 0.38 | 0.88 / 0.36 | 0.83 / 0.34 |
+| 1,054 captions | 0.63 / 0.20 | 0.46 / 0.10 | **0.67** / 0.20 | 0.64 / 0.19 | 0.58 / 0.16 |
+| 15 species, average precision / first 48 | 0.278 / **0.25** | 0.218 / 0.21 | **0.286** / 0.24 | 0.276 / **0.25** | 0.262 / 0.24 |
+
+BioCLIP alone is behind SigLIP2 on all three, and fused at the default 1.0 it cost the summaries 5 points of the
+first page while adding 1 to the captions and nothing to the species. It knew its sponges (0.40 average precision
+against SigLIP2's 0.28) and not much else: groupers 0.05 against 0.34. For 0.3 s more per MVK search and about 1.4 GB
+more of the worker's memory, it was taken out again; migration 014 drops its vectors. A random ranking would find the
+summary's clip on the first page 36% of the time and the caption's segment 10%: the pool is small, so every number
+here is higher than it would be on the whole index, and it is the comparison that carries over.
+
+Its smaller predecessor, BioCLIP 2 (ViT-L/14), did worse still (0.179 average precision on the species) and went the
+same way. `eval-msc` prints a 95% paired bootstrap interval for every difference to SigLIP2 alone, and neither BioCLIP
+gains anywhere without losing significantly somewhere else. The one significant gain came from the other side:
+SigLIP2 so400m, the opt-in GPU model, is no better than large on its own, but the two fused lift the captions by
+5 points of the first page (+3.0 to +7.1) and the species by 0.016 average precision, with the summaries unchanged.
+CLIMB searches with one SigLIP2 per machine, so for now that is a number, not a feature.
+
+To repeat it, MSC needs a login, which the form at https://msc.hkustvgd.com gives. From https://hkust-vgd.ust.hk/MSC/
+download `videos_480/` and `information/annotations/` (0.8 GB; the 25 GB of PNG frames next to them are not needed)
+into one folder, laid out as on the server. They are for non-commercial research only and to be cited. Then
+`python main.py eval-msc --data <that folder>` ranks with SigLIP2, and with MVK's own model next to it if
+`CLIMB_COLLECTION_MODELS` gives MVK one again; `--model <name>` measures any other model the pipeline can load
+instead. BioCLIP's columns come from the version that still had its loader. The first run embeds the 867 frames,
+about half an hour of SigLIP2 on the laptop's CPU (so400m: 41 minutes), and the vectors stay in
+`CLIMB_WORK_DIR/msc-eval`, named by model.
 
 For more Information about SigLIP2 see: https://arxiv.org/pdf/2502.14786
 
@@ -1001,7 +1061,7 @@ sorting the badges by rank would cheerfully credit the wrong one. Sequence hits 
 
 Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and the first four start ticked. Untick one and
 it is not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
-embedded.
+embedded. LHE gets a sixth, second in line: its own model, PeskaVLP (see 1.7), ticked whenever LHE is picked.
 
 **Info** is the odd one out. It matches your words against what the uploader wrote about the whole video (title, tags,
 description, see 1.4.1), so it cannot say *which frame*. Instead of adding frames it re-orders the ones the other

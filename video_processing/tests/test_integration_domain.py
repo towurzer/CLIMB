@@ -13,7 +13,7 @@ from pipeline import visual_models
 
 pytestmark = pytest.mark.integration
 
-QUERIES = {"MVK": "a fish swimming over a coral reef", "LHE": "bipolar forceps coagulating tissue"}
+QUERIES = {"LHE": "bipolar forceps coagulating tissue"}
 
 
 def _domain_models(db):
@@ -58,9 +58,19 @@ def test_an_all_datasets_search_leaves_it_out(worker, domain_models):
         assert not any(signal in r["signals"] for r in body["results"])
 
 
-def test_unticking_visual_switches_it_off_too(worker, domain_models):
+def test_its_own_tickbox_switches_it_off(worker, domain_models):
     for collection, model in domain_models:
         signal = visual_models.signal_name(model)
         body = _search(worker, QUERIES.get(collection, "a person"), collection=collection,
-                       sources=["caption", "ocr", "asr"])
+                       sources=["visual", "caption", "ocr", "asr"])
         assert not any(signal in r["signals"] for r in body["results"])
+        assert any("visual" in r["signals"] for r in body["results"])
+
+
+def test_unticking_visual_leaves_it_on(worker, domain_models):
+    """SigLIP2 and the collection's model are two tickboxes now, so either can run alone."""
+    for collection, model in domain_models:
+        signal = visual_models.signal_name(model)
+        body = _search(worker, QUERIES.get(collection, "a person"), collection=collection,
+                       sources=[signal])
+        assert body["results"] and all(set(r["signals"]) == {signal} for r in body["results"])

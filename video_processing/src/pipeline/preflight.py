@@ -157,10 +157,8 @@ def check_models(report):
 
     from pipeline import peskavlp, visual_models
 
-    # Each collection's model, next to SigLIP2. open_clip repos carry open_clip_config.json instead
-    # of config.json; PeskaVLP's weights come from the University of Strasbourg, its text model
-    # from the hub.
-    files = {}
+    # Each collection's model, next to SigLIP2. PeskaVLP's weights come from the University of
+    # Strasbourg, its text model from the hub.
     for collection, model in Config().collection_models().items():
         stage = f"embed ({collection})"
         if visual_models.family(model) == "peskavlp":
@@ -168,11 +166,9 @@ def check_models(report):
             repos[f"{stage} text"] = peskavlp.TEXT_MODEL
         else:
             repos[stage] = model
-            if visual_models.family(model) == "open_clip":
-                files[stage] = "open_clip_config.json"
 
     for stage, repo in repos.items():
-        if _cached(repo, files.get(stage, "config.json")):
+        if _cached(repo):
             report.add(OK, "models", f"{stage}: {repo} is cached")
         elif _reachable(repo):
             report.add(OK, "models", f"{stage}: {repo} will download on first use")
