@@ -97,13 +97,13 @@ computing embeddings, and text recognition in frames via OCR, as well as caption
 Section~\ref{pipeline}. The resulting scenes, keyframes, and four indexes that the retrievers query land in a PostgreSQL database.
 
 \noindent
-At query time, the system runs as two processes, a Node.js backend handling media display in the frontend, DRES communication, and the AVS mirror \footnote{A local copy of the shared Ad-hoc Video Search state maintained by the AVS Session Service, enabling multiple CLIMB instances operated by different team members to collaboratively search while avoiding duplicate scene submissions.} as well as a Python 
+At query time, the system runs as two processes, a Node.js backend transmitting media to the frontend, handling DRES communication and collaboration features \footnote{A local copy of the shared Ad-hoc Video Search state maintained by the AVS Session Service, enabling multiple CLIMB instances operated by different team members to collaboratively search while avoiding duplicate scene submissions.} as well as a Python <
 engine handling models, query embedding, and rank fusion. Both connect to the database: the backend reads metadata directly, delegating 
 only search execution to Python. The frontend (Section~\ref{search}) communicates exclusively with the Node.js backend.
 
 \noindent
 For scenarios where network reliability is a concern, CLIMB supports fully localized deployments, serving media assets directly 
-from localhost. Additionally, the shared and optional AVS session service (Section~\ref{avs}) only transmits a few kilobytes of JSON polled every four seconds.
+from localhost. Additionally, the shared and optional collaboration service (Section~\ref{avs}) only transmits a few kilobytes of JSON polled every four seconds.
 
 
 
@@ -343,3 +343,4 @@ A collaborative mode hides shots a teammate already submitted from everyone's re
 \bibliography{climb}
 
 \end{document}
+
