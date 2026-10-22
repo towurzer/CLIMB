@@ -120,7 +120,8 @@ def load_reader(dev: str):
     """
     An OCR reader exposing `.read(path) -> [(text, confidence)]`, whichever engine backs it.
 
-    Set CLIMB_OCR_BACKEND to pin one. The default tries paddle and falls back.
+    Set CLIMB_OCR_BACKEND to pin one. The default tries paddle and falls back, with a warning
+    that says why.
     """
     logger = custom_logger.get_logger("ocr")
     requested = (Config.OCR_BACKEND or "auto").lower()
@@ -132,12 +133,20 @@ def load_reader(dev: str):
         logger.info(f"OCR backend: {requested} (pinned)")
         return BACKENDS[requested](dev)
 
+    unavailable = []
     for name, backend in BACKENDS.items():
         try:
             reader = backend(dev)
-        except ImportError:
+        except ImportError as e:
+            unavailable.append(f"{name} ({e})")
             continue
-        logger.info(f"OCR backend: {name}")
+        if unavailable:
+            # rapidocr runs the older PP-OCRv3 models and on the CPU only, GPU or not.
+            logger.warning(f"OCR falls back to {name}, which reads worse: {', '.join(unavailable)} "
+                           "did not load. paddle needs Python <= 3.13, paddleocr 3.x and paddlepaddle "
+                           "(README 1.1); CLIMB_OCR_BACKEND=rapidocr picks the fallback on purpose.")
+        else:
+            logger.info(f"OCR backend: {name}")
         return reader
 
     raise ImportError(

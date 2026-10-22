@@ -26,8 +26,7 @@ In order to run CLIMB, you will need to make sure that the following things are 
   played straight from there, there is no separate web copy any more
 - (To see how to produce all of that, see the "Video Processing" section under "Getting Started - Developer")
 - A filled database: a dump of one, `dataset/climb_db.dump` from whoever ran the pipeline (`pg_dump -Fc`, see 1.0),
-  or your own run of the pipeline ("Getting Started - Developer"). An old pre-pg17 dump does not load (see the word
-  of warning under "The Database")
+  or your own run of the pipeline ("Getting Started - Developer"). 
 
 Then run `setup_climb.sh` (found in the root directory), with podman or docker installed:
 
@@ -77,13 +76,14 @@ When opening up the climb website, you will see a pretty empty screen. Don't be 
 
 <img src="readme_images/bootup.png" alt="bootup.png" width="500"/>
 
-At the very right end of the header, past the "Login to DRES" button, there is a small circle telling you whether CLIMB's
-own services are up. The frontend re-checks every 5 seconds and the colour means:
+The header holds everything that is not a search: Search / Browse, the KIS / AVS toggle and the "Login to DRES" button.
+At its very right end there is a small circle telling you whether CLIMB's own services are up. The frontend re-checks
+every 5 seconds and the colour means:
 
 - green: backend and embedding service both answer, everything works
-- green with a yellow blink: everything works **except** AVS collaboration - the shared session service cannot be
+- green with a yellow blink: everything works **except** the collaboration. The shared session service cannot be
   reached, so your teammates' submissions stop showing up. Searching, browsing and submitting to DRES are completely
-  unaffected, which is why this is not orange. A blinking green light means "carry on, but you are on your own"
+  unaffected, which is why this is not orange.
 - orange: the backend is up but the embedding service is not, so browsing, playback and submitting still work while text
   search does not. Usually you forgot to start the search engine (`python main.py serve`) or it could not
   reach the database
@@ -91,7 +91,7 @@ own services are up. The frontend re-checks every 5 seconds and the colour means
 
 Hovering the circle tells you which piece is missing and why.
 
-If you are in a competition I can recommend 2 things:
+But lets get some competition points. To maximize them I can recommend 2 things:
 
 - sabotage your opponents
 - connect to DRES in order to be able to submit frames to the server.
@@ -105,35 +105,82 @@ alone does not tell you where your submissions are going. The header button is y
 to DRES" while disconnected, a green dot and "DRES · &lt;evaluation name&gt;" once you are in. Click it again any time to
 reopen the popup and reconnect.
 
-If you don't want to search for something specific, but want to just browse through all the videos select the browsing
-tab on the top right.
-We will dynamically load more videos on scrolling and cache the Videos loaded for faster retrieval.
+### Searching
+
+Type what you are looking for and hit Enter. Plain words search everything. Hover the search box and it lists the
+rest: `text:` for text on screen, `said:` for speech, `tag:`, `video:` / `-video:`, and `A >> B` for one thing after
+another, all explained in [1.9](#19-how-searching-actually-works). Clicking into the box shows your recent searches, and
+Ctrl+K gets you back into it from anywhere.
+
+Under the box sit the dataset dropdown and the sources. At VBS the task tells you which collection it is from, so pick
+it, and the other two cannot put look-alikes on your page. The tickboxes decide what gets searched at all: Visual (the
+picture), Caption, OCR, ASR, Info (the uploader's title, tags and description), and for LHE a second picture model,
+PeskaVLP. Untick OCR when the subtitles keep winning over the picture. Picking a dataset sets two of them for you: Info
+is only on for V3C, the only collection with uploader info, and ASR is off for MVK, because nobody talks underwater
+(Whisper hears things anyway).
+
+<img src="readme_images/search.png" alt="search.png" width="500"/>
+
+Results are **one card per keyframe**. This used to be one card per scene, on the theory that seven near-identical
+frames of the same shot were a waste of a page. Turns out that was throwing away the most useful thing on the screen:
+if the ten best keyframes are all the same shot, that shot is almost certainly the answer, and collapsing them to a
+single card hides exactly that. In an AVS session a submitted scene drops out of the results anyway, so the repetition
+costs you a page slot precisely once.
+
+Each card shows its rank, its score and, underneath, the signals that found it: `OCR (3) Visual (41)` means a sign
+matched at rank 3 and the picture agreed, distantly, at 41. ⟲ on the card finds similar keyframes, ✕ throws the video
+out (for MVK the whole dive) and searches again. A sequence (`A >> B`) puts the hits of the later stages in a strip
+under the card, each with how long after the previous one it came. The line above the results counts them, says which
+dataset you searched and, once you use `text:`, `said:` or `tag:`, how many videos each of them left, so an empty page
+tells you which one emptied it.
 
 Scrolling through search results is cheap now. The first page runs the actual search and everything after it is
 served from cache, so page four arrives in about 15ms instead of running a fourth search and throwing three pages of
 it away.
 
-Results are **one row per keyframe**. This used to be one row per scene, on the theory that seven near-identical
-frames of the same shot were a waste of a page. Turns out that was throwing away the most useful thing on the screen:
-if the ten best keyframes are all the same shot, that shot is almost certainly the answer, and collapsing them to a
-single row hides exactly that. In an AVS session a submitted scene drops out of the results anyway, so the repetition
-costs you a page slot precisely once.
+### The sidebar
+
+If you click on a card it opens up a sidebar, from top to bottom:
+
+- what you clicked: video, scene, score, where the scene starts and ends, and the keyframe's time
+- a small part of the video you clicked on. "Loop segment" keeps it on repeat. On an MVK clip, `◀ 0001` and `0002 ▶`
+  step to the clips before and after it in the same dive
+- the time that gets submitted, From and To, filled in from the keyframe. Type over it if you know better
+  (`(h:)mm:ss.cc`); a time it cannot read greys out the submit button rather than sending rubbish
+- "Submit to DRES", which asks "Yes, submit!" before anything goes out
+- "Exclude video from search" and "Find similar", the same as ✕ and ⟲ on the card. Find similar forgets your query and
+  looks for keyframes that look like this one
+- a small band of all keyframes of the video (for MVK, of the whole dive). "Browse in Fullscreen" opens it in Browse,
+  on the keyframe you are on
+- the "VQA-Answer" field, where you can enter a textual answer for a Visual Question Answering Task. Two submit
+  buttons let you choose what goes to DRES: "Submit image + text" sends your answer together with the selected scene,
+  "Submit text only" sends just the answer for tasks where DRES expects no media item. Both ask for confirmation first,
+  double-clicking a button confirms it.
+- the submission log, everything you sent and what DRES said about it
+
+The arrow keys go through the results, Esc deselects.
+
+<img src="readme_images/similarity_search.png" alt="similarity_search.png" width="500"/>
+
+Every submission shows a result box with the DRES status code, a plain language summary and the verdict,
+e.g. 200 · Accepted & graded · CORRECT. Green means a correct verdict, red a wrong or rejected one, and amber
+(202 · Accepted - awaiting verdict) means DRES took the submission but hasn't judged it yet.
+
+### Browsing
+
+If you don't want to search for something specific, but want to just browse through all the videos select the browsing
+tab on the top right. It has the same dataset dropdown as the search (one setting for both) and a filter by video id.
+We will dynamically load more videos on scrolling and cache the Videos loaded for faster retrieval. An MVK dive is one
+card, `Ambon_Apr2012 · 3 clips · 21 shots`.
 
 <img src="readme_images/browsing.png" alt="browsing.png" width="500"/>
 
-If you click on a video you can see **all of its keyframes**, not one per scene. For a 58-minute video with 33 master
-shots that is 611 tiles instead of 33 , the badge on each tile is still the shot number, so the scene structure stays
-readable while you scroll, and the timecode underneath tells two frames of the same shot apart. Showing one tile per
-scene was hiding 95% of what the pipeline had already decoded, embedded and OCR'd, which is a lot of GPU
-time to spend on frames nobody could look at. Click one and it opens in the right bar.
+Click a video and you get every keyframe it has, with the scene number on each and its time underneath (for MVK the
+whole dive, clip by clip). Click a keyframe and it opens in the sidebar, the same as a search result.
 
 <img src="readme_images/select_video.png" alt="select_video.png" width="500"/>
 
-The film tape at the bottom of the panel is **every keyframe of the whole video** in order.
-Next to it is a large submit to DRES button if you want to submit the current scene.
-Additionally there is an "VQA-Answer" field where you can enter a textual answer for a Visual Question Answering Task. 
-Two submit buttons let you choose what goes to DRES: "Submit image + text" sends your answer together with the selected scene, 
-"Submit text only" sends just the answer for tasks where DRES expects no media item. Both ask for confirmation first, double-clicking a button confirms it.
+### AVS
 
 Every submission shows a result box with the DRES status code, a plain language summary and the verdict, 
 e.g. 200 · Accepted & graded · CORRECT. Green means a correct verdict, red a wrong or rejected one, and amber 
@@ -159,7 +206,7 @@ confirmation, since it un-hides everything for everybody. Without a team, New se
 Each shot you submit is sent as its own submission and is then hidden from everyone in the session's search results, 
 so no one on the team submits the same scene twice. Videos where you already got a correct hit are dimmed and marked 
 "covered", since extra shots from the same video barely raise the AVS score. For MVK that means the whole dive: a hit
-in one 15-second clip covers every clip of the same recording. Sessions are deleted after 2 hours of
+in one clip covers every clip of the same recording. Sessions are deleted after 2 hours of
 inactivity, which is meant to comfortably outlive a task block rather than punish you for thinking.
 
 Sessions are shared through a small separate service (see [2.6](#26-avs-collaboration-across-machines)), so
@@ -170,15 +217,6 @@ yellow: you keep the session and every scene already known to be taken, you just
 is back. Nothing about searching or submitting changes. If instead the session genuinely expired you get a
 "Session XXXX expired" banner - a different message on purpose, because one of them means "wait a moment" and the other
 means "start a new session".
-
-Going back to the search tab, you can search for video scenes including specific content.
-
-<img src="readme_images/search.png" alt="search.png" width="500"/>
-
-Under the "submit to DRES" button, you can find a "find similar" button which will instead of asking the backend for
-scenes including your queries will search for scenes similar to the one you clicked earlier.
-
-<img src="readme_images/similarity_search.png" alt="similarity_search.png" width="500"/>
 
 Well and that's it.
 
@@ -357,11 +395,11 @@ cd video_processing
 
 #### 1.0 The whole collection on a GPU server, the short version
 
-For whoever is kind enough to run this somewhere with GPUs. Everything below is explained in the sections that follow;
-this is just the order.
+If you just want to embed the whole collection on a GPU server, it gets easier. But first of all, thank you :) 
+Everything below is explained in the sections that follow. This is just the order.
 
-1. **Install.** Python 3.13 (PaddleOCR has no wheel for 3.14 and OCR quietly falls back to a worse engine), FFmpeg
-   with the `libopus` encoder, and an NVIDIA driver whose `nvidia-smi` header says `CUDA Version: 12.6` or higher.
+1. **Install.** Python 3.13 (PaddleOCR has no wheel for 3.14, and OCR falls back to a worse engine with a warning),
+   FFmpeg with the `libopus` encoder, and an NVIDIA driver whose `nvidia-smi` header says `CUDA Version: 12.6` or higher.
    `./setup_climb.sh` installs everything else ("Getting Started - User"). By hand, from `video_processing`:
 
    ```bash
@@ -394,10 +432,11 @@ this is just the order.
    CLIMB_MEDIA_DIR=/big/disk/climb/media           # keyframes we keep, ~33 MB per hour of video
    CLIMB_WORK_DIR=/big/disk/climb/work             # scratch, a few GB at a time
    ```
-4. **Trial run first, on a throwaway database.** Some things only show up on the server's GPU: bf16, Paddle and torch
+4. **Trial run first, on a throwaway database.** Some things only show up on a new GPU: bf16, Paddle and torch
    sharing CUDA libraries in one venv, the caption and ASR models at their full size. Finding out after a day of GPU
-   time is the expensive way, so put two videos per collection through every stage first. From
-   `video_processing/src`:
+   time is the expensive way, so put two videos per collection through every stage first. That should be quick and makes
+   sure there are no suprises after hours of GPU-Time. 
+   From `video_processing/src`:
 
    ```bash
    podman exec climb createdb -U postgres climb_trial
@@ -448,6 +487,8 @@ this is just the order.
 7. **Hand back** the media directory and a dump of the database:
    `podman exec climb pg_dump -U postgres -Fc <POSTGRES_DB_NAME> > climb.dump`.
 
+---
+You want to know more about the embedding Pipeline? I'm glad you asked:
 #### 1.1 Installation
 
 Run
@@ -467,8 +508,10 @@ Two things that are easy to lose an evening to:
   `0.27.1` because that is the version that matches `torch==2.12.1`; a bare `pip install torchvision` will happily
   upgrade torch to 2.13.0 behind your back.
 - **PaddleOCR needs Python ≤ 3.13 and paddleocr 3.x.** There is no `paddlepaddle` wheel for 3.14 at all, so on a
-  3.14 venv OCR falls back to `rapidocr-onnxruntime` automatically, which runs the older PP-OCRv3 models.
-  `CLIMB_OCR_BACKEND` forces the issue either way (`auto` / `paddle` / `rapidocr`); the interface is the same.
+  3.14 venv OCR falls back to `rapidocr-onnxruntime`, which runs the older PP-OCRv3 models, on the CPU only. It is not
+  quiet about it: `main.py check` warns, and so does the OCR stage when it starts, with the error paddle failed on.
+  `CLIMB_OCR_BACKEND` forces the issue either way (`auto` / `paddle` / `rapidocr`); the interface is the same, and
+  pinning `rapidocr` is how you say you meant it.
   paddleocr 3 renamed its arguments and rejects the 2.x ones with `Unknown argument: use_gpu`, so a 2.x install is a
   FAIL in `main.py check` rather than a surprise at the start of the OCR stage. paddleocr wants `numpy<2.4` and
   `PyYAML==6.0.2`, so below 3.14 `requirements.txt` pins those lower. It also brings `opencv-contrib-python==4.10.0.84`
@@ -522,11 +565,12 @@ python main.py <command> [options]
 Every command takes `--collection` (`V3C`, `MVK` or `LHE`; leave it out for all of them) and `--limit`. The GPU ones
 also take `--shard N --shards M`. `--limit` counts what the command works on: videos, except for `embed`, `ocr` and
 `caption`, which count keyframes. In `run` it counts videos and only limits the stages that take videos in (`fetch`
-to `select`); the later stages finish what those produced. It used to be handed to every stage as-is, so
-`run --limit 17` selected 310 keyframes and then embedded 17 of them.
-`python main.py <command> --help` explains any of them.
+to `select`); the later stages finish what those produced. So in an example `run --limit 17` selects 17 videos, creates
+310 keyframes and then all of 17 of them.  
+**`python main.py <command> --help`** explains any of them.
 
-The whole batch in one line:
+---
+In order to run the whole batch in one line:
 
 ```bash
 python main.py run
@@ -539,7 +583,7 @@ video it has not decoded yet.
 When `decode` and `select` are both in there, `run` does not decode everything and then select everything. It goes
 round in batches: decode 200 videos, select them, purge their candidate frames, next 200. Candidate frames are about
 130 MB per hour of video, so decoding the whole of V3C before selecting any of it would park ~350 GB of JPEGs in
-`work/` for no reason. `CLIMB_PROCESS_BATCH` sets the batch size. A video that fails is skipped for the rest of
+`work/` for no reason. `CLIMB_PROCESS_BATCH` (env) sets the batch size. A video that fails is skipped for the rest of
 that run (the log says why) and retried by the next one, so one broken file cannot stall everything behind it.
 
 Everything is resumable. Every stage works out what is still outstanding by asking the database, so a run that
@@ -591,12 +635,16 @@ Please be sure that you have FFmpeg installed under your system as CLIMB will sp
 executing FFmpeg. To download FFmpeg visit: https://ffmpeg.org/download.html
 
 Video compression used to live here as its own step, and then inside decode. It is gone: the source videos are already
-480x270 H.264, so the frontend just plays them, and compressing something that small a second time was a bit silly.
+480x270 H.264 (thanks), so the frontend just plays them, and compressing something that small a second time was a bit silly.
+There is no flag left for it either: the backend plays the file straight out of `CLIMB_SOURCE_ROOT`.
 
-#### 1.2.1 The job queue
+#### 1.2.1 Videos that are not mounted: the job queue
 
-If the collections are mounted (see 1.2), skip this, there is nothing to download. If they are not, the videos come
-down a batch at a time, get processed, and go away again. That loop is what `enqueue` / `fetch` / `purge` are for:
+If the collections are mounted (see 1.2), skip `enqueue` and `fetch`, there is nothing to download. `purge` and
+`status` further down are for everyone.
+
+If they are not mounted, the videos come down a batch at a time, get processed, and go away again. That loop is what
+`enqueue` / `fetch` / `purge` are for, and `ingest_jobs` in the database is the queue that tells `fetch` what is next:
 
 ```bash 
 python main.py enqueue --collection V3C --manifest videos.txt   # a list of source URIs, one per line
@@ -665,7 +713,7 @@ documentation found under https://docs.podman.io/en/latest/)
 
 **A word of warning if you have been here before:** we moved from ```ankane/pgvector``` (Postgres 16, pgvector 0.5.1) to
 ```pgvector/pgvector:pg17``` (Postgres 17, pgvector 0.8.x), because 0.5.1 has neither ```halfvec``` nor binary
-quantization and we need both to survive the full V3C dataset. Postgres does not do major version upgrades by politely
+quantization and we need both to survive with the full V3C dataset. Postgres does not do major version upgrades by politely
 reading the old files, so an existing ```postgres_data``` volume and the old ```climb_db.dump``` are **not** reusable.
 Use a fresh volume name and rebuild. Sorry.
 
@@ -814,7 +862,7 @@ python main.py asr           # Whisper transcripts of the speech
 **Embeddings** encode each keyframe into a 1024-dimensional vector with SigLIP2 large, so a search query can be encoded
 into the same space and answered with a nearest-neighbour lookup. This is the one that matters most.
 
-Large is the model on every machine, the CPU-only laptop included, because every query goes through the model's text
+Large is the model on every machine, because every query goes through the model's text
 tower. The bigger SigLIP2 models are not worth their embed time here. From the SigLIP2 paper (Table 1), text-to-image
 recall@1:
 
@@ -964,7 +1012,7 @@ Those were CPU numbers for picking something the laptop could live with. The def
 for the GPU server: captions are written once and only their text is searched, so a bigger model costs server time
 and nothing at search time. 4B rather than 8B because on Qwen's own benchmarks 2B to 4B gains 7-11 points on general
 image understanding (MMStar 58.3 to 69.8, RealWorldQA 63.9 to 70.9) and 4B to 8B about one (70.9, 71.5), for twice
-the GPU time per caption. It does not fit the laptop: 4.4B parameters are ~18 GB in the fp32 the CPU path runs in.
+the GPU time per caption.
 
 **Text embeddings** are the fourth-and-a-half stage:
 
@@ -1022,8 +1070,8 @@ Three things worth knowing:
 - Do it **after** loading, not before. Maintaining an HNSW index while you shovel millions of rows into it is several
   times slower than building it once at the end.
 - Do it on a machine with some RAM to spare (we ask for 8GB of ```maintenance_work_mem```). Building the index and
-  *reading* the index are very different appetites , the plan is that whoever has the beefy machine builds it, and the
-  competition laptop just gets handed the finished database.
+  *reading* the index are very different appetites , the plan is that whoever has the beefy machine builds it, and
+  everybody else gets the finished database.
 - Give the Postgres container a real ```--shm-size``` (8g if you are asking for 8GB of ```maintenance_work_mem```). A
   parallel index build wants a shared memory segment that big, the pgvector image ships with 63MB of ```/dev/shm```,
   and the error you get is ```No space left on device``` pointing at a disk with plenty of space on it. The build
@@ -1060,19 +1108,26 @@ to work out sometime.
 
 #### 1.9 How searching actually works
 
-Four different things look for your query at once, and their answers get merged.
+Four different things look for your query at once, a fifth for LHE, and two more judge whole videos. Their answers all
+get merged.
 
 - **The picture itself.** Your words get turned into a vector and matched against every keyframe.
   This is the workhorse and handles anything visual.
+- **The picture again, for LHE.** PeskaVLP learned from surgery videos and ranks the same keyframes in its own space
+  (1.7). It only runs when the dataset dropdown says LHE.
 - **Text on screen.** Signs, chyrons, scoreboards, credits. Matched as words, not meaning, because
   what OCR is uniquely good at is *exact* strings , nothing else in the system can find "Dupont".
 - **Shot descriptions.** Matched by meaning, so "a cyclist outside a shop" finds "A man in a red
   jacket stands beside a bicycle outside a bakery" despite sharing no words with it.
 - **What people said.** Also by meaning, and mapped back to whichever scenes were on screen at the
   time.
+- **What the uploader wrote, and their tags** (V3C only, from the info files, 1.4.1). Info matches your words
+  against the video's title, description and tags by meaning, Tags looks for your words among its tags. Neither knows
+  which frame you mean, so neither adds any: they lift the frames the others found, by how well the whole video
+  matches. Both sit under the Info tickbox, see below.
 
-Each returns its own ranked list of scenes, and the lists are merged by **where** each one placed a
-scene rather than by its score , the numbers are not comparable (image similarity sits around 0.05,
+Each returns its own ranked list of scenes (Info and Tags one of videos), and the lists are merged by **where** each
+one placed a scene rather than by its score , the numbers are not comparable (image similarity sits around 0.05,
 text similarity around 0.85, keyword rank is unbounded), but "this one came third" always is.
 
 A scene found by two signals beats a scene found by one, and an exact text match is weighted very
@@ -1130,7 +1185,7 @@ The tickbox still starts unticked for MVK: the full collection is 3,190 clips, a
 
 This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
 match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the
-lexical pass falls back to ORing every content word, so `a snowboarder doing a backflip` goes hunting for scenes whose
+lexical pass falls back to see every content word, so `a snowboarder doing a backflip` goes hunting for scenes whose
 subtitles say "backflip", and eight of those sit above the first actual snowboarder. Unticking OCR is how you say "not
 this time" for one query, instead of retuning the weights for every query forever.
 
@@ -1185,7 +1240,7 @@ that list as its own parameter, which is the one that counts.
 
 ##### Searching for things that happen in order
 
-Sometimes you do not remember a shot, you remember a *sequence* , the interview, then the building. `>>` chains
+Sometimes you do not want to search for a shot, you need a *sequence* , the interview, then the building. `>>` chains
 stages: `A >> B >> C` is three stages and two independent windows, and each stage is a full query in its own right, so
 `text:"Boulangerie" >> a dog runs past` is perfectly legal. The window rides with the separator that precedes the
 stage: `(d120)` and `(120)` are both 120 seconds, `(d500ms)` is half a second, and leaving it off uses the default.
@@ -1240,7 +1295,7 @@ start if the next Section.
 
 #### 1.11 Tests
 
-There are tests now. I know, I was surprised too.
+There are tests now. I know, I was surprised too!
 
 ```bash
 cd video_processing
@@ -1412,35 +1467,3 @@ one included, browser based wise I like to use
 <div style="text-align: center;"><u><b><i>THE END</i></b></u></div>
 
 ---
-
-## Scaling up to the full V3C dataset
-
-The version of CLIMB that won the course competition indexed 200 videos and 25 hours. VBS 2027 runs against all of V3C:
-**28,450 videos, 3,800 hours, 4.14 million master shots and 8.7 TB of video**, plus the marine (MVK) and medical (LHE75)
-datasets. That is roughly 150x more video, and, more to the point, **289x more master shots**, because our 200-video
-set runs about 550 shots per hour where V3C overall runs about 1,090. It is cut roughly twice as densely as we are, so
-sizing anything off hours alone quietly halves the answer.
-
-And then there is a third number, which is the one that hurts: **1,285x more bytes**. The 200 videos we were handed had
-already been shrunk to 480x270 at 0.6 Mbit/s, a courtesy we cheerfully mistook for a video collection. Real V3C averages
-5 Mbit/s, and V3C3 alone is 3.3 TB. So the same "150x" job is 150x by the clock, 289x by the shot, and 1,285x by the
-byte, and every measurement we ever took on the course subset was taken on video that had been pre-shrunk for us.
-Either way it is the kind of number where "it works, just slowly" stops being true and things simply fall over instead.
-
-So the offline pipeline is being rebuilt. The shape of it:
-
-- **Videos are never all local.** They live on a server (thanks Mr. Schöffmann), get pulled down in batches, processed, and
-  deleted again. A Postgres job table (```ingest_jobs```) tracks where every video is in the pipeline, and workers claim
-  batches with ```FOR UPDATE SKIP LOCKED```, meaning the decode stage on one machine and an embedding stage on a
-  GPU somewhere else can chew through the same queue without knowing about each other.
-- **```scenes``` is a real table now.** The old ```shots``` table was a *keyframes* table, named shots due to **legacy code :sparkles:** it sampled one frame
-  per second and copied the scene's frame range onto each row, so "which scene is this" had to be rebuilt by gluing
-  strings together in two different codebases. Now a master shot is a row with an id, and keyframes point at it.
-- **Two to thirty-two keyframes per shot, chosen by how different they look**, instead of one per second come what may.
-  The old scheme gave a 39-minute scene 2,329 keyframes, which is both a lot of disk and not actually helpful.
-- **More than one signal.** SigLIP2 embeddings, OCR over the keyframes, Whisper transcripts of the audio and VLM
-  captions, all fused by reciprocal rank fusion. Text search is exact where embeddings are vague, and it turns out V3C
-  is absolutely full of readable signs, chyrons and scoreboards. Every result card names the ones that found it, so
-  you never have to wonder whether that hit was the picture or a sign in the background.
-- **Thumbnails that are actually thumbnails.** Serving 40 KB full-resolution JPEGs as 200px grid tiles was fine for
-  3.9 GB. It is not fine for several million of them.
