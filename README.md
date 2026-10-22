@@ -76,13 +76,14 @@ When opening up the climb website, you will see a pretty empty screen. Don't be 
 
 <img src="readme_images/bootup.png" alt="bootup.png" width="500"/>
 
-At the very right end of the header, past the "Login to DRES" button, there is a small circle telling you whether CLIMB's
-own services are up. The frontend re-checks every 5 seconds and the colour means:
+The header holds everything that is not a search: Search / Browse, the KIS / AVS toggle and the "Login to DRES" button.
+At its very right end there is a small circle telling you whether CLIMB's own services are up. The frontend re-checks
+every 5 seconds and the colour means:
 
 - green: backend and embedding service both answer, everything works
 - green with a yellow blink: everything works **except** the collaboration. The shared session service cannot be
-  reached, so your teammates' submissions, or hints stop showing up. Searching, browsing and submitting to DRES are completely
-  unaffected, which is why this is not orange. 
+  reached, so your teammates' submissions stop showing up. Searching, browsing and submitting to DRES are completely
+  unaffected, which is why this is not orange.
 - orange: the backend is up but the embedding service is not, so browsing, playback and submitting still work while text
   search does not. Usually you forgot to start the search engine (`python main.py serve`) or it could not
   reach the database
@@ -104,40 +105,90 @@ alone does not tell you where your submissions are going. The header button is y
 to DRES" while disconnected, a green dot and "DRES · &lt;evaluation name&gt;" once you are in. Click it again any time to
 reopen the popup and reconnect.
 
-If you don't want to search for something specific, but want to just browse through all the videos select the browsing
-tab on the top right. We will dynamically load more videos on scrolling and cache the Videos loaded for faster retrieval.
+### Searching
+
+Type what you are looking for and hit Enter. Plain words search everything. Hover the search box and it lists the
+rest: `text:` for text on screen, `said:` for speech, `tag:`, `video:` / `-video:`, and `A >> B` for one thing after
+another, all explained in [1.9](#19-how-searching-actually-works). Clicking into the box shows your recent searches, and
+Ctrl+K gets you back into it from anywhere.
+
+Under the box sit the dataset dropdown and the sources. At VBS the task tells you which collection it is from, so pick
+it, and the other two cannot put look-alikes on your page. The tickboxes decide what gets searched at all: Visual (the
+picture), Caption, OCR, ASR, Info (the uploader's title, tags and description), and for LHE a second picture model,
+PeskaVLP. Untick OCR when the subtitles keep winning over the picture. Picking a dataset sets two of them for you: Info
+is only on for V3C, the only collection with uploader info, and ASR is off for MVK, because nobody talks underwater
+(Whisper hears things anyway).
+
+<img src="readme_images/search.png" alt="search.png" width="500"/>
+
+Results are **one card per keyframe**. This used to be one card per scene, on the theory that seven near-identical
+frames of the same shot were a waste of a page. Turns out that was throwing away the most useful thing on the screen:
+if the ten best keyframes are all the same shot, that shot is almost certainly the answer, and collapsing them to a
+single card hides exactly that. In an AVS session a submitted scene drops out of the results anyway, so the repetition
+costs you a page slot precisely once.
+
+Each card shows its rank, its score and, underneath, the signals that found it: `OCR (3) Visual (41)` means a sign
+matched at rank 3 and the picture agreed, distantly, at 41. ⟲ on the card finds similar keyframes, ✕ throws the video
+out (for MVK the whole dive) and searches again. A sequence (`A >> B`) puts the hits of the later stages in a strip
+under the card, each with how long after the previous one it came. The line above the results counts them, says which
+dataset you searched and, once you use `text:`, `said:` or `tag:`, how many videos each of them left, so an empty page
+tells you which one emptied it.
 
 Scrolling through search results is cheap now. The first page runs the actual search and everything after it is
 served from cache, so page four arrives in about 15ms instead of running a fourth search and throwing three pages of
 it away.
 
-Results are **one row per keyframe**. This used to be one row per scene, on the theory that seven near-identical
-frames of the same shot were a waste of a page. Turns out that was throwing away the most useful thing on the screen:
-if the ten best keyframes are all the same shot, that shot is almost certainly the answer, and collapsing them to a
-single row hides exactly that. In an AVS session a submitted scene drops out of the results anyway, so the repetition
-costs you a page slot precisely once.
+### The sidebar
+
+If you click on a card it opens up a sidebar, from top to bottom:
+
+- what you clicked: video, scene, score, where the scene starts and ends, and the keyframe's time
+- a small part of the video you clicked on. "Loop segment" keeps it on repeat. On an MVK clip, `◀ 0001` and `0002 ▶`
+  step to the clips before and after it in the same dive
+- the time that gets submitted, From and To, filled in from the keyframe. Type over it if you know better
+  (`(h:)mm:ss.cc`); a time it cannot read greys out the submit button rather than sending rubbish
+- "Submit to DRES", which asks "Yes, submit!" before anything goes out
+- "Exclude video from search" and "Find similar", the same as ✕ and ⟲ on the card. Find similar forgets your query and
+  looks for keyframes that look like this one
+- a small band of all keyframes of the video (for MVK, of the whole dive). "Browse in Fullscreen" opens it in Browse,
+  on the keyframe you are on
+- the "VQA-Answer" field, where you can enter a textual answer for a Visual Question Answering Task. Two submit
+  buttons let you choose what goes to DRES: "Submit image + text" sends your answer together with the selected scene,
+  "Submit text only" sends just the answer for tasks where DRES expects no media item. Both ask for confirmation first,
+  double-clicking a button confirms it.
+- the submission log, everything you sent and what DRES said about it
+
+The arrow keys go through the results, Esc deselects.
+
+<img src="readme_images/similarity_search.png" alt="similarity_search.png" width="500"/>
+
+Every submission shows a result box with the DRES status code, a plain language summary and the verdict,
+e.g. 200 · Accepted & graded · CORRECT. Green means a correct verdict, red a wrong or rejected one, and amber
+(202 · Accepted - awaiting verdict) means DRES took the submission but hasn't judged it yet.
+
+### Browsing
+
+If you don't want to search for something specific, but want to just browse through all the videos select the browsing
+tab on the top right. It has the same dataset dropdown as the search (one setting for both) and a filter by video id.
+We will dynamically load more videos on scrolling and cache the Videos loaded for faster retrieval. An MVK dive is one
+card, `Ambon_Apr2012 · 3 clips · 21 shots`.
 
 <img src="readme_images/browsing.png" alt="browsing.png" width="500"/>
 
-If you click on a card it opens up a sidebar where you can see a small part of the video you clicked one, the time that 
-would get submitted to the server, the possiblility to submit the keyframe or refine the search as well as a small band
-of all keyframes of the video. You can also open that up on fullscreen. 
-Additionally there is an "VQA-Answer" field where you can enter a textual answer for a Visual Question Answering Task. 
-Two submit buttons let you choose what goes to DRES: "Submit image + text" sends your answer together with the selected scene, 
-"Submit text only" sends just the answer for tasks where DRES expects no media item. Both ask for confirmation first, double-clicking a button confirms it.
+Click a video and you get every keyframe it has, with the scene number on each and its time underneath (for MVK the
+whole dive, clip by clip). Click a keyframe and it opens in the sidebar, the same as a search result.
 
 <img src="readme_images/select_video.png" alt="select_video.png" width="500"/>
 
-Every submission shows a result box with the DRES status code, a plain language summary and the verdict, 
-e.g. 200 · Accepted & graded · CORRECT. Green means a correct verdict, red a wrong or rejected one, and amber 
-(202 · Accepted - awaiting verdict) means DRES took the submission but hasn't judged it yet.
+### AVS
 
-For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (next to Search/Browse) to AVS. 
-AVS is collaborative: click New session to get a random 4-letter code, or Join a teammate's code to work together. 
-Each shot you submit is sent as its own submission and is then hidden from everyone in the session's search results, 
-so no one on the team submits the same scene twice. Videos where you already got a correct hit are dimmed and marked 
+For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (next to Search/Browse) to AVS.
+AVS is collaborative: click New session to get a random 4-letter code, or Join a teammate's code to work together
+("Active" lists the sessions there are).
+Each shot you submit is sent as its own submission and is then hidden from everyone in the session's search results,
+so no one on the team submits the same scene twice. Videos where you already got a correct hit are dimmed and marked
 "covered", since extra shots from the same video barely raise the AVS score. For MVK that means the whole dive: a hit
-in one 15-second clip covers every clip of the same recording. Sessions are deleted after 2 hours of
+in one clip covers every clip of the same recording. Sessions are deleted after 2 hours of
 inactivity, which is meant to comfortably outlive a task block rather than punish you for thinking.
 
 Sessions are shared through a small separate service (see [2.6](#26-avs-collaboration-across-machines)), so
@@ -148,15 +199,6 @@ yellow: you keep the session and every scene already known to be taken, you just
 is back. Nothing about searching or submitting changes. If instead the session genuinely expired you get a
 "Session XXXX expired" banner - a different message on purpose, because one of them means "wait a moment" and the other
 means "start a new session".
-
-Going back to the search tab, you can search for video scenes including specific content.
-
-<img src="readme_images/search.png" alt="search.png" width="500"/>
-
-Under the "submit to DRES" button, you can find a "find similar" button which will instead of asking the backend for
-scenes including your queries will search for scenes similar to the one you clicked earlier.
-
-<img src="readme_images/similarity_search.png" alt="similarity_search.png" width="500"/>
 
 Well and that's it.
 
@@ -179,7 +221,9 @@ BACKEND_PORT=8000
 FRONTEND_PORT=3000
 ALLOWED_ORIGIN_REGEX=^https?:\/\/(?:[a-zA-Z0-9-]+\.)*q1studios\.at(?::\d+)?$
 ```
-If you want AVS collaboration across machines you need three more. Leave them out and AVS still works, it is just private to your own CLIMB:
+If you want AVS collaboration across machines you need the first two of these. Leave them out and AVS still works, it
+is just private to your own CLIMB. `CLIMB_USER` is optional, it is the name the session writes next to every scene you
+submit, so "who took this one?" has an answer once several people share a session:
 
 ```text:
 AVS_SESSION_SERVICE_URL=https://example.org
@@ -328,8 +372,8 @@ cd video_processing
 If you just want to embed the whole collection on a GPU server, it gets easier. But first of all, thank you :) 
 Everything below is explained in the sections that follow. This is just the order.
 
-1. **Install.** Python 3.13 (PaddleOCR has no wheel for 3.14 and OCR quietly falls back to a worse engine), FFmpeg
-   with the `libopus` encoder, and an NVIDIA driver whose `nvidia-smi` header says `CUDA Version: 12.6` or higher.
+1. **Install.** Python 3.13 (PaddleOCR has no wheel for 3.14, and OCR falls back to a worse engine with a warning),
+   FFmpeg with the `libopus` encoder, and an NVIDIA driver whose `nvidia-smi` header says `CUDA Version: 12.6` or higher.
    `./setup_climb.sh` installs everything else ("Getting Started - User"). By hand, from `video_processing`:
 
    ```bash
@@ -438,8 +482,10 @@ Two things that are easy to lose an evening to:
   `0.27.1` because that is the version that matches `torch==2.12.1`; a bare `pip install torchvision` will happily
   upgrade torch to 2.13.0 behind your back.
 - **PaddleOCR needs Python ≤ 3.13 and paddleocr 3.x.** There is no `paddlepaddle` wheel for 3.14 at all, so on a
-  3.14 venv OCR falls back to `rapidocr-onnxruntime` automatically, which runs the older PP-OCRv3 models.
-  `CLIMB_OCR_BACKEND` forces the issue either way (`auto` / `paddle` / `rapidocr`); the interface is the same.
+  3.14 venv OCR falls back to `rapidocr-onnxruntime`, which runs the older PP-OCRv3 models, on the CPU only. It is not
+  quiet about it: `main.py check` warns, and so does the OCR stage when it starts, with the error paddle failed on.
+  `CLIMB_OCR_BACKEND` forces the issue either way (`auto` / `paddle` / `rapidocr`); the interface is the same, and
+  pinning `rapidocr` is how you say you meant it.
   paddleocr 3 renamed its arguments and rejects the 2.x ones with `Unknown argument: use_gpu`, so a 2.x install is a
   FAIL in `main.py check` rather than a surprise at the start of the OCR stage. paddleocr wants `numpy<2.4` and
   `PyYAML==6.0.2`, so below 3.14 `requirements.txt` pins those lower. It also brings `opencv-contrib-python==4.10.0.84`
@@ -564,11 +610,15 @@ executing FFmpeg. To download FFmpeg visit: https://ffmpeg.org/download.html
 
 Video compression used to live here as its own step, and then inside decode. It is gone: the source videos are already
 480x270 H.264 (thanks), so the frontend just plays them, and compressing something that small a second time was a bit silly.
+There is no flag left for it either: the backend plays the file straight out of `CLIMB_SOURCE_ROOT`.
 
-#### 1.2.1 The job queue
+#### 1.2.1 Videos that are not mounted: the job queue
 
-If the collections are mounted (see 1.2), skip this, there is nothing to download. If they are not, the videos come
-down a batch at a time, get processed, and go away again. That loop is what `enqueue` / `fetch` / `purge` are for:
+If the collections are mounted (see 1.2), skip `enqueue` and `fetch`, there is nothing to download. `purge` and
+`status` further down are for everyone.
+
+If they are not mounted, the videos come down a batch at a time, get processed, and go away again. That loop is what
+`enqueue` / `fetch` / `purge` are for, and `ingest_jobs` in the database is the queue that tells `fetch` what is next:
 
 ```bash 
 python main.py enqueue --collection V3C --manifest videos.txt   # a list of source URIs, one per line
@@ -1032,19 +1082,26 @@ to work out sometime.
 
 #### 1.9 How searching actually works
 
-Four different things look for your query at once, and their answers get merged.
+Four different things look for your query at once, a fifth for LHE, and two more judge whole videos. Their answers all
+get merged.
 
 - **The picture itself.** Your words get turned into a vector and matched against every keyframe.
   This is the workhorse and handles anything visual.
+- **The picture again, for LHE.** PeskaVLP learned from surgery videos and ranks the same keyframes in its own space
+  (1.7). It only runs when the dataset dropdown says LHE.
 - **Text on screen.** Signs, chyrons, scoreboards, credits. Matched as words, not meaning, because
   what OCR is uniquely good at is *exact* strings , nothing else in the system can find "Dupont".
 - **Shot descriptions.** Matched by meaning, so "a cyclist outside a shop" finds "A man in a red
   jacket stands beside a bicycle outside a bakery" despite sharing no words with it.
 - **What people said.** Also by meaning, and mapped back to whichever scenes were on screen at the
   time.
+- **What the uploader wrote, and their tags** (V3C only, from the info files, 1.4.1). Info matches your words
+  against the video's title, description and tags by meaning, Tags looks for your words among its tags. Neither knows
+  which frame you mean, so neither adds any: they lift the frames the others found, by how well the whole video
+  matches. Both sit under the Info tickbox, see below.
 
-Each returns its own ranked list of scenes, and the lists are merged by **where** each one placed a
-scene rather than by its score , the numbers are not comparable (image similarity sits around 0.05,
+Each returns its own ranked list of scenes (Info and Tags one of videos), and the lists are merged by **where** each
+one placed a scene rather than by its score , the numbers are not comparable (image similarity sits around 0.05,
 text similarity around 0.85, keyword rank is unbounded), but "this one came third" always is.
 
 A scene found by two signals beats a scene found by one, and an exact text match is weighted very

@@ -122,16 +122,20 @@ def test_unknown_backend_is_rejected(monkeypatch):
         load_reader("cpu")
 
 
-def test_auto_prefers_paddle_when_it_imports(monkeypatch):
+def test_auto_prefers_paddle_when_it_imports(monkeypatch, caplog):
     monkeypatch.setattr(Config, "OCR_BACKEND", "auto")
     monkeypatch.setitem(BACKENDS, "paddle", lambda dev: "paddle-reader")
     assert load_reader("cpu") == "paddle-reader"
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 
-def test_auto_falls_back_when_paddle_is_absent(monkeypatch):
+def test_auto_falls_back_when_paddle_is_absent(monkeypatch, caplog):
     monkeypatch.setattr(Config, "OCR_BACKEND", "auto")
     monkeypatch.setitem(BACKENDS, "paddle", _raise_import_error)
     assert isinstance(load_reader("cpu"), RapidReader)
+    # The fallback reads worse, so it is a warning carrying paddle's import error.
+    warning, = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert "rapidocr" in warning.message and "paddle (not installed)" in warning.message
 
 
 def test_no_backend_at_all_raises_with_install_instructions(monkeypatch):
