@@ -229,6 +229,7 @@ __pycache__/
 .env
 dist/
 /papers/demo-paper/out
+/papers/demo-paper/review
 
 
 # database dump
