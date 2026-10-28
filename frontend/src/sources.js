@@ -28,24 +28,29 @@ export const sourcesFor = (collection) =>
 
 export const sourceKeysFor = (collection) => sourcesFor(collection).map((source) => source.key);
 
-// Sources that start unticked for some datasets. Choosing a dataset applies these; they can still be
-// flipped by hand afterwards. A dataset's own model always starts ticked.
+// Sources that start unticked for some datasets or task types. Choosing a dataset or switching
+// between KIS and AVS applies these; they can still be flipped by hand afterwards. A dataset's own
+// model always starts ticked.
 //   info: only V3C has info files.
 //   asr:  MVK is filmed underwater; its "transcripts" are Whisper hallucinations ("Thank you.").
+//   ocr and info in AVS: on the 86 TRECVID AVS 2019-21 topics OCR found no relevant shot, and
+//         leaving both out raised condensed AP by 0.017 and the relevant shots on the first page by
+//         0.8 (EXPERIMENTS.md, 2026-10-28).
 const OFF_FOR = {
-    info: (collection) => collection !== "V3C",
+    info: (collection, task) => collection !== "V3C" || task === "avs",
     asr: (collection) => collection === "MVK",
+    ocr: (collection, task) => task === "avs",
 };
 
-const startsTicked = (key, collection) => !(key in OFF_FOR) || !OFF_FOR[key](collection);
+const startsTicked = (key, collection, task) => !(key in OFF_FOR) || !OFF_FOR[key](collection, task);
 
-export const sourcesForCollection = (collection, sources) => {
+export const startingSources = (collection, task, sources) => {
     const own = DOMAIN_SOURCES[collection]?.key;
     const keys = sourceKeysFor(collection);
     const next = keys.filter((key) =>
-        key === own || (key in OFF_FOR ? startsTicked(key, collection) : sources.includes(key)));
+        key === own || (key in OFF_FOR ? startsTicked(key, collection, task) : sources.includes(key)));
     // Never leave nothing ticked: fall back to everything this dataset starts with
-    return next.length ? next : keys.filter((key) => startsTicked(key, collection));
+    return next.length ? next : keys.filter((key) => startsTicked(key, collection, task));
 };
 
 // The collections a search can be limited to. `key` is what videos.collection holds (see

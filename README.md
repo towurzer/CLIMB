@@ -117,7 +117,7 @@ it, and the other two cannot put look-alikes on your page. The tickboxes decide 
 picture), Caption, OCR, ASR, Info (the uploader's title, tags and description), and for LHE a second picture model,
 PeskaVLP. Untick OCR when the subtitles keep winning over the picture. Picking a dataset sets two of them for you: Info
 is only on for V3C, the only collection with uploader info, and ASR is off for MVK, because nobody talks underwater
-(Whisper hears things anyway).
+(Whisper hears things anyway). Switching to AVS unticks OCR and Info as well, see "Turning a signal off".
 
 <img src="readme_images/search.png" alt="search.png" width="500"/>
 
@@ -199,7 +199,9 @@ someone deep in their own search has to decide to ignore a hint, not miss it. Cl
 the fullscreen keyframe browser, scrolled to the keyframe and with it selected (or at the top with nothing selected,
 when only the video was sent); the × ignores it. Every hint also lands in the inbox next to the team button.
 
-For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (next to Search/Browse) to AVS. 
+For Ad-hoc Video Search (AVS) tasks, switch the KIS/AVS toggle in the top bar (next to Search/Browse) to AVS. That
+also unticks OCR and Info, which do not help on AVS topics (see "Turning a signal off"); tick them back by hand if a
+task is about on-screen text.
 AVS is collaborative: in a team everybody is in the team's session, and its 4-letter code is shown so the people next
 to you can check they see the same one. New session starts a fresh one for the whole team (the next AVS task), after a
 confirmation, since it un-hides everything for everybody. Without a team, New session gives you a session of your own.
@@ -1081,24 +1083,31 @@ The vector index is built over *binary quantized* embeddings and then reranks th
 precision vectors. Roughly: 1024 dimensions squashed to 1024 bits is about 5 GB of index instead of 28 GB, which is the
 difference between fitting in a laptop's RAM and very much not.
 
-How much oversampling is worth it, measured over 7,543 keyframes against exhaustive exact search:
+How much oversampling is worth it, measured over the 35,558 keyframes of the course subset against exhaustive exact
+search, averaged over the 90 TRECVID AVS 2019-21 topics on a laptop CPU:
 
-| `CLIMB_ANN_OVERSAMPLE` | candidates | recall@20 | latency |
-|------------------------|------------|-----------|---------|
-| 1000 (default)         | 1000       | 15/20     | 29 ms   |
-| 2000                   | 2000       | 18/20     | 54 ms   |
-| **4000**               | 4000       | **20/20** | 91 ms   |
-| 7543 (whole corpus)    | 7543       | 20/20     | 108 ms  |
+| `CLIMB_ANN_OVERSAMPLE` | mean recall@20 | queries with all 20 | median latency |
+|------------------------|----------------|---------------------|----------------|
+| 500                    | 0.918          | 42/90               | 10 ms          |
+| 1000                   | 0.956          | 57/90               | 17 ms          |
+| **2000 (default)**     | **0.983**      | 70/90               | 33 ms          |
+| 4000                   | 0.994          | 82/90               | 63 ms          |
+| exact (whole corpus)   | 1.000          | 90/90               | 73 ms          |
 
 The ceiling is the binary quantization, not the index , the ANN stage ranks by hamming distance on 1-bit vectors, so
-the true cosine neighbours are not all inside its top-N. Left at 1000 by default because tripling your query latency
-is a decision you should make on purpose.
+the true cosine neighbours are not all inside its top-N. Even 4000 candidates leave 8 of 90 queries one or two short.
+Exact search reads every vector, so its 73 ms grow with the corpus, while the ANN reads only its candidates.
+
+The default is 2000 because on a whole search it barely shows: 442 ms at 1000, 469 ms at 2000, on a laptop CPU, and
+368 ms of either is just encoding your query. 4000 doubles the ANN again for the last 1%, which is a decision you
+should make on purpose.
 
 Captions and transcripts run the exact same oversample-then-rerank, which is the point of it living in one function.
-They score much better on the same knob because 1000 candidates is a far larger slice of 14k captions than of 12.4M
-keyframes , recall@20 measured at 96.2% for captions and 98.8% for transcripts, against the visual retriever's 75%.
-Do not read that as free: it will drift toward the visual number as the collection grows, and it is a real (small)
-step down from the exhaustive scan those two used to do. Being exact is easy when you are small.
+Captions share the knob, transcripts have their own candidate count (`ASR_SEGMENT_LIMIT`, 500 segments). Recall@20 was
+measured at 96.2% for captions and 98.8% for transcripts, next to the visual retriever's 95.6% at 1000 above. Do not
+read that as free: a fixed candidate count is a shrinking slice of a growing collection (2000 is 14% of 14k captions,
+5.6% of 35k keyframes and 0.016% of 12.4M), so all of these drift down as it grows, and for captions and transcripts it is
+a real (small) step down from the exhaustive scan those two used to do. Being exact is easy when you are small.
 
 It has to be a *binary quantized* index for these two as well, and not only for the 5x size saving. `embedding` is a
 dimensionless `halfvec` column so one column can carry every model, and an index on the typmod cast
@@ -1140,17 +1149,25 @@ sorting the badges by rank would cheerfully credit the wrong one. Sequence hits 
 
 ##### Turning a signal off
 
-Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and the first four start ticked. Untick one and
+Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and in KIS the first four start ticked. Untick one and
 it is not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
 embedded. LHE gets a sixth, second in line: its own model, PeskaVLP (see 1.7), ticked whenever LHE is picked.
 
 **Info** is the odd one out. It matches your words against what the uploader wrote about the whole video (title, tags,
 description, see 1.4.1), so it cannot say *which frame*. Instead of adding frames it re-orders the ones the other
 signals found: a frame gets a bonus for how well its video's description matches, the same weight / (60 + rank) as any
-other signal (`CLIMB_W_INFO`, 1.0 for now, unmeasured). Only V3C has info files, so in an all-datasets search a V3C
-frame could earn a bonus an MVK frame never can. That is why Info follows the dataset dropdown: picking V3C ticks it,
-picking anything else (including "All datasets", the start) unticks it. After that the tickbox is yours to flip until
-the next dataset switch.
+other signal (`CLIMB_W_INFO`, 1.0 for now; on AVS topics it did not help, see below). Only V3C has info files, so in an
+all-datasets search a V3C frame could earn a bonus an MVK frame never can. That is why Info follows the dataset
+dropdown: picking V3C ticks it, picking anything else (including "All datasets", the start) unticks it. After that the
+tickbox is yours to flip until the next dataset or KIS/AVS switch.
+
+**AVS** starts with OCR and Info unticked as well. AVS topics describe what is in the shot ("a person paddling a kayak
+in the water"), not what is written on it or what the uploader called the video. On the 86 TRECVID AVS 2019-21 topics
+with a relevant shot in the course subset, OCR alone found not a single relevant shot, and leaving OCR and Info out of
+the fusion raised condensed AP from 0.317 to 0.335 and the relevant shots on the first page from 4.2 to 5.1. Switching
+between KIS and AVS sets them the way a dataset switch does, so whatever you flip by hand stays flipped until the next
+switch of either. An AVS task that does want on-screen text gets OCR back with one tick, or with `text:"..."`, which
+runs regardless (see below).
 
 The Info tickbox also covers **Tags**: the words of your query against the uploader's tags, no `tag:` needed. "a bmx
 rider doing flatland tricks" lifts 00001, tagged `bmx` and `flatland`. Single words and runs of up to four are tried,

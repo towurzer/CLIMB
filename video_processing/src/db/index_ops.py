@@ -105,7 +105,7 @@ def apply_serve_tuning(conn):
 
     hnsw.ef_search is the one that matters and the one that silently breaks things: pgvector
     returns at most ef_search rows from an HNSW scan, so if it is left at the default of 40
-    the oversample step asks for 1000 candidates and quietly gets 40, gutting rerank quality
+    the oversample step asks for ANN_OVERSAMPLE candidates and quietly gets 40, gutting rerank quality
     with no error anywhere.
     """
     conf = Config()

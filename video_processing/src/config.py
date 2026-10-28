@@ -264,13 +264,17 @@ class Config:
     HNSW_M: int = 16
     HNSW_EF_CONSTRUCTION: int = 64
     # How many candidates the ANN stage hands to the exact rerank. This is the recall/latency dial.
-    # Measured on 7,543 keyframes, recall@20 against exhaustive exact search:
-    #     1000 -> 15/20 at  29 ms      2000 -> 18/20 at  54 ms
-    #     4000 -> 20/20 at  91 ms      7543 -> 20/20 at 108 ms
+    # Measured on 35,558 keyframes over the 90 TRECVID AVS 2019-21 topics, mean recall@20 against
+    # exhaustive exact search, median latency (EXPERIMENTS.md, 2026-10-28):
+    #     1000 -> 0.956 at 17 ms       2000 -> 0.983 at 33 ms
+    #     4000 -> 0.994 at 63 ms      35558 -> 1.000 at 73 ms
     # The ceiling is binary quantization, not the index: the ANN stage ranks by hamming distance on
-    # 1-bit vectors, so the true nearest neighbours by cosine are not all inside its top-N. Left at
-    # 1000 because tripling query latency is shit for competition
-    ANN_OVERSAMPLE: int = int(os.getenv("CLIMB_ANN_OVERSAMPLE") or 1000)
+    # 1-bit vectors, so the true nearest neighbours by cosine are not all inside its top-N. 2000
+    # because it moves a whole search on the laptop CPU from 442 to 469 ms, most of which is the
+    # text encoding; 4000 doubles the ANN again for the last 1%, which is shit for competition.
+    # Anything above HNSW_EF_SEARCH_MAX, this default included, runs as an iterative scan (see
+    # retrievers._ann_rerank).
+    ANN_OVERSAMPLE: int = int(os.getenv("CLIMB_ANN_OVERSAMPLE") or 2000)
     HNSW_EF_SEARCH_MAX: int = 1000
     HNSW_MAX_SCAN_TUPLES: int = int(os.getenv("CLIMB_HNSW_MAX_SCAN_TUPLES") or 100_000)
 
@@ -282,7 +286,7 @@ class Config:
     PG_SERVE_SHARED_BUFFERS: str = "4GB"
     PG_SERVE_WORK_MEM: str = "64MB"
     PG_SERVE_EFFECTIVE_CACHE_SIZE: str = "8GB"
-    PG_SERVE_HNSW_EF_SEARCH: int = 1000 # hnsw.ef_search must be >= the oversample LIMIT or pgvector silently returns fewer rows.
+    PG_SERVE_HNSW_EF_SEARCH: int = 1000 # hnsw.ef_search caps the rows an HNSW scan returns, silently; 1000 is pgvector's maximum, past it the retrievers switch on the iterative scan.
 
     @property
     def db_user(self) -> str:

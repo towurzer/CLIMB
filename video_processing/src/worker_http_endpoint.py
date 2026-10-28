@@ -27,8 +27,8 @@ async def lifespan(app: FastAPI):
     conn = connect_to_database()
     if conn:
         # hnsw.ef_search must be raised before any search runs: pgvector returns at most ef_search
-        # rows from an index scan, so at the default of 40 the oversample step asks for 1000
-        # candidates, quietly receives 40, and the rerank has almost nothing to work with.
+        # rows from an index scan, so at the default of 40 the oversample step asks for its
+        # ANN_OVERSAMPLE candidates, quietly receives 40, and the rerank has almost nothing to work with.
         apply_serve_tuning(conn)
         pending_migrations = [f"{v} {n}" for v, n, applied in migration_status(conn) if not applied]
         conn.commit()
