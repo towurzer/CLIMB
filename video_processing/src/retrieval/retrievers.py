@@ -37,7 +37,7 @@ class Scope:
         """
         Small enough to rank by exact distance over just these videos. The ANN index answers for
         the whole collection and is filtered afterwards, so `video:00191 a red car` would keep
-        whichever of the global top 1000 happen to be in 00191 -- usually none.
+        whichever of the global top 2000 happen to be in 00191 -- usually none.
         """
         return self.only is not None and len(self.only) <= Config.EXACT_SCOPE_MAX_VIDEOS
 

@@ -1,5 +1,5 @@
 import {useState, useCallback, useEffect, useRef} from "react";
-import {ALL_SOURCE_KEYS, sourceKeysFor, sourcesForCollection} from "./sources";
+import {ALL_SOURCE_KEYS, sourceKeysFor, startingSources} from "./sources";
 import SearchBar from "./components/SearchBar";
 import ResultsGrid from "./components/ResultsGrid";
 import VideoPlayer from "./components/VideoPlayer";
@@ -50,7 +50,7 @@ function App() {
     const [searchHasMore, setSearchHasMore] = useState(false);
     const [searchTemporal, setSearchTemporal] = useState(null); // set only by an `A >> B` query
     const [collection, setCollection] = useState(""); // "" = every dataset
-    const [sources, setSources] = useState(() => sourcesForCollection("", ALL_SOURCE_KEYS));
+    const [sources, setSources] = useState(() => startingSources("", "kis", ALL_SOURCE_KEYS));
     // Each text:/said:/tag:/video: requirement and how many videos met it; null without any.
     const [searchFilters, setSearchFilters] = useState(null);
     const [searchLoadingMore, setSearchLoadingMore] = useState(false);
@@ -303,7 +303,7 @@ function App() {
     const handleChangeCollection = useCallback((next) => {
         setCollection(next);
         collectionRef.current = next;
-        const nextSources = sourcesForCollection(next, sourcesRef.current);
+        const nextSources = startingSources(next, taskMode, sourcesRef.current);
         setSources(nextSources);
         sourcesRef.current = nextSources;
 
@@ -320,7 +320,32 @@ function App() {
             }
             setLoading(false);
         })();
-    }, [mode, similarSource, query, fetchSearchPage, fetchSimilarPage]);
+    }, [mode, taskMode, similarSource, query, fetchSearchPage, fetchSimilarPage]);
+
+    // KIS and AVS start with different sources ticked (OFF_FOR in sources.js), so switching task type
+    // changes the result set and whatever is on screen re-runs, as for a dataset switch
+    const handleChangeTaskMode = useCallback((next) => {
+        if (next === taskMode) return;
+        setTaskMode(next);
+        avsFilterRef.current = {...avsFilterRef.current, mode: next};
+        const nextSources = startingSources(collectionRef.current, next, sourcesRef.current);
+        setSources(nextSources);
+        sourcesRef.current = nextSources;
+
+        if (mode !== "search") return;
+        (async () => {
+            setLoading(true);
+            setSelectedResult(null);
+            setSearchPage(1);
+            setSearchHasMore(false);
+            if (similarSource) {
+                await fetchSimilarPage(similarSource.keyframe_id, excludedRef.current, 1, false);
+            } else if (query.trim()) {
+                await fetchSearchPage(query, 1, false);
+            }
+            setLoading(false);
+        })();
+    }, [taskMode, mode, similarSource, query, fetchSearchPage, fetchSimilarPage]);
 
     // Find similar refines what we are already looking at, so exclusions carry over
     const handleFindSimilar = useCallback(async (result) => {
@@ -814,11 +839,11 @@ function App() {
                     {/* task type: KIS (single shot) vs AVS (many collaborative instances) */}
                     <div className="mode-toggle task-toggle">
                         <button className={`mode-btn ${taskMode === "kis" ? "active" : ""}`}
-                                onClick={() => setTaskMode("kis")}
+                                onClick={() => handleChangeTaskMode("kis")}
                                 title="Known-Item Search: submit one shot">KIS
                         </button>
                         <button className={`mode-btn ${taskMode === "avs" ? "active" : ""}`}
-                                onClick={() => setTaskMode("avs")}
+                                onClick={() => handleChangeTaskMode("avs")}
                                 title="Ad-hoc Video Search: submit many instances, collaboratively">AVS
                         </button>
                     </div>
