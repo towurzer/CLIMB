@@ -94,7 +94,7 @@ Concretely, we contribute:
 \section{System Overview}
 CLIMB is built from six components (see Fig.~\ref{architecture}). Decoding each video, segmenting it into scenes, selecting keyframes, 
 computing embeddings, and text recognition in frames via OCR, as well as captioning and transcribing, happens in an offline pipeline described in 
-Section~\ref{pipeline}. The resulting scenes, keyframes, and four indexes that the retrievers query land in a PostgreSQL database.
+Sect.~\ref{pipeline}. The resulting scenes, keyframes, and four indexes that the retrievers query land in a PostgreSQL database.
 
 %\noindent
 At query time, the system runs as two processes, a Node.js backend transmitting media to the frontend, handling DRES \cite{dres,dres2} communication and collaboration features (Sect.~\ref{collab}),
@@ -102,8 +102,8 @@ as well as a Python engine handling models, query embedding, and rank fusion. Bo
 only search execution to Python. The frontend (Sect.~\ref{search}) communicates exclusively with the Node.js backend.
 
 %\noindent
-For scenarios where network reliability is a concern, CLIMB supports fully localized deployments, serving media assets directly 
-from localhost. Additionally, the shared and optional collaboration service (Sect.~\ref{collab}) only transmits a few kilobytes of JSON polled every four seconds.
+%For scenarios where network reliability is a concern, CLIMB supports fully localized deployments, serving media assets directly 
+%from localhost. Additionally, the shared and optional collaboration service (Sect.~\ref{collab}) only transmits a few kilobytes of JSON polled every four seconds.
 
 
 
@@ -123,16 +123,16 @@ from localhost. Additionally, the shared and optional collaboration service (Sec
     \node[box,   below=4mm of db]  (be) {Backend\\{\fontsize{6}{7}\selectfont media, DRES, Team mirror}};
     \node[box,   left=6mm of be]    (se) {Search engine\\{\fontsize{6}{7}\selectfont query encoding, fusion}};
     \node[box,   below=4mm of be]   (fe) {Frontend (React)};
-    \node[ext,   right=6mm of be] (dres) {DRES};
-    \node[ext,   right=6mm of fe]  (avs) {Collaboration service};
+    \node[ext,   right=6mm of be]  (collab) {Collaboration service};
+    \node[ext,   right=12mm of fe] (dres) {DRES};
 
     \draw[flow] (pipe) -- (db);
     \draw[flow] (db)   -- (be);
     \draw[flow] (db.west) -| (se.north);
     \draw[flow] (se)   -- (be);
     \draw[flow] (fe)   -- (be);
-    \draw[flow] (be)   -- (dres);
-    \draw[flow] (be.south east) -- (avs.north west);
+    \draw[flow] (be)   -- (collab);
+    \draw[flow] (be.south east) -- (dres.north west);
   \end{tikzpicture}
   \caption{
     CLIMB architecture. All components can run locally on each machine, except for two external services: 
@@ -166,72 +166,62 @@ Each remaining candidate is described by a cheap, model-free fingerprint: a colo
 Selection follows a greedy farthest-point strategy \cite{gonzalez1985}, seeded with the frame closest to the scene's mean fingerprint.
 
 \subsection{Feature Extraction}
-CLIMB extracts four signals, two per keyframe (visual, OCR) and two per scene (caption, speech).
-OCR uses PP-OCR \cite{ppocr6}, while the 1024-dimensional visual embeddings are extracted with SigLIP2 \cite{siglip2}.
-For LHE, we also extract embeddings using PeskaVLP \cite{peska}, as it was trained on surgical imagery.
-%Due to concerns about a potential domain gap, we do not only rely on SigLIP2 for LHE, but also extract embeddings using PeskaVLP \cite{peska}, which was trained on surgical imagery.
-We also tried using BioCLIP 2.5~\cite{bioclip}, trained on biological imagery, in order to improve retrieval on the MVK dataset, but it did not yield any improvement (Sect.~\ref{results}). 
+CLIMB extracts four signals, two per keyframe and two per scene. Each keyframe is embedded into a 1024-dimensional space by SigLIP2~\cite{siglip2} and searched for on-screen text by PP-OCR~\cite{ppocr6}.
+Since surgical footage lies far from SigLIP2's training data, LHE keyframes are additionally embedded with PeskaVLP~\cite{peska}.
 
-%\noindent
-Given the high computational cost and intra-scene visual redundancy, captioning is restricted to each scene's first keyframe. 
-For full-scale captioning, we apply Qwen3-VL-4B-Instruct \cite{qwen}. 
-Audio transcription is handled by Whisper large-v3 \cite{whisper}. Transcriptions produced from music or noise, identified as repetitive or isolated from other speech, are excluded from retrieval. 
-%\noindent
-In order to encode text into semantic embeddings, we use multilingual-e5-large \cite{e5large}, which performs encoding with 1024 dimensions. 
-For efficient retrieval, all generated embeddings are stored in an HNSW index \cite{hnsw} 
-over binary-quantized vectors. To maintain search accuracy while minimizing memory overhead, initial search candidates are reranked against their full-precision vectors. 
-This quantization significantly reduces the memory footprint, requiring only 5.3\,GB for 12.4M keyframes compared to 28\,GB for half-precision storage.
+The two scene signals are textual and embedded into a 1024-dimensional space by multilingual-e5-large~\cite{e5large}.
+Given its cost and intra-scene redundancy, Qwen3-VL-4B-Instruct~\cite{qwen} captions only each scene's first keyframe. 
+Audio transcription is handled by Whisper large-v3~\cite{whisper}. Transcriptions produced from music or noise, identified as repetitive or isolated from other speech, are excluded. 
 
+
+Embeddings are indexed with HNSW~\cite{hnsw} over binary-quantized vectors, and candidates are reranked against their half-precision vectors.
+Quantization cuts the footprint for 12.4M keyframes from 28\,GB at half precision to 5.3\,GB.
 
 \section{Retrieval Model}
 \subsection{Rank-Based Fusion at Keyframe Level} \label{fusion}
 As discussed above, we use four different encoders to encode as broad a spectrum of information as possible. 
 In order to avoid sensitive and model-specific calibration, we use a rank-based fusion approach, explained below.
 
-%\noindent
 Each signal returns a list of ranked objects. While the visual and OCR signal natively return a list of ranked keyframes, 
 the caption and audio signals are scene-based. Thus, each keyframe inherits the rank of its parent scene. The keyframes are then merged 
 via weighted Reciprocal Rank Fusion (RRF) \cite{rrf}. This works similarly to normal RRF but weighs the signals depending on their source, 
-allowing us to highlight keyframes found via specific encoders, i.e., OCR, where a lexical hit is much more likely to belong to the correct 
-scene than a similar visual embedding. 
-As by \cite{rrf}, the fused ranking score for a keyframe $d \in D$ is defined as:
+allowing us to highlight keyframes found via specific encoders.
+%As by \cite{rrf}, the 
+The fused ranking score for a keyframe $d \in D$, over a set of encoders $R$, is defined as:
 \begin{equation}
 RRFscore(d \in D) = \sum_{r \in R}\frac{w(r)}{60 + r(d)}
 \end{equation}
 Where $r(d)$ is the rank assigned by encoder $r \in R$ with weight $w(r)$.
-$R$ denotes the set of information modalities. The constant 60 reduces the dominance of top-ranked keyframes within individual information modalities, allowing evidence from multiple sources to contribute to the final score. This constant was empirically determined in \cite{rrf}.
+The constant 60 was emprically determined in \cite{rrf} and reduces the dominance of top-ranked keyframes.  %allowing evidence from multiple sources to contribute to the final score.
 For V3C, the uploader's video description and tags are additionally matched against the query as a video-level prior, adding an additional RRF term for each already retrieved keyframe's video's rank, re-ordering the results. 
 The system's default weights are 1 for visual, caption, speech and metadata, 4 for OCR and 8 for explicit matches via the \q{said:} or \q{text:} operator (Sect.~\ref{chains}).
 
 \subsection{Semantic and Lexical matching}
-Although cross-modal visual retrieval with SigLIP2 is inherently semantic, the remaining text-to-text signals could theoretically 
-rely on lexical matching. However, strict keyword matching on generated captions suffers from severe vocabulary mismatch. For instance, 
-a query for ``law enforcement'' shares zero lexical overlap with a highly relevant caption describing ``a police uniform''. In fact, the terms 
-``law'' and ``enforcement'' never appear within our extracted captions. 
+Although cross-modal visual retrieval with SigLIP2 is inherently semantic, the remaining text-to-text signals could rely on lexical matching.
+For generated captions, however, this fails on vocabulary mismatch: a query for ``law enforcement'' cannot match a caption describing ``a police uniform'', 
+and neither ``law'' nor ``enforcement'' appears in any of our captions.
 
-%\noindent
-While ASR transcripts are embedded semantically for conceptual and cross-lingual search, users can invoke a \textit{said:} operator for exact lexical 
-matching of specific quotes. In contrast, OCR operates as a purely lexical signal to pinpoint exact on-screen text provided in task hints. 
-Semantic matching here is redundant, as the visual embedding already captures general concepts.
+ASR transcripts are also embedded semantically to allow for conceptual and cross-lingual search, 
+but users can invoke a \textit{said:} operator for exact lexical matching of specific quotes. 
+In contrast, OCR operates as a purely lexical signal to pinpoint exact on-screen text provided in task hints. 
+%Semantic matching here is redundant, as the visual embedding already captures general concepts.
 
 \subsection{Query Language and Temporal Chains} \label{chains}
-A plain text query searches all four signals at once, and the operator prefixes in Table~\ref{tabSyntax} narrow the search down. 
-Each adds a requirement at video level, and the plain text is then ranked only within the videos that satisfy all of them. 
-Additionally, once the prefixes leave at most 300 videos, the embedding-based signals search these exhaustively instead of using the index.
+A plain text query searches all four signals at once, and the operator prefixes in Table~\ref{tabSyntax} narrow it down. 
+Each restricts the search to the videos that satisfy it, ranking the plain text only within them. 
+Once the prefixes leave at most 300 videos, they are searched exhaustively, bypassing the vector index.
 
-%\noindent
-Some tasks describe not a single scene but an ordered sequence, such as a bridge followed by a beach.
-For these, \q{\tchain{}} joins queries into a temporal chain. A query \q{A \tchain{} B \tchain{} C} has three stages,
-each a complete query including its own prefixes, so \q{text: pegasus \tchain{} mountain bike race} finds a scene showing
-the text ``pegasus'', followed by one that matches a mountain bike race.
-By default, consecutive stages must lie in the same video and at most 60 seconds apart. An annotation such as
-\q{(120)} widens the gap to 120 seconds, up to a maximum of ten minutes, with at most four stages per chain.
+For tasks describing an ordered sequence of scenes, \q{\tchain{}} joins queries into a temporal chain. 
+Each stage is a complete query including its own prefixes, so \q{text: pegasus \tchain{} mountain bike race} finds a scene showing
+the text ``pegasus'', followed by one that matches a mountain bike race. 
+Consecutive stages must lie in the same video and are per default at most 60 seconds apart.
+Writing \q{\tchain{}(120)} raises this to 120 seconds, up to ten minutes. A query has at most four stages.
 
 Each stage returns a ranked list of keyframes, grouped by video. Videos lacking a keyframe for any stage are excluded. 
 For every first-stage hit, the best continuation is found by working backwards from the last stage, so each pair of adjacent stages is compared only once. 
 At most three chains are kept per video, and all chains are ranked by their score, the sum of their stages' RRF scores.
 
-\begin{table}[!ht]
+\begin{table}[ht]
   \caption{
     Query syntax. Prefixes are video-level requirements. They are repeatable and can be combined. \q{\tchain{}} chains queries temporally within a single video.
   }
@@ -245,29 +235,35 @@ At most three chains are kept per video, and all chains are ranked by their scor
     \q{text: state capitol}                       & Scenes showing this text \\
     \q{said: new york}                            & Scenes in which this is said \\
     \q{tag: travel}                               & Only videos tagged with \q{travel} \\
-    \q{video:00191 video:00192}                        & Only these videos  \\
+    \q{video:00191 video:00192}                   & Only these videos  \\
     \q{-video:00191}                              & Exclude this video  \\
-    \q{a video game sunset \tchain{} door}        & Sequential search (same video) \\
+    \q{a bridge \tchain{} beach \tchain{} sunset} & Sequential search (same video) \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 %\newpage
 \section{Interactive Search Interface} \label{search}
-The CLIMB user interface is shown in Figure~\ref{ui}. A search typically follows an iterative interaction loop. 
-First, the operator selects the target collection (V3C, MVK, or LHE), which restricts all results to it.
-The operator then enters a query that returns a grid of keyframes.
-Selecting one displays a five-second scene preview starting at the corresponding timestamp. The filmstrip located under 
-the video player provides an overview of all the keyframes, allowing efficient navigation between them. Keyframe times 
-are automatically populated but remain editable, to fine-tune the target submission frame. In addition, there are a variety 
-of buttons for quick search refinement. To keep this cycle responsive, query results are cached and paginated: 
-the initial query executes the search, while subsequent pages are loaded from cache upon scrolling. \emph{Submit to DRES} 
-sends the selected item to the evaluation server. \emph{Exclude video from search} removes a video from the results, and when textual queries 
-fall short, \emph{Find Similar} enables visual query-by-example.  Finally, for VQA tasks, operators type the answer below the filmstrip and submit 
-it as text alone or together with the selected shot.
+%The CLIMB user interface is shown in Fig.~\ref{ui}. A search typically follows an iterative interaction loop. 
+%First, the operator selects the target collection (V3C, MVK, or LHE), which restricts all results to it.
+%The operator then enters a query that returns a grid of keyframes.
+%Selecting one displays a five-second scene preview starting at the corresponding timestamp. The filmstrip located under 
+%the video player provides an overview of all the keyframes, allowing efficient navigation between them. Keyframe times 
+%are automatically populated but remain editable, to fine-tune the target submission frame. In addition, there are a variety 
+%of buttons for quick search refinement. \emph{Submit to DRES} sends the selected item to the evaluation server. \emph{Exclude video from search} removes a video from the results, and when textual queries 
+%fall short, \emph{Find Similar} enables visual query-by-example.  Finally, for VQA tasks, operators type the answer below the filmstrip and submit 
+%it as text alone or together with the selected shot. To keep this cycle responsive, query results are cached and paginated: 
+%the initial query executes the search, while subsequent pages are loaded from cache upon scrolling. 
+The CLIMB user interface is shown in Fig.~\ref{ui}. A search typically follows an iterative loop.
+The operator selects a collection (V3C, MVK, or LHE) and enters a query, which returns a grid of keyframes.
+Selecting one plays a five-second scene preview from its timestamp, while the filmstrip below the player shows all keyframes for quick navigation.
+The submission time is prefilled from the keyframe but stays editable for fine-tuning.
+\emph{Submit to DRES} sends the selection to the evaluation server, \emph{Exclude video from search} removes a video from the results, and when textual queries
+fall short, \emph{Find Similar} enables visual query-by-example. For VQA tasks, operators type the answer below the filmstrip and submit
+it as text alone or together with the selected shot. Results are cached, so scrolling loads further pages without re-running the search.
 
 
-\begin{figure}[t]
+\begin{figure}[ht]
 \centering
 \includegraphics[width=\textwidth]{figures/ui-screenshot-annoted.png}
 \caption{
@@ -286,84 +282,43 @@ it as text alone or together with the selected shot.
 \label{ui}
 \end{figure}
 
-
-%\subsection{Submitting to DRES}
-%As with every browser at VBS, the DRES-Submission pipeline is an integral part of CLIMB \cite{dres,dres2}. 
-%The login dialog accepts a \emph{server URL}, \emph{evaluation name}, and \emph{credentials}. If the requested evaluation is missing, CLIMB alerts and falls back.
-%When submitting, each request returns a status, consisting of a status code, summary, and verdict. 
-%Correct submissions are indicated in green, pending ones in yellow, and incorrect or rejected ones in red.
-%
-%%\noindent
-%AVS submissions follow go through additional steps, as described in Sect.~\ref{collab}. 
-%From the operator's perspective, however, the interaction is analogous to that of a default KIS task.
-%After switching to the AVS tab in the top-right corner of the interface and joining a session, 
-%submissions can be made through the same interaction pattern. 
-%The primary difference is that accepted submissions are hidden from other participants in the same session.
-
-
 \section{Team Collaboration} \label{collab}
-At VBS, every operator runs a complete local CLIMB instance, to avoid relying on the network for media delivery.
-Nonetheless, allowing operators to work together is highly beneficial, as teammates can share promising leads 
-to quickly cover a long video or a complex scene, which speeds up the search while reducing wrong or duplicate submissions.
-%\noindent
-Due to the local nature of each instance, coordination requires a shared state outside these instances: a lightweight collaboration service, deployed once. 
-Operators join a team by name and password, with
-each backend keeping a local copy of its team's state (the current AVS session and all hints), refreshed every four seconds
-with a few kilobytes of JSON.
+At VBS, every operator runs a complete local CLIMB instance, avoiding network dependency for media delivery.
+Nonetheless, allowing operators to work together is highly beneficial, as teammates can share promising leads,
+reducing wrong or duplicate submissions while speeding up the search.
 
-\paragraph{Hints}
-Regardless of task type, operators can send a teammate a keyframe or an entire video, along with an optional note.
-The hint appears as a notification, which when clicked opens a browsing view of all keyframes with the sent keyframe 
-selected. The message, no matter if selected or dismissed, is kept in an inbox, so that operators can come back to it later.
+To achieve this, operators can send a teammate a hint: a keyframe or an entire video, along with an optional note.
+The hint appears as a notification, which when clicked opens a browsing view of all keyframes with the sent keyframe
+selected. Whether opened or dismissed, it is kept in an inbox, so that operators can come back to it later.
 
-\paragraph{Shared AVS Sessions} \label{avs}
-Since AVS scoring rewards distinct correct shots, independently working team members tend to identify the same obvious results first, 
-resulting in a large fraction of duplicate submissions. In CLIMB, a team therefore shares one AVS session, where starting a new one, 
-for the next task, moves every member along. Submitted scenes are hidden from the results of all team members. Other scenes in these 
-videos get marked as covered but remain visible to promote a diverse submission set, while allowing for the submission of multiple distinct 
-scenes from the same video.
+For AVS, collaboration goes further. Because AVS rewards distinct correct shots, a team in CLIMB shares one AVS session.
+Submitted scenes are hidden from the results of all team members. Other scenes of these videos are marked as covered,
+steering the team towards new videos, but stay visible, since one video can hold several correct shots.
 
-\paragraph{Resilience}
-Importantly, searches and submissions must not depend on the speed or availability of the collaboration service. 
-To ensure this, searches read only the local copy which is refreshed every four seconds. 
-Submissions are sent to DRES first, before recording them with the service, ensuring a non-blocking behavior.
-Lastly, an unreachable service is not treated as an ended session. The last known local state is kept and 
-flagged as offline, so that an unstable connection cannot clear the team's exclusions. 
-Only the exchange of new submissions and hints pauses until the service is reachable again.
+This shared state is maintained by a lightweight collaboration service, deployed once. Operators join a team by name and password,
+with each backend keeping a local copy of its team's state (the current AVS session and all hints), refreshed every four seconds.
+Importantly, searches and submissions must not depend on the speed or availability of the collaboration service.
+Searches therefore read only the local copy, and submissions go to DRES first and are recorded with the service afterwards, so a slow service never delays them.
+If the service becomes unreachable, the local copy is kept rather than cleared, so the team's exclusions survive an unstable connection.
 
 
 
 \section{Preliminary Results} \label{results}
-While implemented for the full V3C collection, our reported metrics were measured on a 200-video subset (26\,h, 14{,}345 scenes, 35{,}558 keyframes).
+A far simpler CLIMB prototype won our university's course-internal retrieval competition, but VBS is a much greater challenge.
+CLIMB is implemented for the full V3C collection, yet all metrics below were measured on a 200-video subset (26\,h, 14{,}345 scenes, 35{,}558 keyframes).
 
-%\noindent
 Compared with exhaustive exact search (73\,ms), oversampling 1{,}000 candidates before exact reranking recovers on average 95.6\% of the 
-true top 20 in 17\,ms, 2{,}000 candidates recovers 98.3\% in 33\,ms, and 4{,}000 99.4\% in 63\,ms. The remaining discrepancy is due to the binary quantization
-rather than the index: the ANN stage ranks by Hamming distance over 1-bit vectors. CLIMB defaults to 2{,}000 candidates, while keeping this parameter configurable.
+true top 20 in 17\,ms, 2{,}000 candidates recovers 98.3\% in 33\,ms, and 4{,}000 99.4\% in 63\,ms. CLIMB defaults to 2{,}000 candidates, 
+while keeping this parameter configurable.
 
-%\noindent
-Although a far simpler CLIMB prototype won our university's course-internal retrieval competition, VBS presents a much greater challenge.
-Our latency measurements are limited to a small subset rather than the full-scale collection, and neither MVK nor LHE resembles the imagery SigLIP2 was trained on.
-Fusing PeskaVLP with SigLIP2 for LHE retrieval raises the share of queries with a relevant frame on the first result page from 46\% to 54\%. 
-BioCLIP 2.5 alone, dropped the share of queries with a relevant frame on the first result page from 93\% to 64\% for MVK and was therefore 
-not used in the final system.
-
+Since neither MVK nor LHE resembles the imagery SigLIP2 was trained on, we tested domain-specific models on both.
+Fusing PeskaVLP with SigLIP2 raises the relevant share of the first LHE result page from 46\% to 54\%, whereas
+BioCLIP 2.5~\cite{bioclip} alone lowers the share of MVK queries with a relevant frame on the first page from 93\% to 64\%, so it is not used.
 
 \section{Conclusion}
 In this paper, we present CLIMB, an interactive video retrieval system for VBS 2027. It uses rank-based fusion to combine visual embeddings, 
-on-screen text, generated captions, and transcripts at the keyframe level while supporting temporally chained queries. 
-% A collaborative mode hides teammate-submitted shots and degrades gracefully, keeping core search functions fully available offline.
-A collaborative mode hides scenes a teammate already submitted from everyone's results, while search, browsing, and submission remain unaffected when the shared collaboration service is unavailable.
-
-%%\noindent
-%Our next steps include completing ingestion of the full collection and addressing the domain gap for MVK and GynSurg, where the 
-%general-purpose visual embeddings of SigLIP2 are expected to be least effective.
-
-
-%\begin{credits}
-%\subsubsection{\ackname} A bold run-in heading in small font size at the end of the paper is
-%used for general acknowledgments, for example: This study was funded
-%by X (grant number Y).
+on-screen text, generated captions, and transcripts at the keyframe level and supports temporally chained queries. 
+A collaborative mode hides teammate-submitted scenes and degrades gracefully, keeping core search functions fully available offline.
 
 %\subsubsection{\discintname}
 %It is now necessary to declare any competing interests or to specifically
