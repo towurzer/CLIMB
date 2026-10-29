@@ -145,8 +145,8 @@ only search execution to Python. The frontend (Sect.~\ref{search}) communicates 
 %\newpage
 \section{Indexing Pipeline} \label{pipeline}
 \subsection{Scenes and Keyframe Selection}
-The first step of the indexing pipeline is shot segmentation and keyframe extraction. For all three datasets, scene boundaries are shipped with the dataset.
-The segmentation has been done with TransNetv2 \cite{souvcek2020transnet} for V3C 
+The indexing pipeline starts from the scene boundaries shipped with each dataset, produced with TransNetV2~\cite{souvcek2020transnet} for V3C
+and with a keyframe extraction algorithm~\cite{schoeffmann2015keyframe} based on ORB keypoint tracking~\cite{orb} for LHE~\cite{GynSurgLHE} and MVK~\cite{mvk}.
 and a specific keyframe extraction algorithm \cite{schoeffmann2015keyframe}, based on ORB keypoint tracking \cite{orb} for the LHE \cite{GynSurgLHE} and MVK videos \cite{mvk}.
 MVK clips from the same dive are shipped as separate clips, but they are grouped into one recording on a shared timeline, 
 so exclusion, temporal chains and AVS coverage work per dive, while DRES submissions still reference the individual clips.
@@ -179,20 +179,16 @@ Quantization cuts the footprint for 12.4M keyframes from 28\,GB at half precisio
 
 \section{Retrieval Model}
 \subsection{Rank-Based Fusion at Keyframe Level} \label{fusion}
-As discussed above, we use four different encoders to encode as broad a spectrum of information as possible. 
-In order to avoid sensitive and model-specific calibration, we use a rank-based fusion approach, explained below.
-
-Each signal returns a list of ranked objects. While the visual and OCR signal natively return a list of ranked keyframes, 
-the caption and audio signals are scene-based. Thus, each keyframe inherits the rank of its parent scene. The keyframes are then merged 
-via weighted Reciprocal Rank Fusion (RRF) \cite{rrf}. This works similarly to normal RRF but weighs the signals depending on their source, 
-allowing us to highlight keyframes found via specific encoders.
-%As by \cite{rrf}, the 
-The fused ranking score for a keyframe $d \in D$, over a set of encoders $R$, is defined as:
+Scores from four different encoders are not comparable, so CLIMB fuses the signals by rank, avoiding model-specific calibration.
+Visual and OCR signals rank keyframes directly, while the caption and speech signals rank scenes, whose keyframes inherit the scene's rank.
+All lists are then merged via weighted Reciprocal Rank Fusion (RRF) \cite{rrf}, which lets some signals count more than others.
+The fused score of a keyframe $d \in D$ over a set of encoders $R$ is
 \begin{equation}
-RRFscore(d \in D) = \sum_{r \in R}\frac{w(r)}{60 + r(d)}
+RRFscore(d \in D) = \sum_{r \in R}\frac{w(r)}{60 + r(d)},
 \end{equation}
-Where $r(d)$ is the rank assigned by encoder $r \in R$ with weight $w(r)$.
-The constant 60 was emprically determined in \cite{rrf} and reduces the dominance of top-ranked keyframes.  %allowing evidence from multiple sources to contribute to the final score.
+where $r(d)$ is the rank assigned by encoder $r \in R$ with weight $w(r)$.
+The constant 60, empirically determined in \cite{rrf}, reduces the dominance of top-ranked keyframes.
+%For V3C, the uploader's video description and tags are also matched against the query as a video-level prior: each retrieved keyframe receives an extra RRF term for its video's rank.
 For V3C, the uploader's video description and tags are additionally matched against the query as a video-level prior, adding an additional RRF term for each already retrieved keyframe's video's rank, re-ordering the results. 
 The system's default weights are 1 for visual, caption, speech and metadata, 4 for OCR and 8 for explicit matches via the \q{said:} or \q{text:} operator (Sect.~\ref{chains}).
 
