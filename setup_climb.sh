@@ -3,7 +3,7 @@
 #   1. .env, copied from .env.example the first time, to be filled in before going on
 #   2. video_processing/.venv with requirements.txt. Where nvidia-smi finds a GPU: torch for CUDA
 #      12.6 and paddlepaddle-gpu, the CUDA that faster-whisper and Paddle need too (README 1.0)
-#   3. the cache and database containers, with podman or docker
+#   3. the cache and database containers, with podman or docker, their ports open to this machine only
 #   4. the schema: dataset/climb_db.dump restored if there is one and the database is empty,
 #      then `main.py migrate`
 # The backend and frontend install their node modules on their first start (start_climb.sh).
@@ -83,7 +83,8 @@ if container_exists "$CACHE_CONTAINER"; then
     $CONTAINERS start "$CACHE_CONTAINER" >/dev/null
 else
     echo "Creating the cache container '$CACHE_CONTAINER' on port $REDIS_PORT..."
-    $CONTAINERS run --name "$CACHE_CONTAINER" -p "$REDIS_PORT":6379 -d docker.io/library/redis:7
+    # Redis has no password, so its port only answers on this machine.
+    $CONTAINERS run --name "$CACHE_CONTAINER" -p 127.0.0.1:"$REDIS_PORT":6379 -d docker.io/library/redis:7
 fi
 
 if container_exists "$DB_CONTAINER"; then

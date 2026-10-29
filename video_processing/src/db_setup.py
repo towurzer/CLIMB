@@ -10,7 +10,7 @@ def container_command(tool: str = "podman") -> str:
             -e POSTGRES_DB={conf.db_name} \\
             -e POSTGRES_USER={conf.db_user} \\
             -v {conf.DB_VOLUME}:{conf.DB_CONTAINER_MOUNT_PATH} \\
-            -p {conf.db_port}:5432 \\
+            -p {conf.DB_BIND_ADDRESS}:{conf.db_port}:5432 \\
             --shm-size={conf.DB_SHM_SIZE} \\
             -d {conf.DB_IMAGE} \\
             postgres \\

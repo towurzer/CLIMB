@@ -398,6 +398,8 @@ Everything below is explained in the sections that follow. This is just the orde
    cuBLAS, and warns about a Paddle built for another CUDA, a card under 12 GB or one without bf16.
 2. **Database.** `python main.py schema` prints the podman command (docker takes the same arguments), and
    `setup_climb.sh` runs it for you. Keep the `--shm-size=8g` in it, without it the index build at the end crawls.
+   Its port only answers on the server itself (`127.0.0.1`), so the other people on a shared server do not get to
+   guess the password. Redis gets the same treatment, and it has no password to guess in the first place.
 3. **`.env`** in the repo root, copied from `.env.example`: the `POSTGRES_*` / `DB_*` lines from "Environment
    Variables", plus
 
@@ -662,6 +664,9 @@ To automatically generate the podman command run
 ```bash 
 python main.py schema
 ```
+
+The port it publishes only answers on this machine (`-p 127.0.0.1:5432:5432`). Other machines are not invited unless you
+say so, see "Running them on more than one machine" in 1.7.
 
 In order to create a Podman Container running Postgres
 just run the command in you shell. This will automatically fetch the postgres image, build the container and start it in
@@ -1029,6 +1034,11 @@ Each stage takes `--shard N --shards M`, which partitions the work by row id. Po
 database with `--shard 0..3 --shards 4` and they will divide the work exactly and never collide, no locking, no
 coordination, no queue server. Verified: four shards over 1,149 pending keyframes split 287/288/287/287.
 
+The database only answers on its own machine, so the other machines need a way in. Either an SSH tunnel from each of
+them (`ssh -N -L 5432:localhost:5432 <database host>`, then `DB_HOST=localhost` as usual), or `CLIMB_DB_BIND=0.0.0.0`
+in the `.env` of the machine that hosts it. The address is fixed when the container is created, so an existing
+container has to be created again for the second option (the volume, and with it the data, stays).
+
 #### 1.8 Build the search indexes
 
 Embeddings in a table are not a search engine, they are a very expensive list. To make them findable in single-digit
@@ -1331,10 +1341,11 @@ browsing
 takes longer to load. If you want to activate it just create a new podman container
 
 ```bash 
-podman run --name climb_caching -p 6379:6379 -d docker.io/library/redis:7
+podman run --name climb_caching -p 127.0.0.1:6379:6379 -d docker.io/library/redis:7
 ```
 
-and spin it up everytime you need some performance boost.
+The `127.0.0.1:` keeps it to this machine: Redis has no password, and a cache everyone on the network can write into
+is not a cache anymore. Then spin it up everytime you need some performance boost.
 
 ```bash:
 podman start climb_caching
