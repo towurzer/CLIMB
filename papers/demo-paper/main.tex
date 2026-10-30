@@ -64,7 +64,7 @@ Crucially, core functions such as search, browsing, and submission remain fully 
 
 \section{Introduction}
 The Video Browser Showdown (VBS)~\cite{vbsoverview,lokovc2023interactive,Lokoc2018} is an interactive video retrieval competition that asks participants 
-to solve known-item search (KIS), ad-hoc video search (AVS), and visual question-answering (VQA/QAS) tasks 
+to solve known-item search (KIS), ad-hoc video search (AVS), and visual question answering (VQA/QAS) tasks 
 against large-scale video collections. For VBS 2027, the main collection is V3C~\cite{v3c} with 28{,}450 videos, 
 roughly 3{,}800 hours, and about 8.7 TB of full-resolution video data,
 along with the smaller collections MVK~\cite{mvk} and GynSurgLHE (LHE)~\cite{GynSurgLHE}.
@@ -78,8 +78,8 @@ spends a substantial share of its submissions re-finding what a teammate has alr
 
 %\noindent
 CLIMB addresses all of them. It indexes every video as scenes and keyframes, retrieves over four independent signals, 
-fuses them by rank, allows for operators to send clues to their teammates, and treats an AVS task as a single shared activity,
-vanishing duplicate scenes from everybody's list. 
+fuses them by rank, allows operators to send clues to their teammates, and treats an AVS task as a single shared activity,
+hiding duplicate scenes from everybody's list. 
 
 \newpage
 %\noindent
@@ -94,7 +94,7 @@ Concretely, we contribute:
 
 \section{System Overview}
 CLIMB is built from six components (see Fig.~\ref{architecture}). Decoding each video, segmenting it into scenes, selecting keyframes, 
-computing embeddings, and text recognition in frames via OCR, as well as captioning and transcribing, happens in an offline pipeline described in 
+computing embeddings, running OCR, as well as captioning and transcribing, happen in an offline pipeline described in 
 Sect.~\ref{pipeline}. The resulting scenes, keyframes, and four indexes that the retrievers query land in a PostgreSQL database.
 
 %\noindent
@@ -161,7 +161,7 @@ so exclusion, temporal chains and AVS coverage work per dive, while DRES submiss
 %\noindent
 Within each scene, candidate frames are decoded at 2\,fps, and the scene receives one keyframe per four seconds of duration, at least two and at most 32.
 Fades and blank frames (very dark, very bright, or low-contrast) are discarded first, unless they contain edges, so that title cards and credits remain available for OCR.
-Each remaining candidate is described by a cheap, model-free fingerprint: a colour histogram, a perceptual hash, and the edge density.
+Each remaining candidate is described by a cheap, model-free fingerprint: a color histogram, a perceptual hash, and the edge density.
 Selection follows a greedy farthest-point strategy \cite{gonzalez1985}, seeded with the frame closest to the scene's mean fingerprint.
 
 \subsection{Feature Extraction}
@@ -174,30 +174,29 @@ Audio transcription is handled by Whisper large-v3~\cite{whisper}. Transcription
 
 
 Embeddings are indexed with HNSW~\cite{hnsw} over binary-quantized vectors, and candidates are reranked against their half-precision vectors.
-Quantization cuts the footprint for 12.4M keyframes from 28\,GB at half precision to 5.3\,GB.
+Quantization shrinks the index for 12.4M keyframes from 28\,GB at half precision to 5.3\,GB.
 
 \section{Retrieval Model}
 \subsection{Rank-Based Fusion at Keyframe Level} \label{fusion}
-Scores from four different encoders are not comparable, so CLIMB fuses the signals by rank, avoiding model-specific calibration.
+Scores from four different retrievers are not comparable, so CLIMB fuses the signals by rank, avoiding model-specific calibration.
 Visual and OCR signals rank keyframes directly, while the caption and speech signals rank scenes, whose keyframes inherit the scene's rank.
 All lists are then merged via weighted Reciprocal Rank Fusion (RRF) \cite{rrf}, which lets some signals count more than others.
-The fused score of a keyframe $d \in D$ over a set of encoders $R$ is
+The fused score of a keyframe $d \in D$ over a set of retrievers $R$ is
 \begin{equation}
 RRFscore(d \in D) = \sum_{r \in R}\frac{w(r)}{60 + r(d)},
 \end{equation}
 where $r(d)$ is the rank assigned by encoder $r \in R$ with weight $w(r)$.
 The constant 60, empirically determined in \cite{rrf}, reduces the dominance of top-ranked keyframes.
-%For V3C, the uploader's video description and tags are also matched against the query as a video-level prior: each retrieved keyframe receives an extra RRF term for its video's rank.
-For V3C, the uploader's video description and tags are additionally matched against the query as a video-level prior, adding an additional RRF term for each already retrieved keyframe's video's rank, re-ordering the results. 
+For V3C, the uploader's title, description and tags are also matched against the query as a video-level prior: each retrieved keyframe receives an extra RRF term for its video's rank.
 The system's default weights are 1 for visual, caption, speech and metadata, 4 for OCR and 8 for explicit matches via the \q{said:} or \q{text:} operator (Sect.~\ref{chains}).
 
-\subsection{Semantic and Lexical matching}
+\subsection{Semantic and Lexical Matching}
 Although cross-modal visual retrieval with SigLIP2 is inherently semantic, the remaining text-to-text signals could rely on lexical matching.
 For generated captions, however, this fails on vocabulary mismatch: a query for ``law enforcement'' cannot match a caption describing ``a police uniform'', 
 and neither ``law'' nor ``enforcement'' appears in any of our captions.
 
 ASR transcripts are also embedded semantically to allow for conceptual and cross-lingual search, 
-but users can invoke a \textit{said:} operator for exact lexical matching of specific quotes. 
+but users can invoke a \q{said:} operator for exact lexical matching of specific quotes. 
 In contrast, OCR operates as a purely lexical signal to pinpoint exact on-screen text provided in task hints. 
 %Semantic matching here is redundant, as the visual embedding already captures general concepts.
 
@@ -209,8 +208,8 @@ Once the prefixes leave at most 300 videos, they are searched exhaustively, bypa
 For tasks describing an ordered sequence of scenes, \q{\tchain{}} joins queries into a temporal chain. 
 Each stage is a complete query including its own prefixes, so \q{text: pegasus \tchain{} mountain bike race} finds a scene showing
 the text ``pegasus'', followed by one that matches a mountain bike race. 
-Consecutive stages must lie in the same video and are per default at most 60 seconds apart.
-Writing \q{\tchain{}(120)} raises this to 120 seconds, up to ten minutes. A query has at most four stages.
+Consecutive stages must lie in the same video and are by default at most 60 seconds apart.
+Writing \q{\tchain{}(120)} raises this to 120 seconds. The maximum is ten minutes and four stages.
 
 Each stage returns a ranked list of keyframes, grouped by video. Videos lacking a keyframe for any stage are excluded. 
 For every first-stage hit, the best continuation is found by working backwards from the last stage, so each pair of adjacent stages is compared only once. 
@@ -282,7 +281,7 @@ Nonetheless, allowing operators to work together is highly beneficial, as teamma
 reducing wrong or duplicate submissions while speeding up the search.
 
 To achieve this, operators can send a teammate a hint: a keyframe or an entire video, along with an optional note.
-The hint appears as a notification, which when clicked opens a browsing view of all keyframes with the sent keyframe
+The hint appears as a notification, which, when clicked, opens a browsing view of all keyframes with the sent keyframe
 selected. Whether opened or dismissed, it is kept in an inbox, so that operators can come back to it later.
 
 For AVS, collaboration goes further. Because AVS rewards distinct correct shots, a team in CLIMB shares one AVS session.
