@@ -69,15 +69,15 @@ against large-scale video collections. For VBS 2027, the main collection is V3C~
 roughly 3{,}800 hours, and about 8.7 TB of full-resolution video data,
 along with the smaller collections MVK~\cite{mvk} and GynSurgLHE (LHE)~\cite{GynSurgLHE}.
 
-Successfully completing these tasks presents multiple fundamental challenges. A single visual embedding is often 
+Successfully completing the search tasks presents multiple fundamental challenges. A single visual embedding is often 
 too vague to capture precise task hints, such as specific on-screen text or spoken dialog, and for 
 difficult tasks, teammates have no direct way to point each other to promising results.
-Additionally, because AVS scoring rewards distinct correct shots, a team of $n$ operators searching independently
+Additionally, AVS scoring rewards distinct correct shots, but a team whose operators search independently
 spends a substantial share of its submissions re-finding what a teammate has already sent.
 
-CLIMB addresses all of them. It indexes every video as scenes and keyframes, retrieves over four independent signals, 
-fuses them by rank, allows operators to send clues to their teammates, and treats an AVS task as a single shared activity,
-hiding duplicate scenes from everybody's list. 
+To address these challenges, CLIMB indexes videos as scenes and keyframes, retrieves over four independent signals,
+and fuses them by rank. It also lets operators send clues to their teammates and treats an AVS task as a single shared activity,
+hiding duplicate scenes from everybody's list.
 
 \newpage
 Concretely, we contribute:
@@ -179,7 +179,7 @@ but users can invoke a \q{said:} operator for exact lexical matching of specific
 In contrast, OCR operates as a purely lexical signal to pinpoint exact on-screen text provided in task hints. 
 
 \subsection{Query Language and Temporal Chains} \label{chains}
-A plain text query searches all four signals at once, and the operator prefixes in Table~\ref{tabSyntax} narrow it down. 
+The \q{said:} operator is one of several prefixes (Table~\ref{tabSyntax}) that narrow down a plain text query over all four signals.
 Each restricts the search to the videos that satisfy it, ranking the plain text only within them. 
 Once the prefixes leave at most 300 videos, they are searched exhaustively, bypassing the vector index.
 
