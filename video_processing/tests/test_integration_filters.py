@@ -194,13 +194,17 @@ def test_tag_restricts_to_tagged_videos(worker, corpus, db):
 
 
 def test_the_backend_passes_the_collection_and_the_filters(backend, corpus, db):
-    video_id, collection = _one(db, "SELECT video_id, collection FROM videos LIMIT 1")
+    # video: on an MVK clip covers its whole recording, so the expectation is the recording's clips
+    video_id, collection, clips = _one(db, """
+        SELECT v.video_id, v.collection, array_agg(w.video_id)
+        FROM videos v JOIN videos w USING (recording_id)
+        GROUP BY v.video_id, v.collection ORDER BY v.video_id LIMIT 1""")
     status, body = get_json(f"{backend}/climb/search?q=video:{video_id}&collection="
                             f"{collection.lower()}")
     assert status == 200, body
     assert body["collection"] == collection
-    assert body["filters"] == [{"filter": f"video:{video_id}", "videos": 1}]
-    assert {r["video_id"] for r in body["results"]} == {video_id}
+    assert body["filters"] == [{"filter": f"video:{video_id}", "videos": len(clips)}]
+    assert body["results"] and {r["video_id"] for r in body["results"]} <= set(clips)
     assert all(r["recording_id"] for r in body["results"])
 
 
