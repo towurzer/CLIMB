@@ -81,6 +81,7 @@ CLIMB addresses all of them. It indexes every video as scenes and keyframes, ret
 fuses them by rank, allows for operators to send clues to their teammates, and treats an AVS task as a single shared activity,
 vanishing duplicate scenes from everybody's list. 
 
+\newpage
 %\noindent
 Concretely, we contribute:
 \begin{enumerate}
@@ -141,13 +142,11 @@ only search execution to Python. The frontend (Sect.~\ref{search}) communicates 
   \label{architecture}
 \end{figure}
 
-
 %\newpage
 \section{Indexing Pipeline} \label{pipeline}
 \subsection{Scenes and Keyframe Selection}
 The indexing pipeline starts from the scene boundaries shipped with each dataset, produced with TransNetV2~\cite{souvcek2020transnet} for V3C
 and with a keyframe extraction algorithm~\cite{schoeffmann2015keyframe} based on ORB keypoint tracking~\cite{orb} for LHE~\cite{GynSurgLHE} and MVK~\cite{mvk}.
-and a specific keyframe extraction algorithm \cite{schoeffmann2015keyframe}, based on ORB keypoint tracking \cite{orb} for the LHE \cite{GynSurgLHE} and MVK videos \cite{mvk}.
 MVK clips from the same dive are shipped as separate clips, but they are grouped into one recording on a shared timeline, 
 so exclusion, temporal chains and AVS coverage work per dive, while DRES submissions still reference the individual clips.
 
@@ -264,16 +263,15 @@ it as text alone or together with the selected shot. Results are cached, so scro
 \includegraphics[width=\textwidth]{figures/ui-screenshot-annoted.png}
 \caption{
   The CLIMB interface:
-  (a) query bar and source filters,
-  (b) dataset selection,
-  (c) scene result grid,
-  (d) detail panel and video player,
-  (e) submission and search-refinement controls,
-  (f) keyframe filmstrip,
-  (g) AVS session tab,
-  (h) DRES connection controls, 
-  (i) Team connection controls, and
-  (j) system health status.
+  (a) query bar, source filters and dataset selection,
+  (b) scene result grid,
+  (c) detail panel and video player,
+  (d) submission and search-refinement controls,
+  (e) keyframe filmstrip,
+  (f) AVS session tab,
+  (g) DRES connection controls, 
+  (h) team connection controls, and
+  (i) system health status.
 }
 \label{ui}
 \end{figure}
