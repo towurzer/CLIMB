@@ -60,6 +60,11 @@ def load_model(dev: str):
         raise ImportError("transformers is required for captioning") from e
 
     processor = AutoProcessor.from_pretrained(conf.CAPTION_MODEL)
+    # Images of different sizes give prompts of different lengths, so a batch is padded. Generation
+    # continues after the last token, so the padding has to go on the left. Qwen3-VL's tokenizer
+    # defaults to right, and then every shorter prompt in a batch generates an empty caption or junk
+    # (Qwen2-VL's defaults to left).
+    processor.tokenizer.padding_side = "left"
     # See Config.CAPTION_IMAGE_SPLITTING: tiling a 480x270 keyframe into 512px crops costs 5.3x
     # for no detail that was not already there. Set only where the processor supports it.
     image_processor = getattr(processor, "image_processor", None)
@@ -85,7 +90,9 @@ def caption_images(images, processor, model, dev) -> list:
         generated = model.generate(**inputs, max_new_tokens=conf.CAPTION_MAX_TOKENS,
                                    do_sample=False)
     trimmed = [out[len(inp):] for inp, out in zip(inputs["input_ids"], generated)]
-    return [t.strip() for t in processor.batch_decode(trimmed, skip_special_tokens=True)]
+    # Postgres text cannot hold NUL, and one in a batch fails the insert and ends the stage.
+    return [t.replace("\x00", "").strip()
+            for t in processor.batch_decode(trimmed, skip_special_tokens=True)]
 
 
 def caption_pending(conn, collection=None, batch_size=None, limit=None, shard=0, shards=1,

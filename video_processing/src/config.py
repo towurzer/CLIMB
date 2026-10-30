@@ -249,6 +249,9 @@ class Config:
     DB_CONTAINER_NAME: str = os.getenv("CLIMB_DB_CONTAINER") or "climb"
     # The volume the cluster lives in; another name is another, empty database.
     DB_VOLUME: str = os.getenv("CLIMB_DB_VOLUME") or "postgres_data"
+    # The host address the database port is published on, fixed when the container is created.
+    # 127.0.0.1 keeps it to this machine; 0.0.0.0 lets shards on other machines write to it (README 1.7).
+    DB_BIND_ADDRESS: str = os.getenv("CLIMB_DB_BIND") or "127.0.0.1"
     # The official postgres image (which pgvector/pgvector is built on) puts PGDATA at
     # /var/lib/postgresql/data. Mounting the parent instead leaves the cluster inside the
     # container's own filesystem, so the volume holds nothing and the data dies with the container.
