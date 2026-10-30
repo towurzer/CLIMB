@@ -266,10 +266,10 @@ If the service becomes unreachable, the local copy is kept rather than cleared, 
 
 \section{Preliminary Results} \label{results}
 A far simpler CLIMB prototype won our university's course-internal retrieval competition, but VBS is a much greater challenge.
-CLIMB is implemented for the full V3C collection, yet all metrics below were measured on a 200-video subset (26\,h, 14{,}345 scenes, 35{,}558 keyframes).
+CLIMB is implemented for the full V3C collection, yet the V3C metrics below were measured on V3C1 (7{,}471 videos, 999\,h, 521{,}573 scenes, 1{,}349{,}785 keyframes).
 
-Compared with exhaustive exact search (73\,ms), oversampling 1{,}000 candidates before exact reranking recovers on average 95.6\% of the 
-true top 20 in 17\,ms, 2{,}000 candidates recovers 98.3\% in 33\,ms, and 4{,}000 99.4\% in 63\,ms. CLIMB defaults to 2{,}000 candidates, 
+Compared with exhaustive exact search (2.4\,s), oversampling 2{,}000 candidates before exact reranking recovers on average 88.7\% of the
+true top 20 in 80\,ms, 4{,}000 candidates recovers 93.8\% in 159\,ms, and 8{,}000 97.1\% in 309\,ms. CLIMB defaults to 4{,}000 candidates,
 while keeping this parameter configurable.
 
 Since neither MVK nor LHE resembles the imagery SigLIP2 was trained on, we tested domain-specific models on both.

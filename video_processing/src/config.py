@@ -267,17 +267,21 @@ class Config:
     HNSW_M: int = 16
     HNSW_EF_CONSTRUCTION: int = 64
     # How many candidates the ANN stage hands to the exact rerank. This is the recall/latency dial.
-    # Measured on 35,558 keyframes over the 90 TRECVID AVS 2019-21 topics, mean recall@20 against
-    # exhaustive exact search, median latency (EXPERIMENTS.md, 2026-10-28):
+    # Measured over the 90 TRECVID AVS 2019-21 topics, mean recall@20 against exhaustive exact
+    # search, median latency (EXPERIMENTS.md):
+    #   35,558 keyframes, course subset, laptop CPU (2026-10-28):
     #     1000 -> 0.956 at 17 ms       2000 -> 0.983 at 33 ms
-    #     4000 -> 0.994 at 63 ms      35558 -> 1.000 at 73 ms
-    # The ceiling is binary quantization, not the index: the ANN stage ranks by hamming distance on
-    # 1-bit vectors, so the true nearest neighbours by cosine are not all inside its top-N. 2000
-    # because it moves a whole search on the laptop CPU from 442 to 469 ms, most of which is the
-    # text encoding; 4000 doubles the ANN again for the last 1%, which is shit for competition.
-    # Anything above HNSW_EF_SEARCH_MAX, this default included, runs as an iterative scan (see
-    # retrievers._ann_rerank).
-    ANN_OVERSAMPLE: int = int(os.getenv("CLIMB_ANN_OVERSAMPLE") or 2000)
+    #     4000 -> 0.994 at 63 ms      exact -> 1.000 at 73 ms
+    #   1,353,460 keyframes, V3C1, shared server under load (2026-10-31):
+    #     2000 -> 0.887 at 80 ms       4000 -> 0.938 at 159 ms
+    #     8000 -> 0.971 at 309 ms     exact -> 1.000 at 2380 ms
+    # The ANN stage ranks by hamming distance on 1-bit vectors, so the true nearest neighbours by
+    # cosine are not all inside its top-N, and a fixed N is a shrinking share of a growing
+    # collection. 4000 because at V3C1 size it buys 5 points of recall over 2000 for ~80 ms, on a
+    # whole search of about half a second (442 ms at 1000 on the laptop CPU, 368 of them the text
+    # encoding). Anything above HNSW_EF_SEARCH_MAX, this default included, runs as an iterative
+    # scan (see retrievers._ann_rerank).
+    ANN_OVERSAMPLE: int = int(os.getenv("CLIMB_ANN_OVERSAMPLE") or 4000)
     HNSW_EF_SEARCH_MAX: int = 1000
     HNSW_MAX_SCAN_TUPLES: int = int(os.getenv("CLIMB_HNSW_MAX_SCAN_TUPLES") or 100_000)
 

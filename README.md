@@ -1100,23 +1100,39 @@ search, averaged over the 90 TRECVID AVS 2019-21 topics on a laptop CPU:
 |------------------------|----------------|---------------------|----------------|
 | 500                    | 0.918          | 42/90               | 10 ms          |
 | 1000                   | 0.956          | 57/90               | 17 ms          |
-| **2000 (default)**     | **0.983**      | 70/90               | 33 ms          |
+| 2000                   | 0.983          | 70/90               | 33 ms          |
 | 4000                   | 0.994          | 82/90               | 63 ms          |
 | exact (whole corpus)   | 1.000          | 90/90               | 73 ms          |
 
-The ceiling is the binary quantization, not the index , the ANN stage ranks by hamming distance on 1-bit vectors, so
-the true cosine neighbours are not all inside its top-N. Even 4000 candidates leave 8 of 90 queries one or two short.
-Exact search reads every vector, so its 73 ms grow with the corpus, while the ANN reads only its candidates.
+The ceiling there is the binary quantization, not the index , the ANN stage ranks by hamming distance on 1-bit
+vectors, so the true cosine neighbours are not all inside its top-N. Even 4000 candidates leave 8 of 90 queries one or
+two short. Exact search reads every vector, so its 73 ms grow with the corpus, while the ANN reads only its candidates.
 
-The default is 2000 because on a whole search it barely shows: 442 ms at 1000, 469 ms at 2000, on a laptop CPU, and
-368 ms of either is just encoding your query. 4000 doubles the ANN again for the last 1%, which is a decision you
-should make on purpose.
+Then the same benchmark ran on V3C1 (1,353,460 keyframes, 3,675 of them MVK/LHE) on the shared university server,
+next to a running caption and ASR job and somebody else's transcodes, so treat the milliseconds as pessimistic:
+
+| `CLIMB_ANN_OVERSAMPLE` | mean recall@20 | queries with all 20 | median latency |
+|------------------------|----------------|---------------------|----------------|
+| 500                    | 0.727          | 8/90                | 23 ms          |
+| 1000                   | 0.818          | 20/90               | 40 ms          |
+| 2000                   | 0.887          | 38/90               | 80 ms          |
+| **4000 (default)**     | **0.938**      | 56/90               | 159 ms         |
+| 8000                   | 0.971          | 70/90               | 309 ms         |
+| exact (whole corpus)   | 1.000          | 90/90               | 2,380 ms       |
+
+A fixed candidate count is a shrinking slice of a growing collection: 2000 was 5.6% of the course subset and is 0.15%
+of V3C1, and its recall went from 0.983 to 0.887 with it. Exact search went from 73 ms to 2.4 s, so "just search
+exhaustively" left the chat. How much of the loss is the quantization and how much the index is not measured yet.
+
+The default is 4000 because at V3C1 size it buys 5 points of recall over 2000 for ~80 ms, and a whole search takes
+about half a second anyway (442 ms at 1000 on a laptop CPU, 368 ms of which is encoding your query). The full V3C is
+about 3.5x V3C1 again, so these numbers will drift down further. More candidates only buy time.
 
 Captions and transcripts run the exact same oversample-then-rerank, which is the point of it living in one function.
 Captions share the knob, transcripts have their own candidate count (`ASR_SEGMENT_LIMIT`, 500 segments). Recall@20 was
 measured at 96.2% for captions and 98.8% for transcripts, next to the visual retriever's 95.6% at 1000 above. Do not
-read that as free: a fixed candidate count is a shrinking slice of a growing collection (2000 is 14% of 14k captions,
-5.6% of 35k keyframes and 0.016% of 12.4M), so all of these drift down as it grows, and for captions and transcripts it is
+read that as free: a fixed candidate count is a shrinking slice of a growing collection (the default 4000 is 28% of the
+subset's 14k captions, 0.3% of V3C1's 1.35M keyframes and 0.03% of 12.4M), so all of these drift down as it grows, and for captions and transcripts it is
 a real (small) step down from the exhaustive scan those two used to do. Being exact is easy when you are small.
 
 It has to be a *binary quantized* index for these two as well, and not only for the 5x size saving. `embedding` is a
