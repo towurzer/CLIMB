@@ -481,6 +481,7 @@ Everything below is explained in the sections that follow. This is just the orde
    python main.py caption
    python main.py asr
    python main.py embed-text
+   python main.py purge          # the audio tracks, which `run` kept for ASR
    python main.py index build
    ```
 

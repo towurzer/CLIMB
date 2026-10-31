@@ -286,6 +286,10 @@ def process_in_batches(conn, collection=None, limit=None, purge_after=True, keep
         size = batch if limit is None else min(batch, limit - selected_total)
         decoded = decode_from_database(conn, collection=collection, limit=size, exclude=failed)
         if not decoded:
+            # Audio is done only once ASR has run, long after its batch was decoded, so purge
+            # here too: without it, `run` after the last decode never frees the audio.
+            if purge_after:
+                purge(conn, collection=collection, keep_raw=keep_raw)
             break
         failed |= {r.video_id for r in decoded if not r.ok}
         # Exactly what this batch decoded. "The next N pending" would, after a batch that failed

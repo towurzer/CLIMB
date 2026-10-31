@@ -62,7 +62,15 @@ def test_everything_gets_through_in_batches(fake):
     pipeline = fake(25)
     failed = runner.process_in_batches(None, batch=10)
     assert failed == set() and pipeline.pending == []
-    assert pipeline.purges == 3
+    # One per batch, and one more when nothing is left to decode.
+    assert pipeline.purges == 4
+
+
+def test_purges_with_nothing_to_decode(fake):
+    """Every video decoded long ago, ASR finished since: `run` still frees the audio."""
+    pipeline = fake(0)
+    runner.process_in_batches(None, batch=10)
+    assert pipeline.purges == 1
 
 
 def test_a_broken_video_is_skipped_not_retried_forever(fake):
