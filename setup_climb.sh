@@ -39,7 +39,9 @@ CONTAINERS=$(basename "$CONTAINERS")
 
 # --- Python ----------------------------------------------------------------------------------
 PYTHON=$(command -v python3.13 || command -v python3)
-VENV_PYTHON=video_processing/.venv/bin/python
+# Absolute: started as src/../.venv/bin/python, Python warns that its path is not the venv's own
+# ("Unexpected value in sys.prefix").
+VENV_PYTHON="$PWD/video_processing/.venv/bin/python"
 if [ ! -x "$VENV_PYTHON" ]; then
     echo "Creating video_processing/.venv with $("$PYTHON" --version)..."
     "$PYTHON" -m venv video_processing/.venv
@@ -93,7 +95,7 @@ if container_exists "$DB_CONTAINER"; then
 else
     echo "Creating the database container '$DB_CONTAINER'..."
     # The same command `main.py schema` prints, so the two cannot drift apart.
-    eval "$(cd video_processing/src && ../.venv/bin/python -c \
+    eval "$(cd video_processing/src && "$VENV_PYTHON" -c \
         "from db_setup import container_command; print(container_command('$CONTAINERS'))")"
 fi
 
@@ -106,10 +108,18 @@ done
 migrated=$($CONTAINERS exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$POSTGRES_DB_NAME" -tAc \
     "SELECT to_regclass('public.schema_migrations') IS NOT NULL")
 if [ -f "$DUMP_FILE" ] && [ "$migrated" != "t" ]; then
-    echo "Restoring $DUMP_FILE into the empty database..."
-    $CONTAINERS exec -i "$DB_CONTAINER" pg_restore -U "$DB_USER" -d "$POSTGRES_DB_NAME" --no-owner < "$DUMP_FILE"
+    echo "Restoring $DUMP_FILE into the empty database, search indexes included (takes a while)..."
+    # A dump holds index definitions, not indexes: pg_restore builds every HNSW index again. With
+    # the default 64 MB of maintenance_work_mem pgvector spills the graph to disk (README 1.8), so
+    # it gets `index build`'s budget. Serial, because a parallel build reserves the whole budget as
+    # shared memory up front, and a serial one allocates only what the graph needs.
+    BUILD_MEMORY=$(cd video_processing/src && "$VENV_PYTHON" -c \
+        "from config import Config; print(Config.PG_BUILD_MAINTENANCE_WORK_MEM)")
+    $CONTAINERS exec -i \
+        -e PGOPTIONS="-c maintenance_work_mem=$BUILD_MEMORY -c max_parallel_maintenance_workers=0" \
+        "$DB_CONTAINER" pg_restore -U "$DB_USER" -d "$POSTGRES_DB_NAME" --no-owner < "$DUMP_FILE"
 fi
-(cd video_processing/src && ../.venv/bin/python main.py migrate)
+(cd video_processing/src && "$VENV_PYTHON" main.py migrate)
 
 echo
 echo "Set up. ./start_climb.sh starts CLIMB; 'python main.py check' in video_processing/src checks"

@@ -41,6 +41,13 @@ torch for CUDA 12.6 and `paddlepaddle-gpu` (1.0). It creates and starts the `cli
 restores `dataset/climb_db.dump` into the database if there is one and the database is still empty, and migrates
 the schema. Running it again later only starts what exists and applies new migrations.
 
+A dump holds the data and only the *definitions* of the search indexes, so the restore builds every index again
+(1.8). It does that one at a time with the same memory budget as `index build`, so it does not eat a laptop alive:
+V3C1 (1.35 million keyframes, a 6.3 GB dump read from a USB 2 drive) took about 18 minutes on ours, indexes included. Already have a database and want a dump in there
+instead? Move the old one aside (`podman stop climb && podman rename climb climb_old`), set `CLIMB_DB_VOLUME` in
+`.env` to a name that does not exist yet, and run `setup_climb.sh`: it creates a new `climb` on an empty volume and
+restores into it. The old container keeps its volume, so going back is two renames.
+
 Once you are set up, simply run `start_climb.sh` (also found in the root directory)
 
 ```bash:
@@ -1084,7 +1091,8 @@ Three things worth knowing:
   times slower than building it once at the end.
 - Do it on a machine with some RAM to spare (we ask for 8GB of ```maintenance_work_mem```). Building the index and
   *reading* the index are very different appetites , the plan is that whoever has the beefy machine builds it, and
-  everybody else gets the finished database.
+  everybody else gets the finished database. Almost: a `pg_dump` carries the index definitions, not the indexes, so
+  restoring one builds them again ("Run CLIMB for the first time" says how gently).
 - Give the Postgres container a real ```--shm-size``` (8g if you are asking for 8GB of ```maintenance_work_mem```). A
   parallel index build wants a shared memory segment that big, the pgvector image ships with 63MB of ```/dev/shm```,
   and the error you get is ```No space left on device``` pointing at a disk with plenty of space on it. The build
