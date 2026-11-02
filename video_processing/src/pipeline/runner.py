@@ -2,13 +2,12 @@
 Batch lifecycle: enqueue, fetch, purge, and the loop that keeps them moving.
 
 The per-stage modules find their own work by asking what is missing, which makes them resumable
-without any bookkeeping. Two things cannot work that way, and those are what ingest_jobs is for:
+without any bookkeeping. fetch cannot work that way: it has no output table to check, so
+ingest_jobs holds the list of what to download. When that list is not empty, ingest-shots only
+takes the videos on it.
 
-  * fetch has no output table to check -- it needs a list of what to download
-  * purge has to know when a file is safe to delete
-
-Purging is deliberately per-artifact rather than one "all done" gate, because the working set is
-what the disk budget is spent on:
+purge also decides from the tables, per artifact rather than one "all done" gate, because the
+working set is what the disk budget is spent on:
 
     raw video    -> once keyframe selection is done for that video
     candidates   -> once every scene of that video has at least one keyframe
@@ -334,7 +333,7 @@ def status(conn, collection=None):
         for collection_name, stage, count in jobs:
             print(f"  {collection_name:10s} {stage:10s} {count:>9,}")
     else:
-        print("ingest_jobs: empty (stages can still run without it; only fetch and purge need it)")
+        print("ingest_jobs: empty (only fetch needs it; every other command runs without it)")
 
     print("\ncontent:")
     for label, value in [("videos", videos), ("scenes", scenes), ("keyframes", keyframes),
