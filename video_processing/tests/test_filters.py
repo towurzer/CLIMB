@@ -86,3 +86,30 @@ def test_small_scopes_rank_exactly(monkeypatch):
     assert Scope(only=("a", "b")).exact
     assert not Scope(only=("a", "b", "c")).exact
     assert not Scope().exact
+
+
+def test_small_collections_rank_exactly_unless_their_videos_already_do(monkeypatch):
+    monkeypatch.setattr(engine_module.Config, "EXACT_SCOPE_MAX_VIDEOS", 2)
+    assert Scope(collection="MVK", small_collection=True).exact_collection
+    assert not Scope(collection="V3C").exact_collection
+    # Few enough videos rank exactly on their own, which is narrower than the whole collection.
+    assert not Scope(collection="MVK", small_collection=True, only=("a",)).exact_collection
+    # Too many videos for that: the whole small collection, filtered to them afterwards.
+    assert Scope(collection="MVK", small_collection=True, only=("a", "b", "c")).exact_collection
+    assert not Scope(small_collection=True).exact_collection
+
+
+def test_the_engine_calls_a_collection_small_by_its_keyframes(monkeypatch):
+    monkeypatch.setattr(engine_module.Config, "EXACT_COLLECTION_MAX_KEYFRAMES", 150_000)
+    instance = SearchEngine.__new__(SearchEngine)
+    instance.conf = engine_module.Config()
+    instance.collection_keyframes = {"V3C": 1_349_785, "MVK": 82_733, "LHE": 149_068}
+    assert instance._small_collection("MVK") and instance._small_collection("LHE")
+    assert not instance._small_collection("V3C")
+    assert not instance._small_collection(None)
+
+
+def test_requirements_keep_the_collection_small(engine):
+    scope, _ = engine._apply_filters(parse("tag:wedding"),
+                                     Scope(collection="MVK", small_collection=True))
+    assert scope.small_collection and scope.only == ("v1", "v2")

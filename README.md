@@ -1009,7 +1009,8 @@ picked for how different they look, so skipping all but the first throws away ex
 likely to have changed , rolling credits, a news banner swapping mid-shot, a scoreboard ticking over, subtitles, a pan
 along a row of shopfronts. Miss those and nothing later can recover them; no clever ranking reads a sign nobody looked
 at. Captions do not have that problem , a sentence describing a shot reads much the same whichever frame of it you
-pick , and they are the pricier stage, so they stay at one per shot.
+pick , and they are the pricier stage, so by default they stay at one per shot. (That "much the same" turned out to
+be optimistic once we measured it, see `--all-keyframes` below.)
 
 **A trap worth knowing about:** small VLMs like SmolVLM default to splitting each image into tiles sized for a
 full-resolution photo. Our keyframes are 480x270, so that means 13 crops of 512x512 per frame , every one of them an
@@ -1063,6 +1064,13 @@ Every stage only ever does work that is still outstanding, so this picks up exac
 skipped and leaves the existing captions alone. Same flag works for `ocr`, though that one already covers
 everything by default. The permanent equivalents are `CLIMB_OCR_SCOPE` and `CLIMB_CAPTION_SCOPE`, either `all` or
 `shot`.
+
+Burn that time, it pays. On full V3C1 against the TRECVID AVS 2019-21 judgements (90 topics), a caption for every
+keyframe instead of one per shot took the caption signal on its own from 10.6 to 18.4 relevant shots on the first
+page of 48, and the whole search without OCR from 13.2 to 16.2. The search ranks each captioned keyframe by its own
+caption, and a keyframe without one shares its shot's rank, so a database captioned per shot, per keyframe or half
+and half all search the way they should. It did not always: for one evening the per-shot logic met per-keyframe
+captions, repeated every shot once per matching frame, and the extra captions made the search *worse*.
 
 ##### Running them on more than one machine
 
@@ -1186,7 +1194,10 @@ sorting the badges by rank would cheerfully credit the wrong one. Sequence hits 
 
 Under the search box are five tickboxes , Visual, Caption, OCR, ASR, Info , and in KIS the first four start ticked. Untick one and
 it is not searched at all, which is both quieter and faster, since the retriever never runs and its query never gets
-embedded. LHE gets a sixth, second in line: its own model, PeskaVLP (see 1.7), ticked whenever LHE is picked.
+embedded. LHE gets a sixth, second in line: its own model, PeskaVLP (see 1.7), ticked whenever LHE is picked. OCR
+starts unticked for MVK and LHE (and in AVS): one surgical query, "bipolar forceps coagulating tissue", put 47
+OCR-only results on a first page of 48: 212 LHE keyframes show the surgical robot's instrument labels ("Fenestrated
+Bipolar Forceps", "ProGrasp Forceps"), and the OCR hits on those words outrank everything else.
 
 **Info** is the odd one out. It matches your words against what the uploader wrote about the whole video (title, tags,
 description, see 1.4.1), so it cannot say *which frame*. Instead of adding frames it re-orders the ones the other
@@ -1241,6 +1252,14 @@ lexical pass falls back to see every content word, so `a snowboarder doing a bac
 subtitles say "backflip", and eight of those sit above the first actual snowboarder. Unticking OCR is how you say "not
 this time" for one query, instead of retuning the weights for every query forever.
 
+So a lowercase query now gets its own, lower OCR weight: 2.0 (`CLIMB_W_OCR_LOWERCASE`), while a query with a
+capitalised word in it keeps 4.0 for the words that look like names. Measured on the 90 TRECVID AVS topics, all
+lowercase, against no OCR at all: 4.0 cost 13.9 relevant shots on the first page of 48, 2.0 costs 7.2, and OCR found
+nothing relevant further down either. It is still a lot of trust in a word match: at 2.0 an OCR-only hit outranks
+any frame found by one other signal down to OCR rank 61, so a query whose words show up as text in more than 48 frames
+can still fill page one with them ("bipolar forceps coagulating tissue" in LHE does, 47 of 48). That is what the
+tickbox is for.
+
 The tickboxes do **not** gag `text:...` or `said:...`. Those only run because you typed them, and an is an
 instruction rather than a preference , so an explicit phrase search still works with OCR unticked, which beats
 returning nothing, because nothing cannot be submitted.
@@ -1276,6 +1295,15 @@ That is the first 500 scenes of a very long video (00193 has 840); Browse shows 
 The dataset dropdown next to the sources does what it says: search only V3C, MVK or LHE. At VBS the task tells you which
 collection it is from, and there is no point in letting the other two put look-alikes on the page. Browse has the same
 dropdown, sharing the same setting, so switching to MVK there lists only the MVK clips.
+
+It also changes *how* MVK and LHE are searched. All three collections share one index, and keeping only the MVK rows
+of its top 4000 worked fine for underwater queries (they land in MVK anyway) and terribly for everything else: "a
+person" with MVK selected kept a median of 43 of its 4000 candidates, sometimes none. So a collection with at most
+300,000 keyframes (`CLIMB_EXACT_COLLECTION_MAX_KEYFRAMES`; MVK has 83k, LHE 149k, V3C's 1.35M stays on the index) is
+searched by exact distance over all of it, which also removes the binary index's own loss (recall@48 against exact was
+0.70 on LHE). Exact costs 250 ms per signal for MVK and 570 ms for LHE on the laptop, so the retrievers of a search now
+run side by side, each on a database connection of its own (`CLIMB_RETRIEVER_CONNECTIONS`, 4; 1 brings back one after
+another): the three exact scans of an LHE search took 0.7 s that way instead of 1.3 s.
 
 The quotes are optional , the colon is what makes it an operator, and a space after it is fine. Unquoted, the phrase
 runs to the end of the stage or to the next operator, so `text:BANK said:we are live` is two phrases and

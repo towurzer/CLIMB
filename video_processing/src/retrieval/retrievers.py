@@ -22,10 +22,14 @@ class Scope:
 
     `only` is None for "no restriction" and a tuple of clip ids otherwise; MVK recordings are
     already resolved to their clips by the engine. An empty tuple means nothing may answer.
+
+    `small_collection` is set by the engine when `collection` has at most
+    EXACT_COLLECTION_MAX_KEYFRAMES keyframes; the scope itself cannot know the collection's size.
     """
     exclude: tuple = ()
     collection: str | None = None
     only: tuple | None = None
+    small_collection: bool = False
 
     @property
     def params(self) -> dict:
@@ -40,6 +44,15 @@ class Scope:
         whichever of the global top 2000 happen to be in 00191 -- usually none.
         """
         return self.only is not None and len(self.only) <= Config.EXACT_SCOPE_MAX_VIDEOS
+
+    @property
+    def exact_collection(self) -> bool:
+        """
+        Rank by exact distance over the whole (small) collection, unless the videos of `only` are
+        few enough to be ranked exactly on their own. Same reason as `exact`: the index answers for
+        every collection, and a generic query restricted to MVK kept a median of 43 of its 4000.
+        """
+        return self.small_collection and self.collection is not None and not self.exact
 
 
 # The filter every retriever applies, on whichever table carries the video id.
@@ -96,6 +109,19 @@ EXACT_SQL = """
     LIMIT %(limit)s;
 """
 
+# Exact distance over every vector of one collection, for a Scope whose collection is small.
+# Reaches the rows through videos -> keyframes / transcript_segment by video id, then the primary key.
+EXACT_COLLECTION_SQL = """
+    SELECT e.{key}
+    FROM {table} e
+             JOIN {owner} o ON o.{key} = e.{key}
+             JOIN videos v ON v.video_id = o.video_id
+    WHERE v.collection = %(collection)s
+      AND e.model_id = %(model_id)s
+    ORDER BY e.embedding::halfvec(%(dims)s) <=> %(query)s::halfvec(%(dims)s), e.{key}
+    LIMIT %(limit)s;
+"""
+
 VISUAL_ANN = ANN_SQL.format(table="keyframe_embedding", key="keyframe_id")
 VISUAL_RERANK = RERANK_SQL.format(table="keyframe_embedding", key="keyframe_id")
 CAPTION_ANN = ANN_SQL.format(table="caption_embedding", key="keyframe_id")
@@ -106,6 +132,12 @@ VISUAL_EXACT = EXACT_SQL.format(table="keyframe_embedding", key="keyframe_id", o
 CAPTION_EXACT = EXACT_SQL.format(table="caption_embedding", key="keyframe_id", owner="keyframes")
 ASR_EXACT = EXACT_SQL.format(table="transcript_embedding", key="segment_id",
                              owner="transcript_segment")
+VISUAL_EXACT_COLLECTION = EXACT_COLLECTION_SQL.format(table="keyframe_embedding", key="keyframe_id",
+                                                      owner="keyframes")
+CAPTION_EXACT_COLLECTION = EXACT_COLLECTION_SQL.format(table="caption_embedding", key="keyframe_id",
+                                                       owner="keyframes")
+ASR_EXACT_COLLECTION = EXACT_COLLECTION_SQL.format(table="transcript_embedding", key="segment_id",
+                                                   owner="transcript_segment")
 
 # Metadata and filtering for an already-ranked set of keyframes. Single table plus a tiny join to
 # videos, both on primary keys.
@@ -122,7 +154,7 @@ KEYFRAME_META = """
 # that happens to spell a real word would be promoted straight to the top of the page.
 OCR_SEARCH = """
     SELECT k.scene_id, t.keyframe_id, ts_rank_cd(t.tsv, q.query, 32) AS rank
-    FROM to_tsquery('simple', %(tsquery)s) AS q(query),
+    FROM to_tsquery('simple', public.immutable_unaccent(%(tsquery)s)) AS q(query),
          keyframe_text t
              JOIN keyframes k ON k.keyframe_id = t.keyframe_id
              JOIN videos v ON v.video_id = k.video_id
@@ -171,7 +203,7 @@ ASR_PHRASE_SEARCH = """
     SELECT scene_id, keyframe_id
     FROM (SELECT DISTINCT ON (s.scene_id) s.scene_id, NULL::bigint AS keyframe_id,
                                           ts_rank_cd(t.tsv, q.query, 32) AS rank
-          FROM to_tsquery('simple', %(tsquery)s) AS q(query),
+          FROM to_tsquery('simple', public.immutable_unaccent(%(tsquery)s)) AS q(query),
                transcript_segment t
                    JOIN videos v ON v.video_id = t.video_id
                    JOIN scenes s ON s.video_id = t.video_id
@@ -284,21 +316,27 @@ def _ann_rerank(conn, ann_sql, rerank_sql, query_vector, model_id, dims, oversam
         return [row[0] for row in cur.fetchall()]
 
 
-def _rank_vectors(conn, ann_sql, rerank_sql, exact_sql, query_vector, model_id, dims, scope,
-                  oversample=None):
-    """Exact over the Scope's videos when it is small enough, the ANN path otherwise."""
-    if not scope.exact:
+def _rank_vectors(conn, ann_sql, rerank_sql, exact_sql, exact_collection_sql, query_vector,
+                  model_id, dims, scope, oversample=None):
+    """
+    Exact over the Scope's videos when they are few enough, else exact over its collection when
+    that is small, the ANN path otherwise.
+    """
+    if scope.exact:
+        sql, params = exact_sql, {"only": list(scope.only)}
+    elif scope.exact_collection:
+        sql, params = exact_collection_sql, {"collection": scope.collection}
+    else:
         return _ann_rerank(conn, ann_sql, rerank_sql, query_vector, model_id, dims, oversample)
     with conn.cursor() as cur:
-        cur.execute(exact_sql, {"only": list(scope.only), "model_id": model_id, "dims": dims,
-                                "query": query_vector,
-                                "limit": oversample or Config.ANN_OVERSAMPLE})
+        cur.execute(sql, {**params, "model_id": model_id, "dims": dims, "query": query_vector,
+                          "limit": oversample or Config.ANN_OVERSAMPLE})
         return [row[0] for row in cur.fetchall()]
 
 
 def visual(conn, query_vector, model_id, dims, scope, limit, oversample=None):
-    ranked = _rank_vectors(conn, VISUAL_ANN, VISUAL_RERANK, VISUAL_EXACT, query_vector, model_id,
-                           dims, scope, oversample)
+    ranked = _rank_vectors(conn, VISUAL_ANN, VISUAL_RERANK, VISUAL_EXACT, VISUAL_EXACT_COLLECTION,
+                           query_vector, model_id, dims, scope, oversample)
     return _resolve_scenes(conn, ranked, scope, limit)
 
 
@@ -355,20 +393,61 @@ def similar_to_keyframe(conn, keyframe_id, model_id, dims, scope, limit, oversam
     return visual(conn, row[0], model_id, dims, scope, limit + 1, oversample=oversample)
 
 
+UNCAPTIONED_KEYFRAMES = """
+    SELECT k.scene_id, k.keyframe_id
+    FROM keyframes k
+    WHERE k.scene_id = ANY (%(scene_ids)s)
+      AND NOT EXISTS (SELECT 1
+                      FROM caption_embedding e
+                      WHERE e.keyframe_id = k.keyframe_id
+                        AND e.model_id = %(model_id)s)
+    ORDER BY k.scene_id, k.ts_ms;
+"""
+
+
 def caption(conn, query_vector, model_id, dims, scope, limit, oversample=None):
     """
-    Captions describe the shot, not the frame, so a hit expands across the scene's keyframes.
+    Every captioned keyframe ranks by its own caption; a keyframe without one inherits its shot's.
 
-    This is not cosmetic. CAPTION_SCOPE defaults to `shot`, so only kf_index 0 is ever captioned
-    and only kf 0 has a caption_embedding row. Fusion keys on keyframes, so without the expansion
-    kf 0 would be the only frame of any shot able to collect a caption contribution, a second
-    retriever's worth of score that none of its siblings can earn. Measured before this was added,
-    that pinned kf_index 0 to all 15 of the top 15 results.
+    Both kinds of database exist. `caption` (CAPTION_SCOPE `shot`) captions kf_index 0 only, and
+    there the shot's other frames must share kf 0's rank: fusion keys on keyframes, so otherwise
+    kf 0 alone collects a caption contribution, a second retriever's worth of score none of its
+    siblings can earn (that pinned kf_index 0 to all 15 of the top 15 results). `caption
+    --all-keyframes` gives every frame its own caption, and there the old expansion of every hit
+    to the whole shot repeated each shot once per matching frame: on full V3C1 that cost the
+    caption signal 1.1 relevant shots on page one and a fifth of its recall, where ranking each
+    frame by its own caption gained 7.9 shots (EXPERIMENTS.md, 2026-11-02).
     """
-    ranked = _rank_vectors(conn, CAPTION_ANN, CAPTION_RERANK, CAPTION_EXACT, query_vector,
+    ranked = _rank_vectors(conn, CAPTION_ANN, CAPTION_RERANK, CAPTION_EXACT,
+                           CAPTION_EXACT_COLLECTION, query_vector,
                            model_id, dims, scope, oversample)
-    scenes = _resolve_scenes(conn, ranked, scope, limit)
-    return _expand_to_keyframes(conn, scenes, limit)
+    rows = _resolve_scenes(conn, ranked, scope, limit)
+    scene_ids = list({scene_id for scene_id, _ in rows})
+    if not scene_ids:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(UNCAPTIONED_KEYFRAMES, {"scene_ids": scene_ids, "model_id": model_id})
+        uncaptioned = defaultdict(list)
+        for scene_id, keyframe_id in cur.fetchall():
+            uncaptioned[scene_id].append(keyframe_id)
+    return _with_uncaptioned_siblings(rows, uncaptioned, limit)
+
+
+def _with_uncaptioned_siblings(rows, uncaptioned, limit):
+    """
+    The ranked (scene_id, keyframe_id) caption hits, each shot's uncaptioned keyframes inserted
+    right after its best-ranked hit, once per shot. `uncaptioned` maps scene_id -> keyframe ids in
+    time order.
+    """
+    out, expanded = [], set()
+    for scene_id, keyframe_id in rows:
+        out.append((scene_id, keyframe_id))
+        if scene_id not in expanded:
+            expanded.add(scene_id)
+            out += [(scene_id, sibling) for sibling in uncaptioned.get(scene_id, ())]
+        if len(out) >= limit:
+            break
+    return out[:limit]
 
 
 def transcript(conn, query_vector, model_id, dims, scope, limit, oversample=None):
@@ -380,8 +459,9 @@ def transcript(conn, query_vector, model_id, dims, scope, limit, oversample=None
     back in were both whatever the plan produced, and RRF then read that as a ranking.
     """
     conf = Config()
-    ranked = _rank_vectors(conn, ASR_ANN, ASR_RERANK, ASR_EXACT, query_vector, model_id, dims,
-                           scope, oversample or conf.ASR_SEGMENT_LIMIT)
+    ranked = _rank_vectors(conn, ASR_ANN, ASR_RERANK, ASR_EXACT, ASR_EXACT_COLLECTION,
+                           query_vector, model_id, dims, scope,
+                           oversample or conf.ASR_SEGMENT_LIMIT)
     if not ranked:
         return []
 
@@ -491,15 +571,19 @@ OCR_PHRASE_VIDEOS = """
     FROM keyframe_text t
              JOIN keyframes k ON k.keyframe_id = t.keyframe_id
              JOIN videos v ON v.video_id = k.video_id
-    WHERE (t.tsv @@ to_tsquery('simple', %(tsquery)s) OR t.ocr_text %% %(phrase)s)
+    WHERE (t.tsv @@ to_tsquery('simple', public.immutable_unaccent(%(tsquery)s))
+           OR t.ocr_text %% %(phrase)s)
       AND {scope};
 """.format(scope=KEYFRAME_SCOPE)
 
+# Every to_tsquery in this module unaccents its query, as the stored tsv columns are (migration
+# 001): they hold 'haller' for "håller", so `said:"håller"` matched nothing while the query kept
+# its accent.
 SPEECH_PHRASE_VIDEOS = """
     SELECT DISTINCT t.video_id
     FROM transcript_segment t
              JOIN videos v ON v.video_id = t.video_id
-    WHERE t.tsv @@ to_tsquery('simple', %(tsquery)s)
+    WHERE t.tsv @@ to_tsquery('simple', public.immutable_unaccent(%(tsquery)s))
       AND NOT t.hallucination
       AND {scope};
 """.format(scope=SEGMENT_SCOPE)

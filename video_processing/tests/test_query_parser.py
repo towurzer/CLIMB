@@ -7,7 +7,7 @@ letting `A >>` become a two-stage sequence whose empty half matches nothing.
 """
 
 import pytest
-from retrieval.query_parser import distinctive_tokens, parse, parse_temporal
+from retrieval.query_parser import distinctive_tokens, ocr_terms, parse, parse_temporal
 
 DEFAULT_DELTA = 30_000
 MAX_DELTA = 600_000
@@ -187,6 +187,14 @@ def test_tokens_are_deduped_in_order():
 def test_no_words_yields_no_tokens():
     assert distinctive_tokens("") == []
     assert distinctive_tokens("!!! ???") == []
+
+
+def test_ocr_terms_say_which_branch_the_tokens_came_from():
+    # The engine weights a name (4.0) above an OR over every lowercase word (2.0).
+    assert ocr_terms("a sign reading Boulangerie Dupont") == (["boulangerie", "dupont"], True)
+    assert ocr_terms("a man walks past a bakery") == (["walks", "bakery"], False)
+    assert ocr_terms("Bakery with a sign") == (["bakery", "sign"], False)
+    assert ocr_terms("") == ([], False)
 
 
 # --- >> splitting ------------------------------------------------------------------------------

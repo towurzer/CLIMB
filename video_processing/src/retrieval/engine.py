@@ -4,19 +4,29 @@ Search: parse the query, run the retrievers, fuse, enrich.
 Replaces search_engine.py, which searched a `shots` table that no longer exists, ordered by an expression pgvector could not index, and sorted NULLs first.
 """
 
+import dataclasses
 import functools
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import custom_logger
 from config import Config
+from db.pool import ConnectionPool
 from pipeline import device, visual_models
 from pipeline.embed import vector_counts
 from retrieval import fusion, query_parser, retrievers, temporal
 from retrieval.retrievers import Scope
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
+
+KEYFRAMES_PER_COLLECTION = """
+    SELECT v.collection, count(*)
+    FROM keyframes k
+             JOIN videos v ON v.video_id = k.video_id
+    GROUP BY v.collection;
+"""
 
 # The sources a caller can switch off
 SOURCE_RETRIEVERS = {
@@ -203,6 +213,15 @@ class SearchEngine:
         # Only worth it where per-call overhead dominates.
         # So on CPU the stages stay serial and the win comes from the cache instead.
         self.batch_embeddings = self.device in ("cuda", "mps")
+        # collection -> keyframes, read at startup: which collections are small enough for an
+        # exact search (EXACT_COLLECTION_MAX_KEYFRAMES). A collection that grows while the worker
+        # runs keeps its old count until the next start.
+        self.collection_keyframes = {}
+        # Extra connections for running the retrievers of one search side by side; None runs
+        # them one after another on self.conn (RETRIEVER_CONNECTIONS = 1).
+        workers = self.conf.RETRIEVER_CONNECTIONS
+        self.pool = ConnectionPool(workers) if workers > 1 else None
+        self._retriever_threads = ThreadPoolExecutor(workers) if workers > 1 else None
         self._load_models()
 
     def _resolve(self, name):
@@ -239,6 +258,9 @@ class SearchEngine:
         from transformers import AutoModel, AutoTokenizer
 
         counts, keyframes = vector_counts(self.conn)
+        with self.conn.cursor() as cur:
+            cur.execute(KEYFRAMES_PER_COLLECTION)
+            self.collection_keyframes = dict(cur.fetchall())
         preferred = self.conf.search_model(self.device)
         other = next((m for m in self.conf.embed_models() if m != preferred), preferred)
         visual, warning = choose_visual_model(preferred, other, counts, keyframes)
@@ -384,13 +406,19 @@ class SearchEngine:
         collection, and `video:`. Returns (scope, filters) with `video:` reported as a filter.
         """
         excluded = self._resolve_videos(list(dict.fromkeys((exclude or []) + parsed.exclude_videos)))
-        scope = Scope(exclude=excluded, collection=collection)
+        scope = Scope(exclude=excluded, collection=collection,
+                      small_collection=self._small_collection(collection))
         if not parsed.only_videos:
             return scope, []
         only = tuple(v for v in self._resolve_videos(parsed.only_videos) if v not in set(excluded))
         label = " ".join(f"video:{v}" for v in parsed.only_videos)
-        return Scope(exclude=excluded, collection=collection, only=only), \
-            [{"filter": label, "videos": len(only)}]
+        return dataclasses.replace(scope, only=only), [{"filter": label, "videos": len(only)}]
+
+    def _small_collection(self, collection) -> bool:
+        """Whether a search limited to `collection` ranks by exact distance over all of it."""
+        return (collection is not None
+                and self.collection_keyframes.get(collection, 0)
+                <= self.conf.EXACT_COLLECTION_MAX_KEYFRAMES)
 
     def _apply_filters(self, stage, scope) -> tuple:
         """
@@ -411,7 +439,7 @@ class SearchEngine:
                 filters.append({"filter": label, "videos": 0})
                 continue
             videos = tuple(sorted(find(self.conn, value, scope)))
-            scope = Scope(exclude=scope.exclude, collection=scope.collection, only=videos)
+            scope = dataclasses.replace(scope, only=videos)
             filters.append({"filter": label, "videos": len(videos)})
         return scope, filters
 
@@ -446,14 +474,11 @@ class SearchEngine:
         def enabled(name):
             return allowed is None or name in allowed
 
+        jobs = []
+
         def run(name, fn):
-            started = time.monotonic()
-            try:
-                lists[name] = fn()
-            except Exception as e:
-                self.logger.error(f"retriever '{name}' failed: {e}")
-                lists[name] = []
-            timings[name] = round((time.monotonic() - started) * 1000, 1)
+            """Queues a retriever, `fn(conn)`; the queued ones all run together further down."""
+            jobs.append((name, fn))
 
         def embed(kind, fn):
             """Embedding is the most expensive part of a search; it belongs in the timings."""
@@ -475,59 +500,68 @@ class SearchEngine:
             if enabled("visual"):
                 vector = embed("visual",
                                lambda: self.embed_query_visual(parsed.free_text, visual_spec))
-                run("visual", lambda: retrievers.visual(
-                    self.conn, vector, visual_spec["model_id"], visual_spec["dims"],
+                run("visual", lambda conn: retrievers.visual(
+                    conn, vector, visual_spec["model_id"], visual_spec["dims"],
                     scope, depth))
             # The collection's own model, searching the same keyframes in its own space; its
             # ranking fuses with SigLIP2's like any other signal. Its tickbox is its signal name.
             if domain and enabled(domain["signal"]):
                 domain_vector = embed(domain["signal"],
                                       lambda: self.embed_query_visual(parsed.free_text, domain))
-                run(domain["signal"], lambda: retrievers.visual(
-                    self.conn, domain_vector, domain["model_id"], domain["dims"], scope, depth))
+                run(domain["signal"], lambda conn: retrievers.visual(
+                    conn, domain_vector, domain["model_id"], domain["dims"], scope, depth))
 
-            tokens = query_parser.distinctive_tokens(parsed.free_text)
+            tokens, named = query_parser.ocr_terms(parsed.free_text)
             if tokens and enabled("ocr"):
-                run("ocr", lambda: retrievers.ocr_lexical(self.conn, tokens, scope, depth))
+                run("ocr", lambda conn: retrievers.ocr_lexical(conn, tokens, scope, depth))
+                if not named:
+                    # No capitalised word: every content word is ORed against the OCR text, which
+                    # earns less trust than a name (RRF_WEIGHT_OCR_LOWERCASE).
+                    weights = {**weights, "ocr": weights.get("ocr_lowercase", weights["ocr"])}
 
             # One embedding serves all three, so it is only worth computing if any is wanted.
             if self.text_model and (enabled("caption") or enabled("transcript")
                                     or enabled("info")):
                 text_vector = embed("text", lambda: self.embed_query_text(parsed.free_text))
                 if enabled("caption"):
-                    run("caption", lambda: retrievers.caption(
-                        self.conn, text_vector, self.text_model["model_id"],
+                    run("caption", lambda conn: retrievers.caption(
+                        conn, text_vector, self.text_model["model_id"],
                         self.text_model["dims"], scope, depth))
                 if enabled("transcript"):
-                    run("transcript", lambda: retrievers.transcript(
-                        self.conn, text_vector, self.text_model["model_id"],
+                    run("transcript", lambda conn: retrievers.transcript(
+                        conn, text_vector, self.text_model["model_id"],
                         self.text_model["dims"], scope, depth))
                 if enabled("info"):
-                    run("info", lambda: retrievers.info(
-                        self.conn, text_vector, self.text_model["model_id"],
+                    run("info", lambda conn: retrievers.info(
+                        conn, text_vector, self.text_model["model_id"],
                         self.text_model["dims"], scope, self.conf.INFO_DEPTH))
 
         # No embedding and no visual model needed: the query's own words against the tags.
         if parsed.has_free_text and enabled("tags"):
-            run("tags", lambda: retrievers.tags(self.conn, query_parser.tag_terms(parsed.free_text),
+            run("tags", lambda conn: retrievers.tags(conn, query_parser.tag_terms(parsed.free_text),
                                                 scope, self.conf.INFO_DEPTH))
 
         # Several phrases of one kind share one list, interleaved, so each keeps the phrase
         # weight and the UI's signal names stay what they were.
         if parsed.ocr_phrases:
-            run("ocr_phrase", lambda: _interleave(
-                [retrievers.ocr_phrase(self.conn, p, scope, depth) for p in parsed.ocr_phrases],
+            run("ocr_phrase", lambda conn: _interleave(
+                [retrievers.ocr_phrase(conn, p, scope, depth) for p in parsed.ocr_phrases],
                 depth))
         if parsed.asr_phrases:
-            run("asr_phrase", lambda: _interleave(
-                [retrievers.transcript_phrase(self.conn, p, scope, depth)
+            run("asr_phrase", lambda conn: _interleave(
+                [retrievers.transcript_phrase(conn, p, scope, depth)
                  for p in parsed.asr_phrases], depth))
+
+        for name, ranked, ms in self._run_retrievers(jobs):
+            lists[name] = ranked
+            timings[name] = ms
 
         if not any(lists.values()) and scope.only is not None and not parsed.has_free_text:
             # Nothing to rank by, only requirements (`video:00191`, `tag:bmx`): list what is left,
             # up to as many results as were asked for. The listing is the whole answer, so the
             # retriever depth (200) would cut a long video off: 00193 has 840 scenes.
-            run("listing", lambda: self._list_scenes(scope, limit))
+            _, lists["listing"], timings["listing"] = self._timed_retriever(
+                "listing", lambda conn: self._list_scenes(scope, limit), self.conn)
 
         # Video ids, not keyframes, so they join after the frame-level fusion rather than in it,
         # all of them before the cut to `limit`.
@@ -545,6 +579,37 @@ class SearchEngine:
                 lists[name] = videos
             fused = fused[:limit]
         return fused, timings, lists, filters
+
+    def _timed_retriever(self, name, fn, conn):
+        """(name, ranked list, ms) of one retriever on `conn`; a failing one yields []."""
+        started = time.monotonic()
+        try:
+            ranked = fn(conn)
+        except Exception as e:
+            self.logger.error(f"retriever '{name}' failed: {e}")
+            ranked = []
+        return name, ranked, round((time.monotonic() - started) * 1000, 1)
+
+    def _run_retrievers(self, jobs) -> list:
+        """
+        Runs the queued (name, fn) retrievers and returns (name, ranked list, ms) in queue order:
+        side by side on pooled connections when there is a pool and more than one of them, else one
+        after another on self.conn. Fusion sums per keyframe and breaks ties on keyframe_id, so
+        running them at once changes nothing about the result.
+        """
+        if self.pool is None or len(jobs) < 2:
+            return [self._timed_retriever(name, fn, self.conn) for name, fn in jobs]
+
+        def pooled(job):
+            name, fn = job
+            try:
+                with self.pool.connection() as conn:
+                    return self._timed_retriever(name, fn, conn)
+            except Exception as e:  # no connection to be had
+                self.logger.error(f"retriever '{name}' failed: {e}")
+                return name, [], 0.0
+
+        return list(self._retriever_threads.map(pooled, jobs))
 
     def _video_of(self, fused) -> dict:
         if not fused:
@@ -703,7 +768,8 @@ class SearchEngine:
         collection = normalize_collection(collection)
         started = time.monotonic()
         spec = self.visual_model
-        scope = Scope(exclude=self._resolve_videos(exclude or []), collection=collection or None)
+        scope = Scope(exclude=self._resolve_videos(exclude or []), collection=collection or None,
+                      small_collection=self._small_collection(collection or None))
         pairs = retrievers.similar_to_keyframe(
             self.conn, keyframe_id, spec["model_id"], spec["dims"], scope, top_k)
         timings = {"similar": round((time.monotonic() - started) * 1000, 1)}

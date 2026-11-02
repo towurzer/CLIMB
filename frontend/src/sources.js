@@ -36,10 +36,13 @@ export const sourceKeysFor = (collection) => sourcesFor(collection).map((source)
 //   ocr and info in AVS: on the 86 TRECVID AVS 2019-21 topics OCR found no relevant shot, and
 //         leaving both out raised condensed AP by 0.017 and the relevant shots on the first page by
 //         0.8 (EXPERIMENTS.md, 2026-10-28).
+//   ocr in MVK and LHE: "bipolar forceps coagulating tissue" in LHE gave 47 OCR-only results of
+//         the 48 on the first page, at the lowercase OCR weight 2.0 as at 4.0 (EXPERIMENTS.md,
+//         2026-11-02).
 const OFF_FOR = {
     info: (collection, task) => collection !== "V3C" || task === "avs",
     asr: (collection) => collection === "MVK",
-    ocr: (collection, task) => task === "avs",
+    ocr: (collection, task) => task === "avs" || collection === "MVK" || collection === "LHE",
 };
 
 const startsTicked = (key, collection, task) => !(key in OFF_FOR) || !OFF_FOR[key](collection, task);

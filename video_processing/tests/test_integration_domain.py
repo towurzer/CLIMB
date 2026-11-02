@@ -16,6 +16,13 @@ pytestmark = pytest.mark.integration
 QUERIES = {"LHE": "bipolar forceps coagulating tissue"}
 
 
+def _ticked(signal):
+    """What the UI ticks for a dataset with its own model: OCR starts unticked for MVK and LHE
+    (OFF_FOR in frontend/src/sources.js). With it, the LHE query above is 47 OCR-only results of
+    48 on the first page."""
+    return ["visual", signal, "caption", "asr"]
+
+
 def _domain_models(db):
     found = []
     for collection, model in Config().collection_models().items():
@@ -45,7 +52,8 @@ def _search(worker, prompt, **kwargs):
 def test_the_collection_model_adds_its_signal(worker, domain_models):
     for collection, model in domain_models:
         signal = visual_models.signal_name(model)
-        body = _search(worker, QUERIES.get(collection, "a person"), collection=collection)
+        body = _search(worker, QUERIES.get(collection, "a person"), collection=collection,
+                       sources=_ticked(signal))
         assert any(signal in r["signals"] for r in body["results"]), f"{collection}: no {signal}"
         assert any("visual" in r["signals"] for r in body["results"]), \
             f"{collection}: SigLIP2 should still search next to {signal}"
@@ -62,7 +70,7 @@ def test_its_own_tickbox_switches_it_off(worker, domain_models):
     for collection, model in domain_models:
         signal = visual_models.signal_name(model)
         body = _search(worker, QUERIES.get(collection, "a person"), collection=collection,
-                       sources=["visual", "caption", "ocr", "asr"])
+                       sources=[s for s in _ticked(signal) if s != signal])
         assert not any(signal in r["signals"] for r in body["results"])
         assert any("visual" in r["signals"] for r in body["results"])
 

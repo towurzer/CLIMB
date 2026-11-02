@@ -151,17 +151,26 @@ def distinctive_tokens(text: str) -> list:
     with a sign reading Boulangerie Dupont" that is exactly {Boulangerie, Dupont}, which is the
     part OCR can actually match. Falls back to all content words when the query is lowercase.
     """
+    return ocr_terms(text)[0]
+
+
+def ocr_terms(text: str) -> tuple:
+    """
+    (distinctive_tokens(text), named): named is True when the tokens are mid-sentence capitalised
+    words and False for the all-content-words fallback. The engine weights the two differently
+    (RRF_WEIGHT_OCR vs RRF_WEIGHT_OCR_LOWERCASE).
+    """
     words = WORD.findall(text)
     if not words:
-        return []
+        return [], False
 
     proper = [w for i, w in enumerate(words)
               if i > 0 and w[:1].isupper() and w.lower() not in STOPWORDS]
     if proper:
-        return _dedupe(w.lower() for w in proper)
+        return _dedupe(w.lower() for w in proper), True
 
     return _dedupe(w.lower() for w in words
-                   if len(w) >= MIN_TOKEN_LENGTH and w.lower() not in STOPWORDS)
+                   if len(w) >= MIN_TOKEN_LENGTH and w.lower() not in STOPWORDS), False
 
 
 # Tags run up to four words ("of monsters and men"), and 30% of the local V3C tags have more than one.

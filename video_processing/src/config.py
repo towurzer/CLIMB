@@ -123,6 +123,17 @@ class Config:
     # per V3C video, so 300 videos is ~45k exact distances: measured 170 ms on the laptop CPU for
     # 45k 1024-d halfvecs (23 ms for 4.5k), about what embedding the query costs there anyway.
     EXACT_SCOPE_MAX_VIDEOS: int = int(os.getenv("CLIMB_EXACT_SCOPE_MAX_VIDEOS") or 300)
+    # A search limited to a collection with at most this many keyframes (the dataset dropdown: MVK
+    # 82,733, LHE 149,068; V3C 1.35M is above) ranks by exact distance over that collection. The
+    # ANN index holds every collection, so filtering its top ANN_OVERSAMPLE afterwards left a generic
+    # query in MVK a median of 43 of 4000 candidates (recall@48 0.20). Exact costs 250-570 ms per
+    # vector signal on the laptop CPU, which is why the retrievers run in parallel (below).
+    EXACT_COLLECTION_MAX_KEYFRAMES: int = int(os.getenv("CLIMB_EXACT_COLLECTION_MAX_KEYFRAMES")
+                                              or 300_000)
+    # The retrievers of one search run side by side, each on its own database connection
+    # (db/pool.py); 1 runs them one after another on the engine's connection. The three exact scans
+    # of an LHE search took 1,334 ms one after another and 709 ms in parallel on the laptop.
+    RETRIEVER_CONNECTIONS: int = int(os.getenv("CLIMB_RETRIEVER_CONNECTIONS") or 4)
     # ts_rank_cd with normalisation 32 is in (0,1). The floor stops OCR noise that happens to
     # spell a real word from being promoted by the heavy lexical weight below. Tune with WP9.
     OCR_MIN_RANK: float = float(os.getenv("CLIMB_OCR_MIN_RANK") or 0.01)
@@ -133,6 +144,12 @@ class Config:
     # comparable to each other, so they stay at 1.
     RRF_WEIGHT_VISUAL: float = float(os.getenv("CLIMB_W_VISUAL") or 1.0)
     RRF_WEIGHT_OCR: float = float(os.getenv("CLIMB_W_OCR") or 4.0)
+    # OCR's weight when the query has no mid-sentence capitalised word, so every content word is
+    # ORed against the OCR text ("a man stands next to a bicycle"). On the 90 TRECVID AVS topics
+    # (all lowercase) each step up cost relevant shots on page 1 against no OCR: 1.0 -1.4, 2.0
+    # -7.2, 4.0 -13.9, with AP and recall flat (EXPERIMENTS.md, 2026-11-02). At 2.0 an OCR-only hit
+    # still beats the best single visual hit through OCR rank 61.
+    RRF_WEIGHT_OCR_LOWERCASE: float = float(os.getenv("CLIMB_W_OCR_LOWERCASE") or 2.0)
     RRF_WEIGHT_CAPTION: float = float(os.getenv("CLIMB_W_CAPTION") or 1.0)
     RRF_WEIGHT_TRANSCRIPT: float = float(os.getenv("CLIMB_W_TRANSCRIPT") or 1.0)
     # Explicit text:"..." / said:"..." searches outrank everything -- the user told us what to find.
@@ -209,6 +226,7 @@ class Config:
         return {
             "visual": self.RRF_WEIGHT_VISUAL,
             "ocr": self.RRF_WEIGHT_OCR,
+            "ocr_lowercase": self.RRF_WEIGHT_OCR_LOWERCASE,
             "caption": self.RRF_WEIGHT_CAPTION,
             "transcript": self.RRF_WEIGHT_TRANSCRIPT,
             "ocr_phrase": self.RRF_WEIGHT_PHRASE,
