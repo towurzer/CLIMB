@@ -32,6 +32,9 @@ const heldSceneKeys = (scenes) => new Set(
         .filter((s) => avsHolds(s.status))
         .map((s) => sceneKey(s.scene_id))
 );
+// Tells the search worker whose background search a new one replaces, so two tabs do not stop each other.
+const WIDEN_CLIENT = Math.random().toString(36).slice(2);
+
 const backendHost = import.meta.env.BACKEND_URL || "localhost";
 const backendPort = import.meta.env.BACKEND_PORT || "8000";
 const API_URL = backendHost.startsWith("http://") || backendHost.startsWith("https://")
@@ -58,6 +61,8 @@ function App() {
     const [sources, setSources] = useState(() => startingSources("", "kis", ALL_SOURCE_KEYS));
     // Each text:/said:/tag:/video: requirement and how many videos met it; null without any.
     const [searchFilters, setSearchFilters] = useState(null);
+    // The depth a sequence's background search is working on; null when none is running.
+    const [widening, setWidening] = useState(null);
     const [searchLoadingMore, setSearchLoadingMore] = useState(false);
     const [resultsPanel, setResultsPanel] = useState(null);
     const [searchSentinel, setSearchSentinel] = useState(null);
@@ -109,6 +114,15 @@ function App() {
     useEffect(() => {
         excludedRef.current = excludedVideos;
     }, [excludedVideos]);
+
+    const resultsRef = useRef(results);
+    useEffect(() => {
+        resultsRef.current = results;
+    }, [results]);
+
+    // Which result set is on screen. A response for an older one is dropped, however late it lands.
+    const searchGeneration = useRef(0);
+    const widenAbort = useRef(null);
 
     const isAvs = taskMode === "avs";
 
@@ -200,8 +214,42 @@ function App() {
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [results, selectedResult]);
 
+    // A new result set: whatever is still running for the old one stops counting.
+    const startResultSet = useCallback(() => {
+        widenAbort.current?.abort();
+        widenAbort.current = null;
+        setWidening(null);
+        searchGeneration.current += 1;
+        return searchGeneration.current;
+    }, []);
+
+    // A sequence's background search, one depth after the other until there is none left or a new
+    // result set starts. What it finds is appended behind the cached results and only reaches the
+    // grid through the usual "load more", so nothing on screen moves.
+    const widenSearch = useCallback(async (params, firstDepth, generation) => {
+        const controller = new AbortController();
+        widenAbort.current = controller;
+        let depth = firstDepth;
+        try {
+            while (depth != null) {
+                setWidening(depth);
+                const res = await fetch(`${API_URL}/climb/search/widen?${params}&client=${WIDEN_CLIENT}`,
+                    {signal: controller.signal});
+                if (!res.ok) throw new Error(`widen answered ${res.status}`);
+                const data = await res.json();
+                if (generation !== searchGeneration.current || data.cancelled) return;
+                setSearchHasMore(data.total > resultsRef.current.length);
+                depth = data.next_depth;
+            }
+        } catch (err) {
+            if (err.name !== "AbortError") console.error("Background search failed:", err);
+        }
+        if (generation === searchGeneration.current) setWidening(null);
+    }, []);
+
     // searchiing - asynchornous - waiting for the response from the server
     const fetchSearchPage = useCallback(async (searchQuery, page = 1, append = false) => {
+        const generation = append ? searchGeneration.current : startResultSet();
         try {
             // In AVS mode the backend hides scenes already submitted in our session
             const {mode, code} = avsFilterRef.current;
@@ -216,25 +264,37 @@ function App() {
             const excluded = excludedRef.current;
             const excludeParam = excluded.length ? `&exclude=${excluded.join(",")}` : "";
             const collectionParam = collectionRef.current ? `&collection=${collectionRef.current}` : "";
+            const params = `q=${encodeURIComponent(searchQuery)}${avsParam}${sourcesParam}${excludeParam}${collectionParam}`;
+            // By offset, not page: a short last page can grow, and the next page would skip that.
+            const position = append ? `&offset=${resultsRef.current.length}` : "";
             const res = await fetch(
-                `${API_URL}/climb/search?q=${encodeURIComponent(searchQuery)}&page=${page}&per_page=${searchPerPage}${avsParam}${sourcesParam}${excludeParam}${collectionParam}`
+                `${API_URL}/climb/search?${params}&page=${page}&per_page=${searchPerPage}${position}`
             );
             const data = await res.json();
+            if (generation !== searchGeneration.current) return [];
             const pageResults = data.results || [];
-            setResults((prev) => (append ? [...prev, ...pageResults] : pageResults));
+            setResults((prev) => {
+                if (!append) return pageResults;
+                const shown = new Set(prev.map((r) => r.keyframe_id));
+                return [...prev, ...pageResults.filter((r) => !shown.has(r.keyframe_id))];
+            });
             setSearchPage(page);
             setSearchHasMore(Boolean(data.has_more));
             // Null unless the query used `A >> B`; describes how it was understood.
             setSearchTemporal(data.temporal || null);
             setSearchFilters(data.filters || null);
+            if (!append && data.widen?.next_depth != null) {
+                widenSearch(params, data.widen.next_depth, generation);
+            }
             return pageResults;
         } catch (err) {
             console.error("Search failed:", err);
             return [];
         }
-    }, [searchPerPage]);
+    }, [searchPerPage, startResultSet, widenSearch]);
 
     const fetchSimilarPage = useCallback(async (keyframeId, excluded = [], page = 1, append = false) => {
+        const generation = append ? searchGeneration.current : startResultSet();
         const params = new URLSearchParams({page, per_page: searchPerPage});
         if (excluded.length) params.set("exclude", excluded.join(","));
         if (collectionRef.current) params.set("collection", collectionRef.current);
@@ -244,6 +304,7 @@ function App() {
                 `${API_URL}/climb/search/similar/${keyframeId}?${params}`
             );
             const data = await res.json();
+            if (generation !== searchGeneration.current) return [];
             const pageResults = data.results || [];
             setResults((prev) => (append ? [...prev, ...pageResults] : pageResults));
             setSearchPage(page);
@@ -255,7 +316,7 @@ function App() {
             console.error("Similar search failed:", err);
             return [];
         }
-    }, [searchPerPage]);
+    }, [searchPerPage, startResultSet]);
 
     // "Similar to X / shot Y" plus any active exclusions - shown in the results header
     const similarLabel = (videoId, keyframeId, excluded = []) => {
@@ -977,11 +1038,17 @@ function App() {
                     {mode === "search" ? (
                             <>
                                 {loading && <div className="loading">Searching...</div>}
+                                {/* Takes no room and no clicks, so it can come and go without moving a card */}
+                                {widening != null && (
+                                    <div className="widen-status-anchor">
+                                        <span className="widen-status">Searching deeper · {widening}</span>
+                                    </div>
+                                )}
                                 {/* A sequence that found nothing still shows its header - that is
                                     exactly when the per-stage counts are worth reading */}
                                 {!loading && (results.length > 0 || temporalNote || filtersNote) && (
                                     <div className="results-info">
-                                        {visibleResultCount}{searchHasMore ? "+" : ""} results for "{query}"
+                                        {visibleResultCount}{searchHasMore || widening != null ? "+" : ""} results for "{query}"
                                         {collection && (
                                             <span className="results-temporal-note"> · {collection} only</span>
                                         )}

@@ -145,6 +145,11 @@ Scrolling through search results is cheap now. The first page runs the actual se
 served from cache, so page four arrives in about 15ms instead of running a fourth search and throwing three pages of
 it away.
 
+A sequence keeps growing after it lands. What you see first is the normal search, and while you look at it CLIMB digs
+deeper in the background (`Searching deeper · 8000` in the corner of the results) and appends what it finds behind the
+last card. Nothing already on screen moves, so the card you were about to click is still the card you click. A new
+query stops the digging, and how it works is in [1.9](#19-how-searching-actually-works).
+
 ### The sidebar
 
 If you click on a card it opens up a sidebar, from top to bottom:
@@ -381,11 +386,12 @@ video_processing/
             query_parser.py    # search box string -> structured query
             retrievers.py      # the signals, plus the Scope every one of them filters by
             temporal.py        # `A >> B` chains: linking stages across time
+            widen.py           # the background search that keeps a sequence growing
             fusion.py          # reciprocal rank fusion
             engine.py          # ties them together
         db/
             connection.py      # DB connections + a commit/rollback context manager
-            pool.py            # a connection per retriever, so they can run in parallel
+            pool.py            # a connection per request and per retriever, so nobody shares one
             migrate.py         # migration runner (with checksums, so nobody edits history)
             index_ops.py       # builds/drops the expensive ANN + GIN indexes
         pipeline/
@@ -1403,6 +1409,44 @@ Interesting to know is:
   forward pass already owns every core and batching just makes it longer. `batch_embeddings` decides, not you.
 - **Nothing is enriched until the chains exist.** A stage runs 1000 deep and maybe 40 hits survive into a chain, so
   fetching filmstrips for the other 2960 was pure tribute. Linking only ever wanted four columns.
+
+A sequence also digs deeper while you look at it. A chain needs a hit from every stage in one video, and a stage only
+gets what the ANN index hands over. On the 200-video subset `sunset >> door >> king` had the right video at rank 2. On
+full V3C it found nothing: the `door` frames of 00128 sit at exact rank 7016, and the index stops at 4000 candidates no
+matter how nicely you ask.
+
+So once the first results are out, `retrieval/widen.py` takes the 600 videos the stages' visual and caption lists point
+at, one from each list in turn, and ranks those videos' frames by exact distance. Then it links chains from the top 4000
+of each list, appends them, and goes on with 8000, 10000, 15000 and so on in steps of 5000. Ranking all of V3C instead
+finds about the same, takes 19 s, and the next search then took 6-9 s, so that idea went nowhere.
+
+On the laptop's CPU the 4000 chains land 2.4-3.3 s after the first results, and the whole ladder is done after 8-11 s. The
+4000 chains get a ranking pass of their own, so they wait for nothing deeper. A second pass at the top depth feeds the
+rest, which makes 8000 the slow step (3-4 s) and everything after it quick. In the test sequences 4000 found 14 of 24
+videos, 8000 found 17, 10000 found 19, and 15000 found 20, all there were among the 600. After that it only adds chains,
+so 32000 is on the generous side. The rules:
+
+- **Nothing moves.** New chains go behind the last card and reach the grid through the usual scrolling. No chain jumps
+  the queue, however good its score looks.
+- **An anchor gets one card and a video gets 3 chains**, across all depths. Otherwise each depth would bring its own 3
+  and a long video would own the end of the list.
+- **A search you are waiting for always wins.** While any search runs the digging pauses at its next step, and it has
+  connections of its own (`CLIMB_WIDEN_CONNECTIONS`, 4), so nothing queues behind it. It is not free: a new sequence took
+  3.7-4.2 s with the digging under way, 3.1 s right after it and 2.6 s without any.
+- **A new query stops it**, per browser tab, so two operators on one worker do not stop each other.
+- **It needs Redis**, because that is where the appended chains wait to be scrolled to. Without Redis you get the normal
+  search and no digging.
+
+| Variable | Default | |
+|---|---|---|
+| `CLIMB_WIDEN_MAX_DEPTH` | 32000 | The last depth, so 30000 with the steps below. 0 switches the whole thing off |
+| `CLIMB_WIDEN_FIRST_DEPTHS` | 4000,8000 | The depths before the steps start |
+| `CLIMB_WIDEN_DEPTH_STEP` | 5000 | The multiples of this come after them: 10000, 15000, ... |
+| `CLIMB_WIDEN_VIDEOS` | 600 | How many videos get ranked exactly |
+| `CLIMB_WIDEN_SEED_DEPTH` | 4000 | How many frames of each list pick those videos |
+
+Numbers and the query sets behind them are in `EXPERIMENTS.md`. It finds a video only if the video is among the 600,
+and a found video is not always the right moment, so you may still have to look around inside it.
 
 ##### MVK dives in the preview
 

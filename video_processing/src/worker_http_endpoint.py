@@ -94,6 +94,38 @@ def do_search(request: SearchRequest):
         # Null unless the prompt had requirements (text:, said:, tag:, video:): each one and how
         # many videos satisfied it.
         "filters": result.filters,
+        # Null unless it is a sequence: the first depth to ask /api/search/widen for.
+        "widen_next_depth": result.widen_next_depth,
+    }
+
+
+class WidenRequest(BaseModel):
+    prompt: str
+    depth: int
+    exclude: list = []
+    collection: str | None = None
+    sources: list | None = None
+    # [recording id, anchor keyframe id] of every chain already shown
+    seen: list = []
+    # Who is asking, so that a new query stops that client's previous one and nobody else's.
+    client: str = ""
+
+
+@app.post("/api/search/widen")
+def do_widen(request: WidenRequest):
+    """One rung of a sequence's background search: the chains it adds. See retrieval/widen.py."""
+    _require_engine()
+    result = search_engine.widen(
+        request.prompt, request.depth, exclude=request.exclude, collection=request.collection,
+        sources=request.sources, seen=[tuple(chain) for chain in request.seen],
+        client=request.client,
+    )
+    return {
+        "results": result.results,
+        "depth": result.depth,
+        "next_depth": result.next_depth,
+        "cancelled": result.cancelled,
+        "timings_ms": result.timings,
     }
 
 

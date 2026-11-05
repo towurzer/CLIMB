@@ -83,7 +83,6 @@ def _engine(pool_size):
 
     import custom_logger
     instance = SearchEngine.__new__(SearchEngine)  # no models, no database
-    instance.conn = "main"
     instance.logger = custom_logger.get_logger("test")
     instance.pool = ConnectionPool(pool_size, connect=FakeConn) if pool_size > 1 else None
     instance._retriever_threads = ThreadPoolExecutor(pool_size) if pool_size > 1 else None
@@ -101,8 +100,8 @@ def test_retrievers_run_on_pooled_connections_and_come_back_in_queue_order():
             return [value]
         return fn
 
-    out = engine._run_retrievers([("visual", retriever(1)), ("caption", retriever(2)),
-                                  ("transcript", retriever(3))])
+    out = engine._run_retrievers("request", [("visual", retriever(1)), ("caption", retriever(2)),
+                                             ("transcript", retriever(3))])
     assert [(name, ranked) for name, ranked, _ in out] == [
         ("visual", [1]), ("caption", [2]), ("transcript", [3])]
 
@@ -113,11 +112,46 @@ def test_a_failing_retriever_yields_an_empty_list_and_the_rest_still_run():
     def broken(conn):
         raise RuntimeError("boom")
 
-    out = engine._run_retrievers([("ocr", broken), ("visual", lambda conn: [7])])
+    out = engine._run_retrievers("request", [("ocr", broken), ("visual", lambda conn: [7])])
     assert [(name, ranked) for name, ranked, _ in out] == [("ocr", []), ("visual", [7])]
 
 
-def test_without_a_pool_they_run_on_the_engines_connection():
+def test_without_a_pool_they_run_on_the_requests_connection():
     engine = _engine(1)
-    out = engine._run_retrievers([("visual", lambda conn: [conn]), ("ocr", lambda conn: [conn])])
-    assert [ranked for _, ranked, _ in out] == [["main"], ["main"]]
+    out = engine._run_retrievers("request", [("visual", lambda conn: [conn]),
+                                             ("ocr", lambda conn: [conn])])
+    assert [ranked for _, ranked, _ in out] == [["request"], ["request"]]
+
+
+def test_a_single_retriever_runs_on_the_requests_connection():
+    engine = _engine(3)
+    out = engine._run_retrievers("request", [("caption", lambda conn: [conn])])
+    assert [ranked for _, ranked, _ in out] == [["request"]]
+
+
+def test_two_requests_never_share_a_connection():
+    """One finishing rolls its connection back, which would end the other's SET LOCAL settings."""
+    from retrieval.engine import _own_connection
+
+    class Engine:
+        def __init__(self):
+            self.connections = ConnectionPool(2, connect=FakeConn)
+            self.held = []
+            self.both_inside = threading.Barrier(2, timeout=5)
+
+        @_own_connection
+        def search(self, conn, query):
+            self.held.append(conn)
+            self.both_inside.wait()
+            return query
+
+    engine = Engine()
+    answers = []
+    threads = [threading.Thread(target=lambda q=q: answers.append(engine.search(q))) for q in "ab"]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(answers) == ["a", "b"]
+    assert engine.held[0] is not engine.held[1]
+    assert engine.held[0].rollbacks == engine.held[1].rollbacks == 1

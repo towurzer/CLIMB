@@ -541,6 +541,28 @@ body {
     color: #555;
 }
 
+/* No height and no pointer events: it can appear and vanish over the grid without moving a card
+   or catching a click. */
+.widen-status-anchor {
+    position: sticky;
+    top: 0;
+    height: 0;
+    z-index: 5;
+    display: flex;
+    justify-content: flex-end;
+    pointer-events: none;
+}
+
+.widen-status {
+    height: fit-content;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    color: #5b8def;
+    background: rgba(20, 20, 20, 0.85);
+}
+
 .empty-state {
     display: flex;
     flex-direction: column;

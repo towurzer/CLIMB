@@ -10,8 +10,11 @@ of the page is telling you it is the answer; collapsing to one row per scene use
 that. Every entry is therefore a (scene_id, keyframe_id) pair.
 """
 
+import random
+
 import pytest
-from retrieval.fusion import RRF_K, FusedResult, apply_video_prior, fuse
+from retrieval import fusion
+from retrieval.fusion import RRF_K, FusedResult, add_video_prior, apply_video_prior, fuse
 
 # (scene, keyframe) pairs. Scene 1 owns keyframes 100/101, scene 2 owns 200, and so on, so a test
 # can talk about "two keyframes of the same shot" without repeating the arithmetic.
@@ -209,3 +212,58 @@ def test_video_prior_with_no_weight_or_no_ranking_changes_nothing():
     assert [(r.keyframe_id, r.score) for r in apply_video_prior(fused, {}, ["a"], 1.0)] == before
     assert [(r.keyframe_id, r.score) for r in apply_video_prior(fused, {10: "a"}, ["a"], 0)] == before
     assert len(apply_video_prior(fused, {}, [], 1.0, limit=1)) == 1
+
+
+# --- the fast path of the background search -------------------------------------------------------
+
+def _random_lists(seed):
+    rng = random.Random(seed)
+    lists = {}
+    for name in ("visual", "caption", "ocr", "transcript"):
+        lists[name] = [(rng.randint(1, 30), rng.randint(1, 200)) for _ in range(rng.randint(0, 150))]
+    lists["transcript"] += [(99, None)]
+    return lists
+
+
+WEIGHTS = {"visual": 1.0, "caption": 1.0, "ocr": 2.0, "transcript": 0.0, "info": 1.0}
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_scores_are_what_fuse_says(seed):
+    lists = _random_lists(seed)
+    totals, scene_of = fusion.scores(lists, WEIGHTS)
+    fused = fuse(lists, WEIGHTS)
+    assert {r.keyframe_id: r.score for r in fused} == totals
+    assert {r.keyframe_id: r.scene_id for r in fused} == scene_of
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_the_video_prior_adds_up_the_same_on_scores(seed):
+    lists = _random_lists(seed)
+    video_of = {keyframe: f"v{keyframe % 7}" for keyframe in range(1, 201)}
+    videos = ["v3", "v1", "v6"]
+    totals, _ = fusion.scores(lists, WEIGHTS)
+    add_video_prior(totals, video_of, videos, 1.0)
+    fused = apply_video_prior(fuse(lists, WEIGHTS), video_of, videos, 1.0)
+    assert {r.keyframe_id: r.score for r in fused} == totals
+
+
+def test_no_video_prior_changes_nothing():
+    totals, _ = fusion.scores(_random_lists(1), WEIGHTS)
+    before = dict(totals)
+    add_video_prior(totals, {}, None, 1.0)
+    add_video_prior(totals, {}, ["v1"], 0.0)
+    assert totals == before
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_only_keeps_a_keyframes_score_and_ranks(seed):
+    lists = _random_lists(seed)
+    every = {r.keyframe_id: r for r in fuse(lists, WEIGHTS)}
+    picks = set(list(every)[::3])
+    picked = fuse(lists, WEIGHTS, only=picks)
+    assert {r.keyframe_id for r in picked} == picks
+    for result in picked:
+        assert result.score == every[result.keyframe_id].score
+        assert result.signals == every[result.keyframe_id].signals
+        assert result.contributions == every[result.keyframe_id].contributions

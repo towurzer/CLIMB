@@ -6,6 +6,7 @@ Replaces search_engine.py, which searched a `shots` table that no longer exists,
 
 import dataclasses
 import functools
+import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +17,7 @@ from config import Config
 from db.pool import ConnectionPool
 from pipeline import device, visual_models
 from pipeline.embed import vector_counts
-from retrieval import fusion, query_parser, retrievers, temporal
+from retrieval import fusion, query_parser, retrievers, temporal, widen
 from retrieval.retrievers import Scope
 
 SELECT_MODEL = "SELECT model_id, name, dims FROM embedding_model WHERE name = %s;"
@@ -61,11 +62,10 @@ def _allowed_retrievers(sources):
 
 def _ends_transaction(method):
     """
-    Ends the transaction after every public query.
+    Ends the transaction loading the models opened on the engine's own connection.
 
-    The engine holds one connection for the life of the worker process and psycopg2 opens a
-    transaction on the first statement, so without this the worker sits `idle in transaction`
-    forever. (found a 7h39m-old transaction from a single search xd)
+    psycopg2 opens a transaction on the first statement, so without this the worker sits `idle in
+    transaction` forever. (found a 7h39m-old transaction from a single search xd)
 
     Rollback rather than commit: every path through here is read-only, so there is never anything
     to commit, and rollback is the cheaper and more honest terminator.
@@ -83,6 +83,35 @@ def _ends_transaction(method):
                 logger.warning("rollback after query failed; connection may be dead")
 
     return wrapper
+
+
+def _own_connection(method):
+    """
+    Hands a request a connection nobody else holds, for as long as it runs; the pool rolls it back.
+
+    Requests used to share one, so the first to finish rolled back the others' transactions and,
+    with them, the SET LOCAL settings their queries depend on, without an error: beside two other
+    clients, 76 of 300 caption-only searches lost their ANN candidates (EXPERIMENTS.md, 2026-11-05).
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self.connections.connection() as conn:
+            return method(self, conn, *args, **kwargs)
+
+    return wrapper
+
+
+def _foreground(method):
+    """An operator is waiting for this request, so the background search waits for it."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._foreground_requests.running():
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
 
 # One round trip for everything the UI needs about the fused keyframes.
 #
@@ -127,6 +156,17 @@ LINK_ROWS = """
 
 VIDEO_OF = "SELECT keyframe_id, video_id FROM keyframes WHERE keyframe_id = ANY (%(ids)s);"
 
+# LINK_ROWS and VIDEO_OF in one, once for all the rungs of a background search.
+WHERE_KEYFRAMES = """
+    SELECT k.keyframe_id, k.video_id, t.recording_id, k.ts_ms + t.offset_ms
+    FROM keyframes k
+             JOIN video_timeline t ON t.video_id = k.video_id
+    WHERE k.keyframe_id = ANY (%(keyframe_ids)s);
+"""
+
+# Searches whose lists are kept for their next rung, one per client.
+WIDEN_LADDERS_KEPT = 4
+
 # `video:` and `-video:` -- and the exclusion list the x on a result card builds -- work on whole
 # recordings, whether given a recording id or any one of its clips: excluding the clip you are
 # looking at has to take the other seven clips of that dive with it, or the page fills straight
@@ -164,6 +204,19 @@ class SearchResult:
     # Present when the query had requirements (text:, said:, tag:, video:): each one and how many
     # videos satisfied it, for the same reason.
     filters: list = None
+    # The first rung of the background search (retrieval/widen.py), for a sequence only.
+    widen_next_depth: int = None
+
+
+@dataclass
+class WidenResult:
+    """One rung of the background search: the chains it adds, and the rung after it, if any."""
+    depth: int
+    results: list = dataclasses.field(default_factory=list)
+    next_depth: int = None
+    timings: dict = dataclasses.field(default_factory=dict)
+    # A newer request of the same client took over, so this one did nothing.
+    cancelled: bool = False
 
 
 def choose_visual_model(preferred, other, counts, keyframes):
@@ -197,7 +250,9 @@ class SearchEngine:
     def __init__(self, conn):
         self.conf = Config()
         self.logger = custom_logger.get_logger("search")
+        # Reads what the engine needs at startup. Requests never touch it: see _own_connection.
         self.conn = conn
+        self.connections = ConnectionPool(self.conf.SEARCH_CONNECTIONS)
         self.device = device.pick_device()
         self.visual_model = None
         self.text_model = None
@@ -218,10 +273,19 @@ class SearchEngine:
         # runs keeps its old count until the next start.
         self.collection_keyframes = {}
         # Extra connections for running the retrievers of one search side by side; None runs
-        # them one after another on self.conn (RETRIEVER_CONNECTIONS = 1).
+        # them one after another on the request's connection (RETRIEVER_CONNECTIONS = 1).
         workers = self.conf.RETRIEVER_CONNECTIONS
         self.pool = ConnectionPool(workers) if workers > 1 else None
         self._retriever_threads = ThreadPoolExecutor(workers) if workers > 1 else None
+        # The background search: its own connections and threads so a foreground search never
+        # queues behind it, one rung at a time, and a new query of a client stops its old one.
+        workers = self.conf.WIDEN_CONNECTIONS
+        self._widen_lane = (ConnectionPool(workers) if workers > 1 else None,
+                            ThreadPoolExecutor(workers) if workers > 1 else None)
+        self._widen_lock = threading.Lock()
+        self._widen_turns = widen.Turns()
+        self._foreground_requests = widen.Foreground()
+        self._ladders = OrderedDict()
         self._load_models()
 
     def _resolve(self, name):
@@ -366,8 +430,9 @@ class SearchEngine:
     def embed_query_text(self, text: str) -> str:
         return self.embed_query_text_batch([text])[0]
 
-    @_ends_transaction
-    def search(self, query: str, exclude=None, top_k=None, collection=None,
+    @_foreground
+    @_own_connection
+    def search(self, conn, query: str, exclude=None, top_k=None, collection=None,
                weights=None, depth=None, sources=None) -> SearchResult:
         conf = self.conf
         parsed = query_parser.parse_temporal(
@@ -378,39 +443,42 @@ class SearchEngine:
         weights = {**conf.rrf_weights(),
                    **({domain["signal"]: conf.RRF_WEIGHT_DOMAIN} if domain else {}),
                    **(weights or {})}
-        scope, filters = self._base_scope(parsed, exclude, normalize_collection(collection))
+        scope, filters = self._base_scope(conn, parsed, exclude, normalize_collection(collection))
 
         allowed = _allowed_retrievers(sources)
 
         if parsed.is_temporal:
-            return self._search_temporal(parsed, scope, filters, weights, top_k, depth, allowed)
+            return self._search_temporal(conn, parsed, scope, filters, weights, top_k, depth,
+                                         allowed)
 
         fused, timings, lists, stage_filters = self._retrieve(
-            parsed.stages[0], scope, weights, depth or conf.RETRIEVER_DEPTH, top_k, allowed)
+            conn, parsed.stages[0], scope, weights, depth or conf.RETRIEVER_DEPTH, top_k, allowed)
         filters += stage_filters
-        return SearchResult(results=self._enrich(fused), timings=timings,
+        return SearchResult(results=self._enrich(conn, fused), timings=timings,
                             signals_used=[n for n, r in lists.items() if r],
                             filters=filters or None)
 
-    def _resolve_videos(self, ids) -> tuple:
+    def _resolve_videos(self, conn, ids) -> tuple:
         """Every clip of the recordings named by clip or recording ids. Unknown ids add nothing."""
         if not ids:
             return ()
-        with self.conn.cursor() as cur:
+        with conn.cursor() as cur:
             cur.execute(RESOLVE_VIDEOS, {"ids": list(ids)})
             return tuple(sorted(row[0] for row in cur.fetchall()))
 
-    def _base_scope(self, parsed, exclude, collection) -> tuple:
+    def _base_scope(self, conn, parsed, exclude, collection) -> tuple:
         """
         The Scope every stage starts from: the request's and the query's exclusions, the
         collection, and `video:`. Returns (scope, filters) with `video:` reported as a filter.
         """
-        excluded = self._resolve_videos(list(dict.fromkeys((exclude or []) + parsed.exclude_videos)))
+        excluded = self._resolve_videos(
+            conn, list(dict.fromkeys((exclude or []) + parsed.exclude_videos)))
         scope = Scope(exclude=excluded, collection=collection,
                       small_collection=self._small_collection(collection))
         if not parsed.only_videos:
             return scope, []
-        only = tuple(v for v in self._resolve_videos(parsed.only_videos) if v not in set(excluded))
+        only = tuple(v for v in self._resolve_videos(conn, parsed.only_videos)
+                     if v not in set(excluded))
         label = " ".join(f"video:{v}" for v in parsed.only_videos)
         return dataclasses.replace(scope, only=only), [{"filter": label, "videos": len(only)}]
 
@@ -420,7 +488,7 @@ class SearchEngine:
                 and self.collection_keyframes.get(collection, 0)
                 <= self.conf.EXACT_COLLECTION_MAX_KEYFRAMES)
 
-    def _apply_filters(self, stage, scope) -> tuple:
+    def _apply_filters(self, conn, stage, scope) -> tuple:
         """
         Narrows a Scope to the videos where every text:, said: and tag: of the stage holds.
 
@@ -438,12 +506,12 @@ class SearchEngine:
             if scope.only == ():
                 filters.append({"filter": label, "videos": 0})
                 continue
-            videos = tuple(sorted(find(self.conn, value, scope)))
+            videos = tuple(sorted(find(conn, value, scope)))
             scope = dataclasses.replace(scope, only=videos)
             filters.append({"filter": label, "videos": len(videos)})
         return scope, filters
 
-    def _retrieve(self, parsed, scope, weights, depth, limit, allowed=None, vectors=None):
+    def _retrieve(self, conn, parsed, scope, weights, depth, limit, allowed=None, vectors=None):
         """
         Run every retriever for one query and fuse them. Returns (fused, timings, lists, filters).
 
@@ -462,14 +530,33 @@ class SearchEngine:
         """
         lists, timings = {}, {}
         vectors = vectors or {}
-        collection = scope.collection
 
         started = time.monotonic()
-        scope, filters = self._apply_filters(parsed, scope)
+        scope, filters = self._apply_filters(conn, parsed, scope)
         if filters:
             timings["filters"] = round((time.monotonic() - started) * 1000, 1)
         if scope.only == ():
             return [], timings, lists, filters
+
+        jobs, weights = self._retriever_jobs(parsed, scope, weights, depth, allowed, vectors, timings)
+        for name, ranked, ms in self._run_retrievers(conn, jobs):
+            lists[name] = ranked
+            timings[name] = ms
+        self._list_when_nothing_ranks(conn, parsed, scope, lists, limit, timings)
+
+        fused = self._fused(lists, weights, limit, lambda hits: self._video_of(conn, hits), timings)
+        return fused, timings, lists, filters
+
+    def _retriever_jobs(self, parsed, scope, weights, depth, allowed, vectors, timings,
+                        oversample=None, video_scope=None) -> tuple:
+        """
+        The retrievers one query runs, as (name, fn(conn)), and the weights to fuse them with.
+
+        `oversample` overrides how far the vector retrievers look. `video_scope` is what the
+        video-level signals rank in when that is wider than `scope`.
+        """
+        collection = scope.collection
+        video_scope = video_scope or scope
 
         def enabled(name):
             return allowed is None or name in allowed
@@ -502,14 +589,15 @@ class SearchEngine:
                                lambda: self.embed_query_visual(parsed.free_text, visual_spec))
                 run("visual", lambda conn: retrievers.visual(
                     conn, vector, visual_spec["model_id"], visual_spec["dims"],
-                    scope, depth))
+                    scope, depth, oversample))
             # The collection's own model, searching the same keyframes in its own space; its
             # ranking fuses with SigLIP2's like any other signal. Its tickbox is its signal name.
             if domain and enabled(domain["signal"]):
                 domain_vector = embed(domain["signal"],
                                       lambda: self.embed_query_visual(parsed.free_text, domain))
                 run(domain["signal"], lambda conn: retrievers.visual(
-                    conn, domain_vector, domain["model_id"], domain["dims"], scope, depth))
+                    conn, domain_vector, domain["model_id"], domain["dims"], scope, depth,
+                    oversample))
 
             tokens, named = query_parser.ocr_terms(parsed.free_text)
             if tokens and enabled("ocr"):
@@ -526,20 +614,20 @@ class SearchEngine:
                 if enabled("caption"):
                     run("caption", lambda conn: retrievers.caption(
                         conn, text_vector, self.text_model["model_id"],
-                        self.text_model["dims"], scope, depth))
+                        self.text_model["dims"], scope, depth, oversample))
                 if enabled("transcript"):
                     run("transcript", lambda conn: retrievers.transcript(
                         conn, text_vector, self.text_model["model_id"],
-                        self.text_model["dims"], scope, depth))
+                        self.text_model["dims"], scope, depth, oversample))
                 if enabled("info"):
                     run("info", lambda conn: retrievers.info(
                         conn, text_vector, self.text_model["model_id"],
-                        self.text_model["dims"], scope, self.conf.INFO_DEPTH))
+                        self.text_model["dims"], video_scope, self.conf.INFO_DEPTH))
 
         # No embedding and no visual model needed: the query's own words against the tags.
         if parsed.has_free_text and enabled("tags"):
             run("tags", lambda conn: retrievers.tags(conn, query_parser.tag_terms(parsed.free_text),
-                                                scope, self.conf.INFO_DEPTH))
+                                                video_scope, self.conf.INFO_DEPTH))
 
         # Several phrases of one kind share one list, interleaved, so each keeps the phrase
         # weight and the UI's signal names stay what they were.
@@ -551,34 +639,37 @@ class SearchEngine:
             run("asr_phrase", lambda conn: _interleave(
                 [retrievers.transcript_phrase(conn, p, scope, depth)
                  for p in parsed.asr_phrases], depth))
+        return jobs, weights
 
-        for name, ranked, ms in self._run_retrievers(jobs):
-            lists[name] = ranked
-            timings[name] = ms
-
+    def _list_when_nothing_ranks(self, conn, parsed, scope, lists, limit, timings):
         if not any(lists.values()) and scope.only is not None and not parsed.has_free_text:
             # Nothing to rank by, only requirements (`video:00191`, `tag:bmx`): list what is left,
             # up to as many results as were asked for. The listing is the whole answer, so the
             # retriever depth (200) would cut a long video off: 00193 has 840 scenes.
             _, lists["listing"], timings["listing"] = self._timed_retriever(
-                "listing", lambda conn: self._list_scenes(scope, limit), self.conn)
+                "listing", lambda c: self._list_scenes(c, scope, limit), conn)
 
-        # Video ids, not keyframes, so they join after the frame-level fusion rather than in it,
-        # all of them before the cut to `limit`.
-        video_lists = {name: videos for name in VIDEO_SIGNALS
-                       if (videos := lists.pop(name, None))}
-        fused = fusion.fuse(lists, weights, limit=None if video_lists else limit)
+    def _fused(self, lists, weights, limit, video_of, timings, only=None) -> list:
+        """
+        Fuses one query's lists, best first. `video_of` maps fused hits to {keyframe: video}.
+        `only` restricts the output to these keyframes.
+
+        The video-level signals hold video ids, not keyframes, so they join after the frame-level
+        fusion rather than in it, all of them before the cut to `limit`.
+        """
+        frame_lists = {name: ranked for name, ranked in lists.items() if name not in VIDEO_SIGNALS}
+        video_lists = {name: videos for name in VIDEO_SIGNALS if (videos := lists.get(name))}
+        fused = fusion.fuse(frame_lists, weights, limit=None if video_lists else limit, only=only)
         if video_lists:
-            video_of = self._video_of(fused)
+            videos_of_hits = video_of(fused)
             for name, videos in video_lists.items():
                 started = time.monotonic()
-                fused = fusion.apply_video_prior(fused, video_of, videos, weights.get(name, 0.0),
-                                                 name=name)
+                fused = fusion.apply_video_prior(fused, videos_of_hits, videos,
+                                                 weights.get(name, 0.0), name=name)
                 timings[name] = round(timings.get(name, 0.0)
                                       + (time.monotonic() - started) * 1000, 1)
-                lists[name] = videos
             fused = fused[:limit]
-        return fused, timings, lists, filters
+        return fused
 
     def _timed_retriever(self, name, fn, conn):
         """(name, ranked list, ms) of one retriever on `conn`; a failing one yields []."""
@@ -590,36 +681,45 @@ class SearchEngine:
             ranked = []
         return name, ranked, round((time.monotonic() - started) * 1000, 1)
 
-    def _run_retrievers(self, jobs) -> list:
+    def _run_retrievers(self, conn, jobs, lane=None, before_each=None) -> list:
         """
         Runs the queued (name, fn) retrievers and returns (name, ranked list, ms) in queue order:
         side by side on pooled connections when there is a pool and more than one of them, else one
-        after another on self.conn. Fusion sums per keyframe and breaks ties on keyframe_id, so
-        running them at once changes nothing about the result.
+        after another on the request's `conn`. Fusion sums per keyframe and breaks ties on
+        keyframe_id, so running them at once changes nothing about the result. `lane` is the
+        (pool, threads) to use instead of the foreground's, `before_each` runs before each retriever.
         """
-        if self.pool is None or len(jobs) < 2:
-            return [self._timed_retriever(name, fn, self.conn) for name, fn in jobs]
+        pool, threads = lane or (self.pool, self._retriever_threads)
+        before_each = before_each or (lambda: None)
+
+        def in_turn(name, fn):
+            before_each()
+            return self._timed_retriever(name, fn, conn)
+
+        if pool is None or len(jobs) < 2:
+            return [in_turn(name, fn) for name, fn in jobs]
 
         def pooled(job):
+            before_each()
             name, fn = job
             try:
-                with self.pool.connection() as conn:
-                    return self._timed_retriever(name, fn, conn)
+                with pool.connection() as own:
+                    return self._timed_retriever(name, fn, own)
             except Exception as e:  # no connection to be had
                 self.logger.error(f"retriever '{name}' failed: {e}")
                 return name, [], 0.0
 
-        return list(self._retriever_threads.map(pooled, jobs))
+        return list(threads.map(pooled, jobs))
 
-    def _video_of(self, fused) -> dict:
+    def _video_of(self, conn, fused) -> dict:
         if not fused:
             return {}
-        with self.conn.cursor() as cur:
+        with conn.cursor() as cur:
             cur.execute(VIDEO_OF, {"ids": [item.keyframe_id for item in fused]})
             return dict(cur.fetchall())
 
-    def _list_scenes(self, scope, limit) -> list:
-        with self.conn.cursor() as cur:
+    def _list_scenes(self, conn, scope, limit) -> list:
+        with conn.cursor() as cur:
             cur.execute(LIST_SCENES, {**scope.params, "limit": limit})
             return [(row[0], row[1]) for row in cur.fetchall()]
 
@@ -654,7 +754,7 @@ class SearchEngine:
                 vectors[index]["text"] = vector
         return vectors
 
-    def _search_temporal(self, parsed, scope, filters, weights, top_k, depth,
+    def _search_temporal(self, conn, parsed, scope, filters, weights, top_k, depth,
                          allowed=None) -> SearchResult:
         """
         Each stage is a full search; the chaining is arithmetic over the results.
@@ -676,7 +776,7 @@ class SearchEngine:
         stage_rows, stage_fused = [], []
         for index, stage in enumerate(parsed.stages):
             fused, stage_timings, lists, stage_filters = self._retrieve(
-                stage, scope, weights, stage_depth, conf.TEMPORAL_STAGE_TOP_K,
+                conn, stage, scope, weights, stage_depth, conf.TEMPORAL_STAGE_TOP_K,
                 allowed, vectors=stage_vectors[index])
             filters = filters + [{**f, "stage": index} for f in stage_filters]
             for name, elapsed in stage_timings.items():
@@ -684,7 +784,7 @@ class SearchEngine:
             signals += [f"s{index}:{name}" for name, results in lists.items() if results]
             # Fusion keys on keyframe, so a keyframe is named at most once per stage.
             stage_fused.append({item.keyframe_id: item for item in fused})
-            stage_rows.append(self._link_rows(fused))
+            stage_rows.append(self._link_rows(conn, fused))
 
         started = time.monotonic()
         chains = temporal.link(stage_rows, parsed.gaps_ms, limit=top_k,
@@ -692,11 +792,14 @@ class SearchEngine:
         timings["temporal_link"] = round((time.monotonic() - started) * 1000, 1)
 
         started = time.monotonic()
-        results = self._enrich_chains(chains, stage_fused)
+        results = self._enrich_chains(conn, chains, stage_fused)
         timings["enrich"] = round((time.monotonic() - started) * 1000, 1)
 
+        ladder = widen.depth_ladder(conf.WIDEN_FIRST_DEPTHS, conf.WIDEN_DEPTH_STEP,
+                                    conf.WIDEN_MAX_DEPTH)
         return SearchResult(
             results=results, timings=timings, signals_used=signals, filters=filters or None,
+            widen_next_depth=ladder[0] if ladder else None,
             temporal={
                 "stages": [_stage_label(stage) for stage in parsed.stages],
                 "deltas_ms": parsed.gaps_ms,
@@ -704,7 +807,7 @@ class SearchEngine:
                 "chains": len(results),
             })
 
-    def _link_rows(self, fused) -> list:
+    def _link_rows(self, conn, fused) -> list:
         """
         The cheap projection of a stage's hits that temporal.link works on. See LINK_ROWS.
 
@@ -714,21 +817,12 @@ class SearchEngine:
         """
         if not fused:
             return []
-        with self.conn.cursor() as cur:
+        with conn.cursor() as cur:
             cur.execute(LINK_ROWS, {"keyframe_ids": [item.keyframe_id for item in fused]})
             meta = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+        return _rows_for_linking(fused, meta)
 
-        rows = []
-        for item in fused:
-            found = meta.get(item.keyframe_id)
-            if found is None:  # a keyframe deleted between the retriever and here
-                continue
-            video_id, ts_ms = found
-            rows.append({"keyframe_id": item.keyframe_id, "scene_id": item.scene_id,
-                         "video_id": video_id, "ts_ms": ts_ms, "score": item.score})
-        return rows
-
-    def _enrich_chains(self, chains, stage_fused) -> list:
+    def _enrich_chains(self, conn, chains, stage_fused) -> list:
         """
         Full detail for the hits that made it into a chain, in one round trip for the whole page.
 
@@ -745,7 +839,7 @@ class SearchEngine:
                 positions.append((chain_index, stage_index))
 
         enriched = {}
-        for pick_index, item in self._enrich_rows(picks):
+        for pick_index, item in self._enrich_rows(conn, picks):
             enriched[positions[pick_index]] = item
 
         results = []
@@ -761,17 +855,216 @@ class SearchEngine:
             results.append(anchor)
         return results
 
-    @_ends_transaction
-    def similar(self, keyframe_id, exclude=None, top_k=None, collection=None) -> SearchResult:
+    def widen(self, query, depth, exclude=None, collection=None, sources=None, seen=(),
+              client="") -> WidenResult:
+        """
+        One rung of the background search of a sequence: the chains that depth adds to `seen`, the
+        (recording id, anchor keyframe) of what is shown already. See retrieval/widen.py.
+
+        One rung runs at a time. Taking the turn before the queue, not after it, means a new query
+        of this client stops its old one even while that is still waiting. Between any two of its
+        steps a rung waits for the foreground to finish, then checks it is still wanted.
+        """
+        is_latest = self._widen_turns.take(client)
+
+        def checkpoint():
+            self._foreground_requests.wait_until_idle()
+            if not is_latest():
+                raise widen.Superseded
+
+        with self._widen_lock:
+            try:
+                checkpoint()
+                return self._widen_rung(query, depth, exclude, collection, sources, seen, client,
+                                        checkpoint)
+            except widen.Superseded:
+                return WidenResult(depth=depth, cancelled=True)
+
+    @_own_connection
+    def _widen_rung(self, conn, query, depth, exclude, collection, sources, seen, client,
+                    checkpoint) -> WidenResult:
+        conf = self.conf
+        collection = normalize_collection(collection)
+        parsed = query_parser.parse_temporal(
+            query, conf.TEMPORAL_DEFAULT_DELTA_MS, conf.TEMPORAL_MAX_DELTA_MS,
+            conf.TEMPORAL_MAX_STAGES)
+        depths = widen.depth_ladder(conf.WIDEN_FIRST_DEPTHS, conf.WIDEN_DEPTH_STEP,
+                                    conf.WIDEN_MAX_DEPTH)
+        if not parsed.is_temporal or not depths:
+            return WidenResult(depth=depth)
+
+        timings = {}
+        key = (query, tuple(exclude or ()), collection, tuple(sorted(sources or ())))
+        ladder = self._ladders.get(client)
+        same_search = ladder is not None and ladder.key == key
+        if not same_search or ladder.depth < depth:
+            candidates = ladder.candidates if same_search else None
+            self._ladders.pop(client, None)  # the old one's memory, before the new one needs it
+            # The first rung gets a pass of its own, so its chains wait for nothing deeper. One pass
+            # at the top then feeds the other rungs, each a prefix of it.
+            pass_depth = depth if depth == depths[0] else max(depth, depths[-1])
+            started = time.monotonic()
+            ladder = self._build_ladder(conn, parsed, collection, exclude, sources, key, pass_depth,
+                                        candidates, timings, checkpoint)
+            timings["lists"] = round((time.monotonic() - started) * 1000, 1)
+            if ladder is None:  # no candidates, or a requirement none of them meet
+                return WidenResult(depth=depth, timings=timings)
+            self._ladders[client] = ladder
+            while len(self._ladders) > WIDEN_LADDERS_KEPT:
+                self._ladders.popitem(last=False)
+
+        following = widen.next_depth(depths, depth)
+        if following is None:
+            del self._ladders[client]
+
+        started = time.monotonic()
+        stage_rows, stage_lists = [], []
+        for stage in ladder.stages:
+            checkpoint()
+            frame_lists = {name: ranked[:depth] for name, ranked in stage.lists.items()
+                           if name not in VIDEO_SIGNALS}
+            totals, scene_of = fusion.scores(frame_lists, stage.weights)
+            for name in VIDEO_SIGNALS:
+                fusion.add_video_prior(totals, ladder.video_of, stage.lists.get(name),
+                                       stage.weights.get(name, 0.0))
+            stage_rows.append([
+                {"keyframe_id": keyframe, "scene_id": scene_of[keyframe], "video_id": where[0],
+                 "ts_ms": where[1], "score": score} for keyframe, score in totals.items()
+                if (where := ladder.link_meta.get(keyframe)) is not None])
+            stage_lists.append({**stage.lists, **frame_lists})
+        timings["fuse"] = round((time.monotonic() - started) * 1000, 1)
+
+        checkpoint()
+        started = time.monotonic()
+        chains = temporal.link(stage_rows, parsed.gaps_ms, limit=None,
+                               max_per_video=conf.TEMPORAL_MAX_PER_VIDEO)
+        fresh = widen.unseen_chains(chains, seen, conf.TEMPORAL_MAX_PER_VIDEO)
+        timings["link"] = round((time.monotonic() - started) * 1000, 1)
+
+        checkpoint()
+        started = time.monotonic()
+        stage_fused = []
+        for index, (stage, lists) in enumerate(zip(ladder.stages, stage_lists)):
+            picks = {chain.scenes[index]["keyframe_id"] for chain in fresh}
+            fused = self._fused(lists, stage.weights, None, lambda hits: ladder.video_of, {},
+                                only=picks)
+            stage_fused.append({item.keyframe_id: item for item in fused})
+        results = self._enrich_chains(conn, fresh, stage_fused)
+        timings["enrich"] = round((time.monotonic() - started) * 1000, 1)
+        return WidenResult(depth=depth, results=results, next_depth=following, timings=timings)
+
+    def _build_ladder(self, conn, parsed, collection, exclude, sources, key, depth, candidates,
+                      timings, checkpoint):
+        """
+        Ranks each stage inside the candidate videos, `depth` deep, picking the videos unless
+        `candidates` already names them. None when no chain can come of it.
+        """
+        conf = self.conf
+        allowed = _allowed_retrievers(sources)
+        domain = self.domain_model_for(collection)
+        weights = {**conf.rrf_weights(),
+                   **({domain["signal"]: conf.RRF_WEIGHT_DOMAIN} if domain else {})}
+        scope, _ = self._base_scope(conn, parsed, exclude, collection)
+        vectors = self._embed_stages(parsed.stages, collection, allowed)
+        stage_scopes = [self._apply_filters(conn, stage, scope)[0] for stage in parsed.stages]
+        if any(stage_scope.only == () for stage_scope in stage_scopes):
+            return None
+
+        started = time.monotonic()
+        if candidates is None:
+            candidates = self._candidate_videos(conn, stage_scopes, vectors, allowed, checkpoint)
+        timings["candidates"] = round((time.monotonic() - started) * 1000, 1)
+        if not candidates:
+            return None
+        excluded = set(scope.exclude)
+        narrow = dataclasses.replace(
+            scope, always_exact=True,
+            only=tuple(v for v in self._resolve_videos(conn, candidates) if v not in excluded))
+
+        jobs, narrowed, stage_weights = [], [], []
+        for index, stage in enumerate(parsed.stages):
+            inside, _ = self._apply_filters(conn, stage, narrow)
+            if inside.only == ():
+                return None
+            stage_jobs, fuse_with = self._retriever_jobs(
+                stage, inside, weights, depth, allowed, vectors[index], timings, oversample=depth,
+                video_scope=stage_scopes[index])
+            jobs += [((index, name), fn) for name, fn in stage_jobs]
+            narrowed.append(inside)
+            stage_weights.append(fuse_with)
+
+        started = time.monotonic()
+        per_stage = [{} for _ in parsed.stages]
+        for (index, name), ranked, _ in self._run_retrievers(conn, jobs, lane=self._widen_lane,
+                                                             before_each=checkpoint):
+            per_stage[index][name] = ranked
+        timings["ranking"] = round((time.monotonic() - started) * 1000, 1)
+        for lists, stage, inside in zip(per_stage, parsed.stages, narrowed):
+            self._list_when_nothing_ranks(conn, stage, inside, lists, depth, timings)
+
+        keyframes = {keyframe for lists in per_stage for name, ranked in lists.items()
+                     if name not in VIDEO_SIGNALS for _, keyframe in ranked}
+        keyframes.discard(None)
+        started = time.monotonic()
+        with conn.cursor() as cur:
+            cur.execute(WHERE_KEYFRAMES, {"keyframe_ids": list(keyframes)})
+            rows = cur.fetchall()
+        timings["where"] = round((time.monotonic() - started) * 1000, 1)
+        return widen.Ladder(
+            key=key, depth=depth, candidates=candidates,
+            video_of={keyframe: video for keyframe, video, _, _ in rows},
+            link_meta={keyframe: (recording, ms) for keyframe, _, recording, ms in rows},
+            stages=[widen.StageLists(lists=lists, weights=fuse_with)
+                    for lists, fuse_with in zip(per_stage, stage_weights)])
+
+    def _candidate_videos(self, conn, stage_scopes, vectors, allowed, checkpoint) -> list:
+        """
+        The recordings the stages' visual and caption lists point at, taking one from each in turn.
+        On the 48 test sequences OCR and speech lists only took slots from these two. A stage with
+        requirements also offers the videos that meet them: a chain has to pass through those.
+        """
+        depth = self.conf.WIDEN_SEED_DEPTH
+        visual, text = self.visual_model, self.text_model
+        lists, jobs = [], []
+        for index, stage_scope in enumerate(stage_scopes):
+            found = vectors[index]
+            if stage_scope.only is not None:
+                lists.append(list(stage_scope.only))
+            if "visual" in found:
+                jobs.append((len(lists), lambda c, v=found["visual"], s=stage_scope:
+                             retrievers.visual(c, v, visual["model_id"], visual["dims"], s, depth)))
+                lists.append([])
+            if "text" in found and (allowed is None or "caption" in allowed):
+                jobs.append((len(lists), lambda c, v=found["text"], s=stage_scope:
+                             retrievers.caption(c, v, text["model_id"], text["dims"], s, depth)))
+                lists.append([])
+
+        frames = {position: [keyframe for _, keyframe in ranked]
+                  for position, ranked, _ in self._run_retrievers(
+                      conn, jobs, lane=self._widen_lane, before_each=checkpoint)}
+        keyframes = list({keyframe for ranked in frames.values() for keyframe in ranked})
+        if keyframes:
+            with conn.cursor() as cur:
+                cur.execute(LINK_ROWS, {"keyframe_ids": keyframes})
+                recording_of = {row[0]: row[1] for row in cur.fetchall()}
+            for position, ranked in frames.items():
+                lists[position] = list(dict.fromkeys(recording_of[keyframe] for keyframe in ranked
+                                                     if keyframe in recording_of))
+        return widen.round_robin(lists, self.conf.WIDEN_VIDEOS)
+
+    @_foreground
+    @_own_connection
+    def similar(self, conn, keyframe_id, exclude=None, top_k=None, collection=None) -> SearchResult:
         """Scenes that look like the given keyframe. Its own scene is dropped from the results."""
         top_k = top_k or self.conf.SEARCH_TOP_K
         collection = normalize_collection(collection)
         started = time.monotonic()
         spec = self.visual_model
-        scope = Scope(exclude=self._resolve_videos(exclude or []), collection=collection or None,
+        scope = Scope(exclude=self._resolve_videos(conn, exclude or []),
+                      collection=collection or None,
                       small_collection=self._small_collection(collection or None))
         pairs = retrievers.similar_to_keyframe(
-            self.conn, keyframe_id, spec["model_id"], spec["dims"], scope, top_k)
+            conn, keyframe_id, spec["model_id"], spec["dims"], scope, top_k)
         timings = {"similar": round((time.monotonic() - started) * 1000, 1)}
 
         fused = [fusion.FusedResult(keyframe_id=kf, scene_id=scene_id, score=1.0 / (rank + 1),
@@ -779,13 +1072,13 @@ class SearchEngine:
                                     contributions={"similar": 1.0 / (rank + 1)})
                  for rank, (scene_id, kf) in enumerate(pairs)
                  if kf is not None and kf != keyframe_id][:top_k]
-        return SearchResult(results=self._enrich(fused), timings=timings,
+        return SearchResult(results=self._enrich(conn, fused), timings=timings,
                             signals_used=["similar"])
 
-    def _enrich(self, fused):
-        return [item for _, item in self._enrich_rows(fused)]
+    def _enrich(self, conn, fused):
+        return [item for _, item in self._enrich_rows(conn, fused)]
 
-    def _enrich_rows(self, fused):
+    def _enrich_rows(self, conn, fused):
         """
         As _enrich, but each result is paired with the index of the input it came from.
 
@@ -797,7 +1090,7 @@ class SearchEngine:
             return []
         keyframe_ids = [f.keyframe_id for f in fused]
 
-        with self.conn.cursor() as cur:
+        with conn.cursor() as cur:
             cur.execute(ENRICH, {"keyframe_ids": keyframe_ids})
             rows = {r[0]: r for r in cur.fetchall()}
 
@@ -833,6 +1126,19 @@ class SearchEngine:
                 "contributions": item.contributions,
             }))
         return out
+
+
+def _rows_for_linking(fused, meta) -> list:
+    """What temporal.link needs of each hit. `meta` is keyframe -> (recording id, ms)."""
+    rows = []
+    for item in fused:
+        found = meta.get(item.keyframe_id)
+        if found is None:  # a keyframe deleted between the retriever and here
+            continue
+        video_id, ts_ms = found
+        rows.append({"keyframe_id": item.keyframe_id, "scene_id": item.scene_id,
+                     "video_id": video_id, "ts_ms": ts_ms, "score": item.score})
+    return rows
 
 
 def _stage_label(stage) -> str:

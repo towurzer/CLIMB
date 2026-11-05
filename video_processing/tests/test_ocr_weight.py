@@ -17,19 +17,19 @@ def fused_weights(monkeypatch):
     captured = {}
     monkeypatch.setattr(retrievers, "ocr_lexical", lambda conn, tokens, scope, depth: [(1, 10)])
 
-    def fuse(lists, weights, limit=None):
+    def fuse(lists, weights, limit=None, only=None):
         captured.update(weights)
         return []
 
     monkeypatch.setattr(engine_module.fusion, "fuse", fuse)
     instance = SearchEngine.__new__(SearchEngine)  # no models, no database
-    instance.conf, instance.conn, instance.pool = Config(), None, None
+    instance.conf, instance.pool, instance._retriever_threads = Config(), None, None
     instance.logger = custom_logger.get_logger("test")
     instance.visual_model, instance.text_model, instance.collection_models = {"model_id": 1}, None, {}
 
     def run(query, weights=None):
         captured.clear()
-        instance._retrieve(parse(query), Scope(), weights or Config().rrf_weights(), 200, 48,
+        instance._retrieve(None, parse(query), Scope(), weights or Config().rrf_weights(), 200, 48,
                            allowed={"ocr"})
         return captured
 

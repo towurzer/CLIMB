@@ -46,9 +46,9 @@ def _chains_in_video(stage_hits, gaps_ms) -> list:
 
     best[j][a] = score(a) + max{ best[j+1][b] : b is a legal successor of a }
 
-    The inner search is a plain nested loop rather than a two-pointer prefix maximum: it is
-    O(n_j * n_j+1) within one video, bounded by the stage depth even when a single video answers
-    the whole query, and it stays readable, which the two-pointer version does not.
+    Both stages are in time order (link sorted them), so the legal successors of a hit are one run
+    of the next stage: `first` skips to where it starts, and the inner loop stops where it ends.
+    With stages 30000 deep inside 600 videos, walking the whole next stage per hit took 2.2 s.
     """
     last = len(stage_hits) - 1
     best = [None] * len(stage_hits)
@@ -56,16 +56,21 @@ def _chains_in_video(stage_hits, gaps_ms) -> list:
 
     for stage in range(last - 1, -1, -1):
         window = gaps_ms[stage]
+        following = stage_hits[stage + 1]
+        times = [_time_of(hit) for hit in following]
+        first = 0
         row = []
         for hit in stage_hits[stage]:
             time = _time_of(hit)
+            while first < len(times) and times[first] <= time:
+                first += 1
             carried, forward = None, None
-            for index, following in enumerate(stage_hits[stage + 1]):
+            for index in range(first, len(times)):
+                if times[index] - time >= window:
+                    break
                 reached = best[stage + 1][index][0]
                 # None means no chain continues from there, so it cannot extend this one either.
-                if reached is None or following["scene_id"] == hit["scene_id"]:
-                    continue
-                if not 0 < _time_of(following) - time < window:
+                if reached is None or following[index]["scene_id"] == hit["scene_id"]:
                     continue
                 if carried is None or reached > carried:
                     carried, forward = reached, index

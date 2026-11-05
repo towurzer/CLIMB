@@ -1,5 +1,6 @@
 """
-A fixed set of extra connections, so the retrievers of one search can run side by side.
+A fixed set of connections: one for each request, and extra ones so the retrievers of one search
+can run side by side.
 
 psycopg2 runs one statement at a time per connection, and a transaction belongs to its connection.
 So every retriever running in parallel needs a connection of its own, and two requests must never

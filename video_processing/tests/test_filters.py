@@ -30,13 +30,11 @@ def engine(monkeypatch):
     monkeypatch.setattr(retrievers, "videos_with_ocr_phrase", _finder(OCR))
     monkeypatch.setattr(retrievers, "videos_with_speech", _finder(SPEECH))
     monkeypatch.setattr(retrievers, "videos_with_tag", _finder(TAGS))
-    instance = SearchEngine.__new__(SearchEngine)  # no models, no database
-    instance.conn = None
-    return instance
+    return SearchEngine.__new__(SearchEngine)  # no models, no database
 
 
 def test_the_professors_example_needs_both_in_the_same_video(engine):
-    scope, filters = engine._apply_filters(parse('said:"hello darling" text:"they kissed"'),
+    scope, filters = engine._apply_filters(None, parse('said:"hello darling" text:"they kissed"'),
                                            Scope())
     assert scope.only == ("v1",)
     assert filters == [{"filter": 'text:"they kissed"', "videos": 2},
@@ -44,12 +42,12 @@ def test_the_professors_example_needs_both_in_the_same_video(engine):
 
 
 def test_requirements_narrow_inside_an_explicit_video_restriction(engine):
-    scope, _ = engine._apply_filters(parse('text:"they kissed"'), Scope(only=("v2", "v3")))
+    scope, _ = engine._apply_filters(None, parse('text:"they kissed"'), Scope(only=("v2", "v3")))
     assert scope.only == ("v2",)
 
 
 def test_exclusions_still_apply(engine):
-    scope, _ = engine._apply_filters(parse("tag:wedding"), Scope(exclude=("v1",)))
+    scope, _ = engine._apply_filters(None, parse("tag:wedding"), Scope(exclude=("v1",)))
     assert scope.only == ("v2",)
 
 
@@ -61,7 +59,7 @@ def test_once_nothing_is_left_the_rest_report_zero(engine, monkeypatch):
                         lambda conn, value, scope: looked_up.append(value) or tag(conn, value, scope))
 
     scope, filters = engine._apply_filters(
-        parse('text:"they kissed" said:"hello darling" tag:bmx tag:wedding'), Scope())
+        None, parse('text:"they kissed" said:"hello darling" tag:bmx tag:wedding'), Scope())
     assert scope.only == ()
     assert [(f["filter"], f["videos"]) for f in filters] == [
         ('text:"they kissed"', 2), ('said:"hello darling"', 1), ('tag:"bmx"', 0),
@@ -70,7 +68,8 @@ def test_once_nothing_is_left_the_rest_report_zero(engine, monkeypatch):
 
 
 def test_no_requirements_leave_the_scope_alone(engine):
-    scope, filters = engine._apply_filters(parse("a man rides a bike"), Scope(collection="V3C"))
+    scope, filters = engine._apply_filters(None, parse("a man rides a bike"),
+                                           Scope(collection="V3C"))
     assert scope == Scope(collection="V3C") and filters == []
 
 
@@ -110,6 +109,6 @@ def test_the_engine_calls_a_collection_small_by_its_keyframes(monkeypatch):
 
 
 def test_requirements_keep_the_collection_small(engine):
-    scope, _ = engine._apply_filters(parse("tag:wedding"),
+    scope, _ = engine._apply_filters(None, parse("tag:wedding"),
                                      Scope(collection="MVK", small_collection=True))
     assert scope.small_collection and scope.only == ("v1", "v2")

@@ -86,7 +86,31 @@ module.exports = {
         return {
             results: (res.data.results || []).map(toResult),
             temporal: res.data.temporal || null,
-            filters: res.data.filters || null
+            filters: res.data.filters || null,
+            // Set for a sequence only: the first depth of its background search.
+            widen: res.data.widen_next_depth ? {next_depth: res.data.widen_next_depth} : null
+        };
+    },
+
+    /**
+     * One rung of a sequence's background search: the chains that depth adds to `seen`, the
+     * [recording id, anchor keyframe id] of what is shown already. `client` tells the worker whose
+     * previous rung this one makes stale.
+     */
+    widenByText: async (queryText, depth, exclude = [], sources = [], collection = null, seen = [], client = '') => {
+        const res = await axios.post(`${SEARCH_ENGINE_URL}/api/search/widen`, {
+            prompt: queryText,
+            depth,
+            exclude,
+            collection,
+            seen,
+            client,
+            ...(sources.length ? {sources} : {})
+        });
+        return {
+            results: (res.data.results || []).map(toResult),
+            next_depth: res.data.next_depth ?? null,
+            cancelled: Boolean(res.data.cancelled)
         };
     },
 

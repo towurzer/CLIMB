@@ -13,6 +13,8 @@ has not run yet -- "OCR contributes to fusion" is a real failure only once OCR h
 
 import random
 import re
+import threading
+from urllib.parse import quote
 
 import pytest
 
@@ -503,6 +505,145 @@ def test_a_phrase_stage_can_anchor_a_sequence(worker, corpus, db):
 
     body = _temporal(worker, f'text:"{token}" >> a man talking', 2)
     assert any(signal.startswith("s0:ocr_phrase") for signal in body["signals"]), body["signals"]
+
+
+# --- the background search of a sequence --------------------------------------------------------
+
+SEQUENCE = "a man talking >> a crowd of people"
+
+
+def _rung(worker, prompt, depth, seen=(), **kwargs):
+    status, body = post_json(f"{worker}/api/search/widen",
+                             {"prompt": prompt, "depth": depth, "seen": list(seen),
+                              "client": "pytest", **kwargs})
+    assert status == 200, body
+    assert body["cancelled"] is False
+    return body
+
+
+def _walk(worker, prompt, **kwargs):
+    """Runs a sequence and then every rung of its ladder. Returns (first results, rungs, seen)."""
+    first = _search(worker, prompt, top_k=500, **kwargs)
+    seen = [[r["recording_id"], r["keyframe_id"]] for r in first["results"]]
+    depth, rungs = first["widen_next_depth"], []
+    while depth is not None:
+        rungs.append(_rung(worker, prompt, depth, seen, **kwargs))
+        seen += [[r["recording_id"], r["keyframe_id"]] for r in rungs[-1]["results"]]
+        depth = rungs[-1]["next_depth"]
+    return first, rungs, seen
+
+
+def test_a_plain_search_starts_no_background_search(worker, corpus):
+    assert _search(worker, "a man talking", top_k=10)["widen_next_depth"] is None
+
+
+def test_a_rung_of_a_plain_search_adds_nothing(worker, corpus):
+    body = _rung(worker, "a man talking", 4000)
+    assert body["results"] == [] and body["next_depth"] is None
+
+
+def test_the_rungs_climb_to_the_top_of_the_ladder(worker, corpus):
+    first, rungs, _ = _walk(worker, SEQUENCE)
+    assert first["widen_next_depth"] == rungs[0]["depth"]
+    depths = [rung["depth"] for rung in rungs]
+    assert depths == sorted(set(depths))
+    assert all(rung["next_depth"] == after["depth"] for rung, after in zip(rungs, rungs[1:]))
+    assert rungs[-1]["next_depth"] is None
+
+
+def test_the_rungs_append_real_chains_nothing_shown_has(worker, corpus):
+    first, rungs, seen = _walk(worker, SEQUENCE)
+    anchors = [anchor for _, anchor in seen]
+    assert len(anchors) == len(set(anchors)), "an anchor got two cards"
+    for rung in rungs:
+        for chain in rung["results"]:
+            assert len(chain["temporal_partners"]) == 1
+            assert chain["temporal_partners"][0]["recording_id"] == chain["recording_id"]
+            assert 0 < chain["temporal_gaps_ms"][0] < 60_000
+
+
+def test_the_per_video_cap_holds_across_the_rungs(worker, corpus):
+    _, _, seen = _walk(worker, SEQUENCE)
+    per_recording = {}
+    for recording, _ in seen:
+        per_recording[recording] = per_recording.get(recording, 0) + 1
+    assert not per_recording or max(per_recording.values()) <= 3
+
+
+def test_the_background_search_keeps_exclusions_out(worker, corpus):
+    first, rungs, _ = _walk(worker, SEQUENCE)
+    found = [chain for rung in rungs for chain in rung["results"]]
+    if not found:
+        pytest.skip("no rung found a chain in this corpus")
+    excluded = found[0]["recording_id"]
+    _, rungs, _ = _walk(worker, f"{SEQUENCE} -video:{excluded}")
+    assert excluded not in {chain["recording_id"] for rung in rungs for chain in rung["results"]}
+
+
+def test_the_background_search_respects_the_ticked_sources(worker, corpus):
+    _, rungs, _ = _walk(worker, SEQUENCE, sources=["visual"])
+    for rung in rungs:
+        for chain in rung["results"]:
+            assert set(chain["signals"]) <= {"visual"}, chain["signals"]
+
+
+def test_the_backend_appends_behind_what_is_already_there(backend, corpus):
+    query = quote(SEQUENCE)
+    status, first = get_json(f"{backend}/climb/search?q={query}&per_page=100")
+    assert status == 200, first
+    if not first["widen"]:
+        pytest.skip("no Redis, so no background search")
+    before = [r["keyframe_id"] for r in first["results"]]
+
+    status, rung = get_json(f"{backend}/climb/search/widen?q={query}&client=pytest")
+    assert status == 200, rung
+    assert rung["total"] == first["total"] + rung["added"]
+
+    status, again = get_json(f"{backend}/climb/search?q={query}&per_page=100")
+    assert status == 200, again
+    assert [r["keyframe_id"] for r in again["results"]][:len(before)] == before
+    assert again["widen"]["next_depth"] == rung["next_depth"]
+
+    status, tail = get_json(f"{backend}/climb/search?q={query}&per_page=100&offset={first['total']}")
+    assert status == 200, tail
+    assert len(tail["results"]) == min(rung["added"], 100)
+    assert not {r["keyframe_id"] for r in tail["results"]} & set(before)
+
+
+def test_the_backend_has_no_background_search_for_a_plain_query(backend, corpus):
+    status, body = get_json(f"{backend}/climb/search?q={quote('a man talking')}")
+    assert status == 200, body
+    assert body["widen"] is None
+    status, rung = get_json(f"{backend}/climb/search/widen?q={quote('a man talking')}")
+    assert status == 200, rung
+    assert rung["added"] == 0 and rung["next_depth"] is None
+
+
+# --- concurrency --------------------------------------------------------------------------------
+
+def test_a_search_keeps_its_candidates_beside_other_searches(worker, corpus):
+    """
+    Requests used to share a connection, so one finishing rolled back the SET LOCAL hnsw settings
+    of another: without an error, a caption-only search beside two others lost its ANN candidates
+    in a quarter of the runs.
+    """
+    prompt, stop = "a man talking", threading.Event()
+
+    def another_search():
+        while not stop.is_set():
+            _search(worker, "a dog on a beach", top_k=48, depth=100, sources=["ocr"])
+
+    others = [threading.Thread(target=another_search, daemon=True) for _ in range(2)]
+    for thread in others:
+        thread.start()
+    try:
+        counts = {len(_search(worker, prompt, top_k=4000, depth=4000, sources=["caption"])["results"])
+                  for _ in range(40)}
+    finally:
+        stop.set()
+        for thread in others:
+            thread.join(timeout=30)
+    assert len(counts) == 1, f"the same search returned {sorted(counts)} results"
 
 
 # --- stability ----------------------------------------------------------------------------------

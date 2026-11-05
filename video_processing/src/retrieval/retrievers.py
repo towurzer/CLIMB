@@ -25,11 +25,15 @@ class Scope:
 
     `small_collection` is set by the engine when `collection` has at most
     EXACT_COLLECTION_MAX_KEYFRAMES keyframes; the scope itself cannot know the collection's size.
+
+    `always_exact` ranks the videos of `only` by exact distance however many there are, for the
+    background search of a sequence (retrieval/widen.py).
     """
     exclude: tuple = ()
     collection: str | None = None
     only: tuple | None = None
     small_collection: bool = False
+    always_exact: bool = False
 
     @property
     def params(self) -> dict:
@@ -43,7 +47,8 @@ class Scope:
         the whole collection and is filtered afterwards, so `video:00191 a red car` would keep
         whichever of the global top 2000 happen to be in 00191 -- usually none.
         """
-        return self.only is not None and len(self.only) <= Config.EXACT_SCOPE_MAX_VIDEOS
+        return self.only is not None and (self.always_exact
+                                          or len(self.only) <= Config.EXACT_SCOPE_MAX_VIDEOS)
 
     @property
     def exact_collection(self) -> bool:

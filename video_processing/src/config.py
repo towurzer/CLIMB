@@ -134,8 +134,11 @@ class Config:
     # vector signal on the laptop CPU, which is why the retrievers run in parallel (below).
     EXACT_COLLECTION_MAX_KEYFRAMES: int = int(os.getenv("CLIMB_EXACT_COLLECTION_MAX_KEYFRAMES")
                                               or 300_000)
+    # How many requests the worker answers at once, each on a connection of its own (db/pool.py);
+    # the next one waits for a free connection. Opened on first use.
+    SEARCH_CONNECTIONS: int = int(os.getenv("CLIMB_SEARCH_CONNECTIONS") or 8)
     # The retrievers of one search run side by side, each on its own database connection
-    # (db/pool.py); 1 runs them one after another on the engine's connection. The three exact scans
+    # (db/pool.py); 1 runs them one after another on the request's connection. The three exact scans
     # of an LHE search took 1,334 ms one after another and 709 ms in parallel on the laptop.
     RETRIEVER_CONNECTIONS: int = int(os.getenv("CLIMB_RETRIEVER_CONNECTIONS") or 4)
     # ts_rank_cd with normalisation 32 is in (0,1). The floor stops OCR noise that happens to
@@ -180,6 +183,25 @@ class Config:
     TEMPORAL_STAGE_TOP_K: int = int(os.getenv("CLIMB_TEMPORAL_STAGE_TOP_K") or 1000)
     # A long video can contain dozens of legal chains; without a cap it owns the whole grid.
     TEMPORAL_MAX_PER_VIDEO: int = int(os.getenv("CLIMB_TEMPORAL_MAX_PER_VIDEO") or 3)
+
+    # --- The background search that grows a sequence's results (retrieval/widen.py) ---
+    # How many videos the stages' top frames pick for ranking by exact distance. For 3 stages that
+    # took 2-3 s on the laptop CPU and added about 0.5 s to the next sequence, where the same ranking
+    # over all of V3C took 19 s and made the next search take 6-9 s. The target was among the 600 in
+    # 87 of 96 test queries (EXPERIMENTS.md, 2026-11-05).
+    WIDEN_VIDEOS: int = int(os.getenv("CLIMB_WIDEN_VIDEOS") or 600)
+    # How many frames of each stage's visual and caption lists pick those videos.
+    WIDEN_SEED_DEPTH: int = int(os.getenv("CLIMB_WIDEN_SEED_DEPTH") or 4000)
+    # The rungs: each retriever's list inside those videos is cut at each depth in turn, and the
+    # chains that adds are appended. The depths below, then every WIDEN_DEPTH_STEP up to
+    # WIDEN_MAX_DEPTH, so 4000, 8000, 10000, 15000 ... 30000. 0 switches the background search off.
+    # On 24 test sequences 15000 reached every target among the videos; the rest only added chains.
+    WIDEN_FIRST_DEPTHS: tuple = tuple(
+        int(depth) for depth in (os.getenv("CLIMB_WIDEN_FIRST_DEPTHS") or "4000,8000").split(","))
+    WIDEN_DEPTH_STEP: int = int(os.getenv("CLIMB_WIDEN_DEPTH_STEP") or 5000)
+    WIDEN_MAX_DEPTH: int = int(os.getenv("CLIMB_WIDEN_MAX_DEPTH") or 30_000)
+    # Connections of its own, so it never makes a foreground search queue for one.
+    WIDEN_CONNECTIONS: int = int(os.getenv("CLIMB_WIDEN_CONNECTIONS") or 4)
 
     # How many query vectors to keep. Embedding a query string is the single most expensive part of
     # a search on my CPU only laptop, on GPU it's not that important but caching is not slower than not doing it.

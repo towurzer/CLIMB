@@ -6,6 +6,10 @@ Temporal chain linking.
 anchor) is a rule a naive nested loop would get wrong in a way that only shows up as bad results.
 """
 
+import random
+
+import pytest
+
 from retrieval.temporal import link
 
 
@@ -203,3 +207,30 @@ def test_start_ms_is_used_when_ts_ms_is_absent():
     chains = link(stages, [30_000])
     assert len(chains) == 1
     assert chains[0].gaps_ms == [5_000]
+
+
+# --- the walk through the next stage -----------------------------------------------------------
+
+def _best_by_nested_loop(stage_hits, gaps_ms):
+    """Every anchor's best chain score, comparing it with every hit of the next stage."""
+    best = [hit["score"] for hit in stage_hits[-1]]
+    for stage in range(len(stage_hits) - 2, -1, -1):
+        row = []
+        for hit in stage_hits[stage]:
+            reachable = [best[i] for i, following in enumerate(stage_hits[stage + 1])
+                         if best[i] is not None and following["scene_id"] != hit["scene_id"]
+                         and 0 < following["ts_ms"] - hit["ts_ms"] < gaps_ms[stage]]
+            row.append(hit["score"] + max(reachable) if reachable else None)
+        best = row
+    return sorted(score for score in best if score is not None)
+
+
+def test_stopping_at_the_window_finds_what_comparing_every_pair_finds():
+    rng = random.Random(7)
+    for _ in range(200):
+        gaps = [rng.choice([1, 500, 3000, 60000]) for _ in range(rng.randint(1, 3))]
+        stages = [sorted((hit("v1", rng.randint(1, 8), rng.choice(range(0, 6000, 250)),
+                              rng.random()) for _ in range(rng.randint(0, 12))),
+                         key=lambda h: h["ts_ms"]) for _ in range(len(gaps) + 1)]
+        found = sorted(chain.score for chain in link(stages, gaps))
+        assert found == pytest.approx(_best_by_nested_loop(stages, gaps))

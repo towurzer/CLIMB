@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Video Retrieval API",
-    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.\n\nv2.1.0: AVS session bookkeeping moved out of this backend into a separate service (`climb-avs-service`), so teammates running their own local stacks share one exclusion list. Every AVS route can now answer **503** when that service is unreachable, which is deliberately distinct from 404: 404 means the session is gone, 503 means we cannot tell. Snapshots carry a `collab` field, and /climb/health reports `avs_collab`. Search and DRES submission never depend on the service; search filters a local mirror. With `AVS_SESSION_SERVICE_URL` unset the store stays in-process and 503 never occurs.\n\nv2.2.0: `collection` restricts a search to V3C, MVK or LHE. Query requirements (text:, said:/spoken:, tag:, video:) combine at video level, and the response reports each in `filters`. Videos are served from the source collections.",
-    "version": "2.4.0"
+    "description": "API specification for the CLIMB backend, a Video Browser allowing for searching, browsing, and DRES integration (known-item, VQA text answer, and collaborative Ad-hoc Video Search submissions).\n\nv2.0.0: results are scenes, not keyframes. `shot_id` is replaced by `scene_id` (the master shot) plus `keyframe_id` (the frame shown). Thumbnails are served from /thumbs and /kf, videos from /videos, all derived from (video_id, shot_index, kf_index). Find-similar moved to /climb/search/similar/{keyframe_id}.\n\nv2.1.0: AVS session bookkeeping moved out of this backend into a separate service (`climb-avs-service`), so teammates running their own local stacks share one exclusion list. Every AVS route can now answer **503** when that service is unreachable, which is deliberately distinct from 404: 404 means the session is gone, 503 means we cannot tell. Snapshots carry a `collab` field, and /climb/health reports `avs_collab`. Search and DRES submission never depend on the service; search filters a local mirror. With `AVS_SESSION_SERVICE_URL` unset the store stays in-process and 503 never occurs.\n\nv2.2.0: `collection` restricts a search to V3C, MVK or LHE. Query requirements (text:, said:/spoken:, tag:, video:) combine at video level, and the response reports each in `filters`. Videos are served from the source collections.\n\nv2.5.0: a sequence query (`A >> B`) grows after its first response: GET /climb/search/widen appends what a deeper search finds behind the cached results, and `offset` pages by position so a short last page cannot skip what landed behind it. Nothing already returned changes position.",
+    "version": "2.5.0"
   },
   "servers": [
     {
@@ -226,6 +226,16 @@
                 "LHE"
               ]
             }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Start at this position in the result set. Wins over `page`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -235,6 +245,100 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/climb/search/widen": {
+      "get": {
+        "summary": "Append the next depth of a sequence's background search to its cached results",
+        "description": "Call after GET /climb/search answered with `widen.next_depth`, with the same query parameters, until `next_depth` is null. Each call ranks the frames of the videos the stages point at by exact distance, one depth further than the last, and appends the chains that adds behind the cached results. Everything already there keeps its position. Read the new chains through GET /climb/search with `offset`.\n\nNothing happens without Redis, since the appended chains are kept there.",
+        "operationId": "widenSearch",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Text query for search. To exclude specific videos from results, append ' --exclude: videoId1, videoId2, ...' to the query. Example: 'person running --exclude: V3C1_001, V3C1_002' Requirements, all at video level: text:\"...\" (on-screen text), said:\"...\" or spoken:\"...\" (speech), tag:... (uploader tags), video:ID (only this clip or MVK recording). A result's video must satisfy every one; plain words only rank. -video:ID excludes a clip or recording.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "avs_session",
+            "in": "query",
+            "required": false,
+            "description": "Active AVS session code. When provided, scenes already submitted in that collaborative session are removed from the results.\n\nFiltering reads this backend's local mirror of the session and never calls the session service, so it adds no latency and cannot fail: an unknown code, or a mirror not yet populated, simply means no filtering. Unlike earlier versions this does NOT refresh the session's idle timer - GET /climb/avs/session/{code} is the heartbeat, so a search cannot keep someone else's session alive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated list of the sources to search: any of visual, caption, ocr, asr. Omitted (or empty) means all of them.\n\nA source left out is not queried at all rather than being zero-weighted, so narrowing the list makes a search cheaper as well as quieter - useful because the OCR retriever fires on ordinary lowercase words and is weighted 4x, which lets subtitle text dominate a page for a query like 'a snowboarder doing a backflip'.\n\nThis does NOT gate the explicit phrase operators: text:\"...\" and said:\"...\" always run, because an operator in the query is an instruction rather than a source preference. Part of the cache key, so the same query against different sources is a separate result set.",
+            "schema": {
+              "type": "string",
+              "example": "visual,caption,asr"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "description": "Search only this collection: V3C, MVK or LHE. Absent means all of them. At VBS the task names its collection, and restricting to it keeps the other collections' false hits off the page.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "V3C",
+                "MVK",
+                "LHE"
+              ]
+            }
+          },
+          {
+            "name": "client",
+            "in": "query",
+            "required": false,
+            "description": "Who is asking. A new call from the same client makes its earlier one stale, which is how a new query stops the old background search.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What this depth added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "added": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "Results now in the set, after the AVS filter"
+                    },
+                    "depth": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "next_depth": {
+                      "type": "integer",
+                      "nullable": true,
+                      "description": "Null when finished"
+                    },
+                    "cancelled": {
+                      "type": "boolean",
+                      "description": "A newer call of this client took over; nothing was added"
+                    }
+                  }
                 }
               }
             }
@@ -1336,6 +1440,21 @@
             "type": "string",
             "nullable": true,
             "description": "The collection searched, or null for all"
+          },
+          "widen": {
+            "type": "object",
+            "nullable": true,
+            "description": "Present for a sequence query with Redis running: the background search GET /climb/search/widen continues. next_depth is null once it is finished.",
+            "properties": {
+              "depth": {
+                "type": "integer",
+                "description": "The last depth appended, absent before the first"
+              },
+              "next_depth": {
+                "type": "integer",
+                "nullable": true
+              }
+            }
           }
         },
         "required": [

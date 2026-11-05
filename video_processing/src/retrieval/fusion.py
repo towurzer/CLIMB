@@ -30,10 +30,43 @@ class FusedResult:
     contributions: dict = field(default_factory=dict)
 
 
-def fuse(ranked_lists: dict, weights: dict, k: int = RRF_K, limit: int = None) -> list:
+def scores(ranked_lists: dict, weights: dict, k: int = RRF_K) -> tuple:
+    """
+    `fuse` without the per-signal detail: ({keyframe: score}, {keyframe: scene}), unordered.
+
+    For the background search of a sequence (retrieval/widen.py), which scores 100,000 keyframes per
+    depth and shows a few hundred of them. Building the detail for all of them took 2 s of Python
+    per depth, slowing every foreground search beside it. Same scores as fuse().
+    """
+    totals = defaultdict(float)
+    scene_of = {}
+    for name, results in ranked_lists.items():
+        weight = weights.get(name, 1.0)
+        if weight <= 0:
+            continue
+        for rank, (scene_id, keyframe_id) in enumerate(results, start=k + 1):
+            if keyframe_id is not None:
+                totals[keyframe_id] += weight / rank
+                scene_of[keyframe_id] = scene_id
+    return totals, scene_of
+
+
+def add_video_prior(totals, video_of, ranked_videos, weight, k: int = RRF_K):
+    """apply_video_prior for the output of scores(). Changes `totals` in place."""
+    if weight <= 0 or not ranked_videos:
+        return
+    rank_of = {video_id: rank for rank, video_id in enumerate(ranked_videos, start=1)}
+    for keyframe_id in totals:
+        rank = rank_of.get(video_of.get(keyframe_id))
+        if rank is not None:
+            totals[keyframe_id] += weight / (k + rank)
+
+
+def fuse(ranked_lists: dict, weights: dict, k: int = RRF_K, limit: int = None, only=None) -> list:
     """
     `ranked_lists` maps retriever name -> [(scene_id, keyframe_id)] in rank order.
-    Returns FusedResult, best first.
+    Returns FusedResult, best first. `only` restricts the output to these keyframes, each with the
+    same score and ranks it has without it.
 
     Entries with no keyframe are dropped: every retriever now resolves to keyframes before it
     returns (the scene-level ones expand across the scene's keyframes), so a None here means the
@@ -50,7 +83,7 @@ def fuse(ranked_lists: dict, weights: dict, k: int = RRF_K, limit: int = None) -
             continue
         for rank, entry in enumerate(results, start=1):
             scene_id, keyframe_id = entry if isinstance(entry, tuple) else (entry, None)
-            if keyframe_id is None:
+            if keyframe_id is None or (only is not None and keyframe_id not in only):
                 continue
             contribution = weight / (k + rank)
             scores[keyframe_id] += contribution
