@@ -80,6 +80,10 @@ class Config:
                            "and setting, and how they relate to each other.")
     ASR_MODEL: str = os.getenv("CLIMB_ASR_MODEL") or "large-v3"
     ASR_BEAM_SIZE: int = 1
+    # Segments per Whisper batch on one process. 1 is the sequential path. The batched path reports
+    # the compression ratio per segment instead of per 30 s window, so ASR_MAX_COMPRESSION_RATIO
+    # does not fire on it (highest ratio 1.6 against 3.7 on the same 15 clips, EXPERIMENTS.md).
+    ASR_BATCH: int = int(os.getenv("CLIMB_ASR_BATCH") or 1)
     # When a segment counts as a Whisper hallucination rather than speech (pipeline/asr.py,
     # flag_hallucinations). Set from a probe over 61 MVK clips (every segment invented) and 14 V3C
     # videos with large-v3-turbo; changing them is `python main.py asr --reclassify`, no new

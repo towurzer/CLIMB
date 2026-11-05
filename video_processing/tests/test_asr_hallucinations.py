@@ -100,6 +100,8 @@ def test_the_whisper_model_loads(monkeypatch):
         def __init__(self, name, device, compute_type):
             built.update(name=name, device=device, compute_type=compute_type)
 
-    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeWhisper))
+    monkeypatch.setitem(sys.modules, "faster_whisper",
+                        types.SimpleNamespace(WhisperModel=FakeWhisper,
+                                              BatchedInferencePipeline=None))
     asr.load_model("cpu")
     assert built == {"name": Config().ASR_MODEL, "device": "cpu", "compute_type": "int8"}

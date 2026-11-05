@@ -30,6 +30,19 @@ INSERT_SEGMENTS = """
     INSERT INTO transcript_segment (video_id, start_ms, end_ms, text, lang, no_speech_prob,
                                     avg_logprob, compression_ratio, hallucination)
     VALUES %s
+    ON CONFLICT DO NOTHING
+"""
+
+# The pending list is read once at the start, so another run can reach a video on it first. A
+# second transcript of a video has other time ranges than the first when the settings differ, and
+# the unique constraint on the ranges does not catch that. This row lock, held until the commit,
+# makes the second writer wait and then find the first one's rows.
+LOCK_VIDEO = """
+    SELECT 1 FROM videos WHERE video_id = %s FOR NO KEY UPDATE;
+"""
+
+ALREADY_TRANSCRIBED = """
+    SELECT EXISTS (SELECT 1 FROM transcript_segment WHERE video_id = %s);
 """
 
 SELECT_SEGMENTS = """
@@ -69,6 +82,7 @@ class AsrResult:
     hallucinations: int = 0
     silent: int = 0
     skipped: int = 0
+    already: int = 0
 
 
 @dataclass
@@ -129,10 +143,10 @@ def flag_hallucinations(segments) -> list:
 
 
 def load_model(dev: str):
-    """faster-whisper, loaded lazily. int8 on CPU, float16 on GPU."""
+    """faster-whisper, loaded lazily. int8 on CPU, float16 on GPU. Batched with ASR_BATCH above 1."""
     conf = Config()
     try:
-        from faster_whisper import WhisperModel
+        from faster_whisper import BatchedInferencePipeline, WhisperModel
     except ImportError as e:
         raise ImportError(
             "faster-whisper is not installed: pip install faster-whisper"
@@ -146,18 +160,23 @@ def load_model(dev: str):
                            f"(torch here is built for CUDA {torch.version.cuda}): install torch for "
                            f"cu126, README 1.0")
     compute_type = "float16" if dev == "cuda" else "int8"
-    return WhisperModel(conf.ASR_MODEL, device=("cuda" if dev == "cuda" else "cpu"),
-                        compute_type=compute_type)
+    model = WhisperModel(conf.ASR_MODEL, device=("cuda" if dev == "cuda" else "cpu"),
+                         compute_type=compute_type)
+    return BatchedInferencePipeline(model=model) if conf.ASR_BATCH > 1 else model
 
 
 def transcribe(model, audio_path):
     """Returns (segments, language), the segments as Segment."""
     conf = Config()
+    # The batched pipeline defaults to one segment per chunk of speech. Scenes are matched by the
+    # segments' time ranges, so it has to report the same ranges as the sequential path.
+    batched = {"batch_size": conf.ASR_BATCH, "without_timestamps": False} if conf.ASR_BATCH > 1 else {}
     segments, info = model.transcribe(
         str(audio_path),
         beam_size=conf.ASR_BEAM_SIZE,
         vad_filter=True,          # skips silence, which is most of a lot of V3C audio
         condition_on_previous_text=False,  # stops one hallucination poisoning the rest
+        **batched,
     )
     out = []
     for s in segments:
@@ -166,6 +185,11 @@ def transcribe(model, audio_path):
             out.append(Segment(int(s.start * 1000), int(s.end * 1000), text, s.no_speech_prob,
                                s.avg_logprob, s.compression_ratio))
     return out, getattr(info, "language", None)
+
+
+def _already_transcribed(cur, video_id) -> bool:
+    cur.execute(ALREADY_TRANSCRIBED, (video_id,))
+    return cur.fetchone()[0]
 
 
 def asr_pending(conn, collection=None, limit=None, shard=0, shards=1,
@@ -192,6 +216,13 @@ def asr_pending(conn, collection=None, limit=None, shard=0, shards=1,
 
     with tqdm(videos, desc="Transcribing videos", unit="video") as progress:
         for video_id in progress:
+            with conn.cursor() as cur:
+                done = _already_transcribed(cur, video_id)
+            conn.commit()  # no transaction stays open during a transcription
+            if done:
+                result.already += 1
+                continue
+
             audio = paths.audio_path(video_id)
             if not audio.exists():
                 logger.warning(f"{video_id}: no audio at {audio}")
@@ -205,6 +236,12 @@ def asr_pending(conn, collection=None, limit=None, shard=0, shards=1,
                 continue
 
             with conn.cursor() as cur:
+                cur.execute(LOCK_VIDEO, (video_id,))
+                if _already_transcribed(cur, video_id):
+                    conn.rollback()
+                    logger.info(f"{video_id}: another run stored its transcript first, keeping that")
+                    result.already += 1
+                    continue
                 if segments:
                     rows = [(video_id, s.start_ms, s.end_ms, s.text, language, s.no_speech_prob,
                              s.avg_logprob, s.compression_ratio, flag)
@@ -222,7 +259,8 @@ def asr_pending(conn, collection=None, limit=None, shard=0, shards=1,
 
     logger.info(f"Transcribed {result.videos} video(s): {result.segments} segment(s), "
                 f"{result.hallucinations} of them taken for hallucinations, "
-                f"{result.silent} with no speech, {result.skipped} skipped")
+                f"{result.silent} with no speech, {result.skipped} skipped, "
+                f"{result.already} already done by another run")
     return result
 
 

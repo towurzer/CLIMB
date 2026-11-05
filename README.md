@@ -290,6 +290,8 @@ backend/
     teamClient.js           # this stack's team membership, held like the DRES login
     serviceUrls.js          # resolves the backend / search engine / avs service base urls from env
     datasets.js             # finds a source video to play, from datasets.json
+    mediaPaths.js           # the keyframe paths, derived the same way as pipeline/paths.py
+    cache.js                # the Redis cache for video browsing
     controller/             # Route handlers
     models/                 # Database models and queries
     routes/                 # Express routes
@@ -328,6 +330,7 @@ frontend/
         useRecording.js     # all clips of the selected video's recording, prev / next clip
         useTeam.js          # the team connection, its poll, which hints are new
         hints.js            # how a hint reads: "Anna: have a look at 00191 · 00:12.40"
+        sources.js          # the signal tickboxes, and which start unticked for which dataset and task
         components/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
@@ -348,7 +351,7 @@ frontend/
 video_processing/
     requirements.txt           # python dependencies        
     pytest.ini                 # test config; `-m "not integration"` is the fast run
-    tests/                     # 157 tests: pure logic + HTTP integration + DRES/AVS
+    tests/                     # pure logic + HTTP integration + DRES/AVS
     migrations/                # numbered .sql schema migrations, applied in order
         001_core_schema.sql    # videos / scenes / keyframes / text tables / ingest_jobs
         002_vector_function_costs.sql # teaches the query planner that vector math isn't free
@@ -356,6 +359,17 @@ video_processing/
         004_model_aware_embeddings.sql # lets more than one embedding model coexist
         005_text_embeddings.sql        # transcript vectors
         006_caption_embeddings.sql     # caption vectors
+        007_video_info.sql             # V3C's uploader text, tags and categories
+        008_recordings.sql             # which MVK clips belong to the same dive
+        009_larger_models.sql          # room for the bigger visual and text models
+        010_so400m.sql                 # the opt-in SigLIP2 so400m
+        011_transcript_confidence.sql  # Whisper's confidence values + the hallucination flag
+        012_tag_keys.sql               # the V3C tag boost
+        013_domain_models.sql          # a second visual model per collection
+        014_drop_bioclip.sql           # measured it, did not like it, gone
+        015_peskavlp_whole_frame.sql   # PeskaVLP on the whole frame instead of its centre crop
+        016_tag_functions_schema_qualified.sql # so a dump restores
+        017_transcript_segment_unique.sql      # one segment per time range of a video
     src/
         config.py              # Settings
         custom_logger.py       # Logging utilities
@@ -371,22 +385,31 @@ video_processing/
             engine.py          # ties them together
         db/
             connection.py      # DB connections + a commit/rollback context manager
+            pool.py            # a connection per retriever, so they can run in parallel
             migrate.py         # migration runner (with checksums, so nobody edits history)
             index_ops.py       # builds/drops the expensive ANN + GIN indexes
         pipeline/
             runner.py          # enqueue / fetch / purge / status -- the batch lifecycle
             probe.py           # ffprobe metadata (fps, duration, dimensions, audio)
+            preflight.py       # `main.py check`: everything a run needs, before it needs it
             device.py          # picks cuda / mps / cpu
-            embed.py           # SigLIP2 vectors
+            embed.py           # SigLIP2 vectors, plus PeskaVLP for LHE
+            visual_models.py   # loads the visual models, image side and text side
+            peskavlp.py        # our rebuild of PeskaVLP, without its pinned dependencies
             ocr.py             # on-screen text
             caption.py         # VLM shot descriptions
             asr.py             # Whisper transcripts
             text_embed.py      # transcript + caption embeddings
             datasets.py        # finds the collections under CLIMB_SOURCE_ROOT, reads folders or .tgz alike
+            video_info.py      # parses V3C's info JSONs
             shot_boundaries.py # parses scene files -> scenes
             decode.py          # the one-pass FFmpeg stage
             keyframe_selection.py # thins candidate frames down to 2-32 per shot
             paths.py           # where everything lives on disk, derived not stored
+        evaluation/
+            gynsurg.py         # `eval-gynsurg`: LHE's models on GynSurg's labelled frames
+            msc.py             # `eval-msc`: MVK's models on MSC's descriptions
+            search.py          # the ranking and fusion both of them measure with
     logs/                     # Log files (local only)
    
 readme_images/              # Images displayed in readme
@@ -496,6 +519,28 @@ Everything below is explained in the sections that follow. This is just the orde
 6. **More than one GPU.** One process uses one GPU. Start one per GPU, each with its own slice:
    `CUDA_VISIBLE_DEVICES=0 python main.py embed --shard 0 --shards 2` and
    `CUDA_VISIBLE_DEVICES=1 python main.py embed --shard 1 --shards 2`, same for the other model stages.
+
+   **One big GPU** works the same way without the `CUDA_VISIBLE_DEVICES`, and instead of step 5's one stage after the
+   other. This is what ran V3C1 on a 94 GB H100L, in a `tmux` so it survives your SSH connection:
+
+   ```bash
+   export CLIMB_DECODE_WORKERS=12 CLIMB_SELECTION_WORKERS=16
+   export CLIMB_EMBED_BATCH=128 CLIMB_EMBED_LOADERS=8 CLIMB_OCR_BATCH=64 CLIMB_CAPTION_BATCH=32 CLIMB_TEXT_BATCH=512
+   shards() { for i in $(seq 0 $(($2 - 1))); do python main.py "$1" --shard "$i" --shards "$2" & done; }
+
+   python main.py run
+   shards embed 1; shards ocr 4; shards caption 3; shards asr 4
+   wait
+   python main.py embed-text
+   python main.py purge
+   python main.py index build
+   ```
+
+   Per process at those batch sizes that is caption 11.7 GB, ASR 5.2-6.7, embed 3.9 and OCR 2.1, so add it up for your
+   card before you copy the 3 and the 4. More processes helped OCR and caption (1.8x each with two captioners and four
+   OCRs against one of each). ASR is what you end up waiting for: four of them did about 41x real time, which makes
+   the whole collection about 4 days. Its `--shards` can change while it runs, two processes landing on the same video
+   only waste the second one's GPU time (1.7).
 7. **Hand back** the media directory and a dump of the database:
    `podman exec climb pg_dump -U postgres -Fc <POSTGRES_DB_NAME> > climb.dump`.
 
@@ -573,6 +618,8 @@ python main.py <command> [options]
 | `run`          | Several stages in one go, always in pipeline order                              |
 | `status`       | What is done and what is left                                                   |
 | `serve`        | Start the search engine the backend talks to                                    |
+| `eval-gynsurg` | SigLIP2 vs PeskaVLP on GynSurg's labelled frames (1.7)                          |
+| `eval-msc`     | SigLIP2, and MVK's own model if one is set, on MSC's descriptions (1.7)         |
 
 Every command takes `--collection` (`V3C`, `MVK` or `LHE`; leave it out for all of them) and `--limit`. The GPU ones
 also take `--shard N --shards M`. `--limit` counts what the command works on: videos, except for `embed`, `ocr` and
@@ -820,11 +867,12 @@ A few things worth knowing:
 - **No GPU here.** There used to be an NVENC path for the web copy. With no web copy there is nothing to encode, and
   decoding 270p on the CPU is not what anyone is waiting on.
 
-- **Broken videos get indexed anyway.** V3C1_200 contains two videos (00016 and 00024) whose H.264 streams are damaged
-  , the container promises 23,120 and 47,289 frames, the bitstream delivers about 84% of that and a great deal of
-  shouting about NAL units. Throwing away five sixths of a video because the last sixth is rubbish would be a shame, so
-  those get indexed from whatever decodes and flagged as ```damaged``` in the database, which is why their keyframe
-  coverage looks thin later.
+- **Broken videos get indexed anyway.** The V3C1_200 course copies of 00016 and 00024 each have a 9 MiB hole of zeros
+  in them (the copies in the full collection are fine, we compared), so the container promises 23,120 and 47,289
+  frames, the bitstream delivers about 84% of that and a great deal of shouting about NAL units. Throwing away five
+  sixths of a video because the last sixth is rubbish would be a shame, so a file like that gets indexed from whatever
+  decodes and flagged as ```damaged``` in the database, which is why its keyframe coverage looks thin later. V3C1, MVK
+  and LHE did not need the flag once, the rest of V3C might.
 - **A short extraction that is *not* explained by a broken file fails the video instead.** That combination means
   something went wrong outside the video , a full disk, most likely , and is worth retrying. Ask me how I know.
 
@@ -1078,6 +1126,10 @@ Each stage takes `--shard N --shards M`, which partitions the work by row id. Po
 database with `--shard 0..3 --shards 4` and they will divide the work exactly and never collide, no locking, no
 coordination, no queue server. Verified: four shards over 1,149 pending keyframes split 287/288/287/287.
 
+A different `--shards` is a different split, so changing it while the old processes are still running puts a video on
+two shards. ASR can take that: whoever stores first wins, the other one waits for it, finds the transcript and moves on
+without storing a second one. The final log line counts those as "already done by another run".
+
 The database only answers on its own machine, so the other machines need a way in. Either an SSH tunnel from each of
 them (`ssh -N -L 5432:localhost:5432 <database host>`, then `DB_HOST=localhost` as usual), or `CLIMB_DB_BIND=0.0.0.0`
 in the `.env` of the machine that hosts it. The address is fixed when the container is created, so an existing
@@ -1246,6 +1298,15 @@ The values stay in the database next to the flag, so a changed threshold or phra
 --reclassify` (seconds) rather than another transcription (days), followed by `embed-text` if anything came back.
 The tickbox still starts unticked for MVK: the full collection is 3,190 clips, and the probe saw 61.
 
+`CLIMB_ASR_BATCH` above 1 runs Whisper through faster-whisper's batched pipeline, with the same time ranges for the
+scenes to match against. Off by default, because of two things nobody has measured or fixed yet. On this laptop's CPU
+it was 1.3x faster over 15 clips, with a word overlap of 0.73 to 0.96 against the sequential text, but what matters is
+the GPU and nobody has tried that. And it reports the compression ratio per segment instead of per 30 seconds, so the
+repetition-loop rule above simply stops firing. That rule touches 280 of 372,972 V3C segments, some of them real
+loops ("exhale, exhale, exhale"), some of them a perfectly innocent chorus, so it is not a lot to lose. To find out if
+it is worth it, set it on one ASR shard (start at 8) and compare the rate in the logs. Finished videos stay as they
+are: a video with a transcript is never transcribed again.
+
 This exists because the badges made a problem impossible to ignore. OCR is weighted 4x on the reasoning that an exact
 match on a proper noun is close to proof , which it is, for a proper noun. But when your query is lowercase the
 lexical pass falls back to see every content word, so `a snowboarder doing a backflip` goes hunting for scenes whose
@@ -1379,20 +1440,22 @@ There are tests now. I know, I was surprised too!
 
 ```bash
 cd video_processing
-pytest -m "not integration"   # 90 pure-logic tests, ~2 s, no database needed
-pytest                        # all 157, including the 67 that need a live DB and an indexed corpus
+pytest -m "not integration"   # the pure-logic ones, a few seconds, no database needed
+pytest                        # all of them, the rest need a live DB and an indexed corpus
 ```
 
 The pure ones cover the query parser (`>>` splitting outside quotes, the `(d120)` / `(500ms)` gap syntax, dropped
 empty stages, global `-video:` exclusions, the requirement operators), how requirements narrow at video level, the
-temporal DP, the RRF arithmetic, both OCR backend adapters, the dataset layout and info file parsing, and the batched
-`run` loop. The integration ones drive the worker and the backend over HTTP, check that the RRF signals actually
+temporal DP, the RRF arithmetic, both OCR backend adapters, the dataset layout and info file parsing, the batched
+`run` loop, and what decode does with a video it deliberately broke first. The integration ones drive the worker and the backend over HTTP, check that the RRF signals actually
 contribute, check `video:`, `tag:`, combined `text:` + `said:`, MVK recordings and the dataset restriction against
 whatever corpus is loaded, run the temporal cases end to end, `EXPLAIN` the ANN query to confirm the planner really picks HNSW rather than quietly
-falling back to a sequential scan, and exercise the whole DRES/AVS submission path against the mock server below.
+falling back to a sequential scan, race two ASR runs for one video, and exercise the whole DRES/AVS submission path
+against the mock server below.
 
 If the integration ones skip rather than run, that means the services are not up , they need the database, the worker
-on 5000, the backend on 8000 and the mock DRES on 8080.
+on 5000, the backend on 8000 and the mock DRES on 8080. The keyframes-on-disk one also skips when `CLIMB_MEDIA_DIR`
+is not there, so plug the drive in if it lives on one.
 
 ### 2. Backend
 
@@ -1426,7 +1489,9 @@ podman run --name climb_caching -p 127.0.0.1:6379:6379 -d docker.io/library/redi
 ```
 
 The `127.0.0.1:` keeps it to this machine: Redis has no password, and a cache everyone on the network can write into
-is not a cache anymore. Then spin it up everytime you need some performance boost.
+is not a cache anymore. The address is fixed when the container is created, so if `podman ps -a` shows yours on
+`0.0.0.0`, run `podman rm -v climb_caching` and the command above again. It is a cache, nothing of value goes with it.
+Then spin it up everytime you need some performance boost.
 
 ```bash:
 podman start climb_caching

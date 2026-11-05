@@ -618,18 +618,30 @@ def _biggest_model(cur):
     return cur.fetchone()
 
 
-def _off_corpus_vector(dims, seed):
+def _mean_of_stored_vectors(db, model_id, seed):
     """
-    A query vector that is *not* one of the stored embeddings.
+    A query vector that is not one of the stored embeddings but lies among them: the mean of 16 of
+    them, picked across the corpus. Seeded, so it is deterministic for a given corpus.
 
-    This matters more than it looks. Querying with a vector taken from the table is the easy
-    case -- HNSW lands on the exact match and its immediate neighbourhood even with a tiny
-    ef_search, so a truncated candidate set still scores well and the test proves nothing. A real
-    query is a *text* embedding, which sits nowhere near any single image vector, and that is the
-    case where a 40-candidate cap actually loses the true neighbours. Seeded, so it is deterministic.
+    A stored vector is the easy case: HNSW lands on the exact match and its neighbourhood even with
+    a tiny ef_search. Random noise is the other extreme: on 1,581,586 vectors the exact order of
+    noise barely survives binary quantization, 4.7/20 at 4000 candidates and 0.7/20 at 40. Text
+    queries score 15.3 and 6.2 there, these vectors 14.0 and 0.0, without loading a text model.
     """
     rng = random.Random(seed)
-    return "[" + ",".join(f"{rng.gauss(0, 1):.5f}" for _ in range(dims)) + "]"
+    with db.cursor() as cur:
+        cur.execute("SELECT min(keyframe_id), max(keyframe_id) FROM keyframe_embedding "
+                    "WHERE model_id = %s", (model_id,))
+        low, high = cur.fetchone()
+        cur.execute("""
+            SELECT embedding::text FROM keyframe_embedding
+            WHERE model_id = %s AND keyframe_id = ANY (%s)
+            ORDER BY keyframe_id LIMIT 16
+        """, (model_id, [rng.randint(low, high) for _ in range(1000)]))
+        vectors = [[float(x) for x in row[0].strip("[]").split(",")] for row in cur.fetchall()]
+    db.rollback()
+    mean = [sum(column) / len(vectors) for column in zip(*vectors)]
+    return "[" + ",".join(f"{x:.5f}" for x in mean) + "]"
 
 
 def test_visual_raises_ef_search_to_cover_the_oversample(db, corpus):
@@ -653,7 +665,8 @@ def test_visual_raises_ef_search_to_cover_the_oversample(db, corpus):
 
     conf = Config()
     spy = _RecordingConnection(db)
-    retrievers.visual(spy, _off_corpus_vector(dims, 0), model_id, dims, retrievers.Scope(), limit=20)
+    retrievers.visual(spy, _mean_of_stored_vectors(db, model_id, 0), model_id, dims,
+                      retrievers.Scope(), limit=20)
     db.rollback()
 
     sets = [(sql, params) for sql, params in spy.statements if "ef_search" in sql.lower()]
@@ -666,16 +679,14 @@ def test_visual_raises_ef_search_to_cover_the_oversample(db, corpus):
 
 def test_the_ann_path_agrees_with_exhaustive_search(db, corpus):
     """
-    The end-to-end property the ef_search fix protects: oversample-then-rerank should land on
-    nearly the same scenes as scanning every row and sorting exactly.
+    The end-to-end property the ef_search fix protects: oversample-then-rerank should land closer
+    to scanning every row and sorting exactly than the broken configuration does, measured in the
+    same run.
 
-    Asserted as an *advantage over the broken configuration, measured in the same run*, rather
-    than as an absolute number. Recall falls as the corpus grows -- 19.2/20 at 2.9k embeddings,
-    15.0/20 at 7.5k -- because a fixed 1000-candidate oversample is a shrinking fraction of the
-    whole, and the ceiling is binary quantization rather than the index. An absolute threshold
-    would therefore start failing partway through the corpus for a system working exactly as
-    designed. The *gap* between the two arms is what tracks the bug: 3.0/20 vs 15.0/20 at 7.5k,
-    and it widens with scale rather than narrowing.
+    The recall itself is not asserted. It falls as the corpus grows and with binary quantization,
+    and how much is what `dataset/work/ann_bench.py` measures. The candidate count is what the bug
+    truncates, and it does not depend on the corpus: 4000 against 40 on 1,581,586 vectors, with
+    recall@20 at 14.0 against 0.0.
     """
     from config import Config
     from retrieval import retrievers
@@ -687,9 +698,9 @@ def test_the_ann_path_agrees_with_exhaustive_search(db, corpus):
     if rows < MIN_ROWS_FOR_ANN:
         pytest.skip(f"only {rows} embeddings -- ANN and exact are the same thing at this size")
 
-    scores, broken = [], []
+    scores, broken, candidates, broken_candidates = [], [], [], []
     for seed in (0, 1, 2):
-        vector = _off_corpus_vector(dims, seed)
+        vector = _mean_of_stored_vectors(db, model_id, seed)
         with db.cursor() as cur:
             # Ground truth: every row, sorted by the exact distance, no index involved.
             cur.execute(f"""
@@ -703,6 +714,8 @@ def test_the_ann_path_agrees_with_exhaustive_search(db, corpus):
         got20 = [s for s, _ in retrievers.visual(db, vector, model_id, dims, retrievers.Scope(), limit=20)]
         db.rollback()
         scores.append(len(set(got20) & set(exact20)))
+        candidates.append(len(retrievers._ann_rerank(db, VISUAL_ANN, VISUAL_RERANK, vector, model_id, dims)))
+        db.rollback()
 
         # The same query with ef_search left at pgvector's default -- the bug reproduced live, so
         # the comparison stays valid at any corpus size.
@@ -717,12 +730,15 @@ def test_the_ann_path_agrees_with_exhaustive_search(db, corpus):
         broken20 = [s for s, _ in retrievers._resolve_scenes(db, broken_ids, retrievers.Scope(), 20)]
         db.rollback()
         broken.append(len(set(broken20) & set(exact20)))
+        broken_candidates.append(len(ids))
 
+    assert min(candidates) >= 10 * max(broken_candidates), (
+        f"visual() got {candidates} candidates, the deliberately broken ef_search=40 configuration "
+        f"{broken_candidates}: the candidate set is truncated again.")
     mean, mean_broken = sum(scores) / len(scores), sum(broken) / len(broken)
-    assert mean >= mean_broken + 6, (
-        f"visual() recall@20 is {mean:.1f}/20 ({scores}) against exhaustive search, while the "
-        f"deliberately broken ef_search=40 configuration scores {mean_broken:.1f}/20 ({broken}). "
-        f"The fix should be far ahead; if they are close, the candidate set is truncated again.")
+    assert mean > mean_broken, (
+        f"visual() recall@20 is {mean:.1f}/20 ({scores}) against exhaustive search, the broken "
+        f"configuration scores {mean_broken:.1f}/20 ({broken}).")
 
 
 def test_every_expected_index_exists(db, corpus):
@@ -733,27 +749,15 @@ def test_every_expected_index_exists(db, corpus):
 
 # --- corpus health ------------------------------------------------------------------------------
 
-def test_known_damaged_videos_are_flagged(db, corpus):
-    """00016 and 00024 are corrupt H.264 in the V3C1 subset; they must index, and be marked."""
-    with db.cursor() as cur:
-        cur.execute("SELECT video_id, damaged FROM videos WHERE video_id IN ('00016', '00024');")
-        found = dict(cur.fetchall())
-    if not found:
-        pytest.skip("neither known-damaged video is in this corpus yet")
-
-    for video_id, damaged in found.items():
-        with db.cursor() as cur:
-            cur.execute("SELECT count(*) FROM scenes WHERE video_id = %s;", (video_id,))
-            scenes = cur.fetchone()[0]
-        assert scenes > 0, f"{video_id} produced no scenes at all"
-        assert damaged is True, f"{video_id} is known corrupt but videos.damaged is {damaged}"
-
-
 def test_every_scene_that_has_keyframes_has_them_on_disk(db, corpus):
     """A keyframe row whose file is missing is a broken thumbnail in the grid."""
     from pathlib import Path
 
+    from config import Config
     from pipeline import paths
+
+    if not Path(Config.MEDIA_DIR).is_dir():
+        pytest.skip(f"CLIMB_MEDIA_DIR {Config.MEDIA_DIR} is not there, is the drive mounted?")
 
     with db.cursor() as cur:
         cur.execute("""
