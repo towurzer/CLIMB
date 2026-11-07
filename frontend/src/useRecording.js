@@ -66,3 +66,10 @@ export function landingInClip(scenes, clipId, forward) {
     if (!scene) return null;
     return {scene, keyframe: forward ? scene.keyframes[0] : scene.keyframes[scene.keyframes.length - 1]};
 }
+
+/** The keyframe before or after `keyframeId` on the filmstrip, with its scene; null at either end. */
+export function neighbourKeyframe(scenes, keyframeId, forward) {
+    const strip = scenes.flatMap((scene) => (scene.keyframes || []).map((keyframe) => ({scene, keyframe})));
+    const at = strip.findIndex(({keyframe}) => keyframe.keyframe_id === keyframeId);
+    return at < 0 ? null : strip[at + (forward ? 1 : -1)] || null;
+}

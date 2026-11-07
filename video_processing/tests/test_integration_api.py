@@ -127,7 +127,7 @@ def test_worker_exclude_drops_that_video(worker, corpus):
 
 def test_worker_excludes_every_video_written_into_the_prompt(worker, corpus):
     """
-    The exclude button appends `--exclude: 00083, 00140, 00004` to the query text, and for a long
+    The exclude button used to append `--exclude: 00083, 00140, 00004` to the query text, and for a long
     time that suffix was the only carrier -- so this is the path that actually ran in the UI.
 
     `--exclude:\\s*([^\\s]*)` stopped at the first space: video one was excluded, videos two and

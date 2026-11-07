@@ -35,6 +35,7 @@ function VideoBrowser({
     openVideoId,
     onOpenVideoHandled,
     onExitBrowse,
+    shotView,
     submittedScenes = EMPTY_SET,
     coveredVideos = EMPTY_SET,
     collection = "",
@@ -209,6 +210,12 @@ function VideoBrowser({
         setScrollTarget(null);
     }, [scrollTarget, shotsLoading, shots]);
 
+    // The selection can move without a click here (arrow keys, A and D, the filmstrip): keep it in view
+    useEffect(() => {
+        if (selectedKeyframeId == null) return;
+        grid.current?.querySelector(`[data-keyframe-id="${selectedKeyframeId}"]`)?.scrollIntoView({block: "nearest"});
+    }, [selectedKeyframeId]);
+
     // Back retraces the way in: out to the results we were sent from if this view was deep-linked,
     // to the video grid if the user got here by clicking a card.
     const exitsToCaller = openedByDeepLink && Boolean(onExitBrowse);
@@ -223,6 +230,15 @@ function VideoBrowser({
         setShotsPage(1);
         setShotsTotal(null);
     };
+
+    // App listens for the keys: Esc twice does what the back button does, Delete takes this video.
+    useEffect(() => {
+        if (!selectedVideo) return;
+        shotView.current = {back: handleBack, videoId: selectedVideo.video_id};
+        return () => {
+            shotView.current = null;
+        };
+    });
 
     // When user clicks a shot, convert to result format and pass up. The shot names its clip,
     // which is what gets submitted. keyframe_time_ms has to come along, it is the time we submit to DRES
@@ -275,6 +291,7 @@ function VideoBrowser({
                   : selectedVideo.duration_sec)} · {selectedVideo.fps}fps
             </span>
           </span>
+                    <span className="shortcuts-hint">Arrows move · A D keyframe · Ctrl+Enter submit · Backspace exclude + back · V answer · Space hold or play · L loop · Ctrl+Home End set time · Esc Esc back</span>
                 </div>
                 {shotsLoading ? (
                     <div className="browse-loading">Loading shots...</div>
@@ -337,7 +354,7 @@ function VideoBrowser({
                     className={`collection-picker${collection ? " active" : ""}`}
                     value={collection}
                     onChange={(e) => onChangeCollection(e.target.value)}
-                    title="Show only this dataset"
+                    title="Show only this dataset (Ctrl+0 goes to the next one)"
                 >
                     {COLLECTIONS.map(({key, label}) => (
                         <option key={key || "all"} value={key}>{label}</option>

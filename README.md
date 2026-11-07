@@ -116,8 +116,10 @@ reopen the popup and reconnect.
 
 Type what you are looking for and hit Enter. Plain words search everything. Hover the search box and it lists the
 rest: `text:` for text on screen, `said:` for speech, `tag:`, `video:` / `-video:`, and `A >> B` for one thing after
-another, all explained in [1.9](#19-how-searching-actually-works). Clicking into the box shows your recent searches, and
-Ctrl+K gets you back into it from anywhere.
+another, all explained in [1.9](#19-how-searching-actually-works). Tab writes those filters for you: `text:`, Tab again
+makes it `said:`, then `tag:` and so on, and whatever you typed behind it stays. After a space Tab starts a new one, so
+filters combine. Clicking into the box shows your recent searches, Tab, Space twice or Ctrl+K gets you back into it, Esc out
+again. What you typed is still there when you come back from Browse, so fixing a query does not mean retyping it.
 
 Under the box sit the dataset dropdown and the sources. At VBS the task tells you which collection it is from, so pick
 it, and the other two cannot put look-alikes on your page. The tickboxes decide what gets searched at all: Visual (the
@@ -135,8 +137,9 @@ single card hides exactly that. In an AVS session a submitted scene drops out of
 costs you a page slot precisely once.
 
 Each card shows its rank, its score and, underneath, the signals that found it: `OCR (3) Visual (41)` means a sign
-matched at rank 3 and the picture agreed, distantly, at 41. ⟲ on the card finds similar keyframes, ✕ throws the video
-out (for MVK the whole dive) and searches again. A sequence (`A >> B`) puts the hits of the later stages in a strip
+matched at rank 3 and the picture agreed, distantly, at 41. Hover a card and "All keyframes" opens every keyframe of the
+video in fullscreen, on the one you were looking at, and ✕ throws the video out (for MVK the whole dive) and searches
+again. A sequence (`A >> B`) puts the hits of the later stages in a strip
 under the card, each with how long after the previous one it came. The line above the results counts them, says which
 dataset you searched and, once you use `text:`, `said:` or `tag:`, how many videos each of them left, so an empty page
 tells you which one emptied it.
@@ -160,8 +163,8 @@ If you click on a card it opens up a sidebar, from top to bottom:
 - the time that gets submitted, From and To, filled in from the keyframe. Type over it if you know better
   (`(h:)mm:ss.cc`); a time it cannot read greys out the submit button rather than sending rubbish
 - "Submit to DRES", which asks "Yes, submit!" before anything goes out
-- "Exclude video from search" and "Find similar", the same as ✕ and ⟲ on the card. Find similar forgets your query and
-  looks for keyframes that look like this one
+- "Exclude video from search", the same as ✕ on the card. "Find similar" forgets your query and looks for keyframes that
+  look like this one
 - a small band of all keyframes of the video (for MVK, of the whole dive). "Browse in Fullscreen" opens it in Browse,
   on the keyframe you are on
 - the "VQA-Answer" field, where you can enter a textual answer for a Visual Question Answering Task. Two submit
@@ -170,7 +173,32 @@ If you click on a card it opens up a sidebar, from top to bottom:
   double-clicking a button confirms it.
 - the submission log, everything you sent and what DRES said about it
 
-The arrow keys go through the results, Esc deselects.
+And since nobody wins a competition by aiming a mouse, all of it works from the keyboard:
+
+| Key | What it does |
+|---|---|
+| ← → ↑ ↓ | Through the results or the fullscreen keyframes, ↑ ↓ by row |
+| Shift+arrow | On a sequence (`A >> B`): through the stages of the chain. ↑ the first one, ← the previous, → and ↓ the next, round and round |
+| A / D | Previous / next keyframe on the band under the player. If that walks you off the grid, the arrows carry on from the card you left |
+| Ctrl+arrow | Back to the keyframe you were on before A and D. If it is gone, because you excluded its video or searched for something else, nothing happens |
+| Home / End | The first card / the last one loaded so far |
+| Ctrl+1, 2, 3 ... | Flip a signal, the number is on its tickbox. Ctrl+0 goes to the next dataset. In the search box they only change the setting, Enter then searches |
+| Ctrl+Enter | "Submit to DRES", with Ctrl so it does not go off by accident. "Yes, submit!" then takes Enter or Ctrl+Enter, and any other key calls it off and does its usual job, so an arrow also moves. Holding Enter down counts as one press, on purpose |
+| F | All keyframes of the selected video, the same as "Browse in Fullscreen" |
+| C | Find similar |
+| V | Into the VQA answer field. Tab goes round the field and its two buttons there, Enter presses one and Enter again confirms |
+| Backspace / Delete | Exclude the selected video and search again. In the fullscreen keyframes it takes the video you are looking at and brings you back |
+| T | Puts you on "Send to team", Enter opens it, Enter sends |
+| Space | Stops the preview and holds it on the keyframe, for a closer look. Another Space plays on |
+| Ctrl+Home / Ctrl+End | From / To of the submission time, set to where the preview is right now |
+| L | "Loop segment" on and off |
+| Tab / Space Space / Ctrl+K | Into the search box. Tab and Space twice also work from Browse, except inside the fullscreen keyframes, where they leave you alone |
+| Tab, in the search box | The next filter |
+| Esc | Cancels "Yes, submit!", else deselects, and gets you out of a text field |
+
+None of the plain keys fire while you are typing in a text field, otherwise you could not search for a dog. Ctrl+number
+replaces the browser's own tab switching and zoom reset while CLIMB has the focus (Cmd+number on a Mac does the same
+thing).
 
 <img src="readme_images/similarity_search.png" alt="similarity_search.png" width="500"/>
 
@@ -188,7 +216,9 @@ card, `Ambon_Apr2012 · 3 clips · 21 shots`.
 <img src="readme_images/browsing.png" alt="browsing.png" width="500"/>
 
 Click a video and you get every keyframe it has, with the scene number on each and its time underneath (for MVK the
-whole dive, clip by clip). Click a keyframe and it opens in the sidebar, the same as a search result.
+whole dive, clip by clip). Click a keyframe and it opens in the sidebar, the same as a search result. Esc twice takes you
+back the way you came, to the results exactly where you left them, query included, with the keyframe selected that you went in on, whatever you clicked in between. One Esc still deselects,
+it just waits half a second to see if a second one is coming.
 
 <img src="readme_images/select_video.png" alt="select_video.png" width="500"/>
 
@@ -336,6 +366,7 @@ frontend/
         useTeam.js          # the team connection, its poll, which hints are new
         hints.js            # how a hint reads: "Anna: have a look at 00191 · 00:12.40"
         sources.js          # the signal tickboxes, and which start unticked for which dataset and task
+        shortcuts.js        # the keyboard: which key is which on any layout, arrow keys by row, Tab through the filters
         components/
             SearchBar.jsx   # Search input with history
             ResultsGrid.jsx # Thumbnail grid of results
@@ -1379,11 +1410,10 @@ past` searches for both, where `text:Dupont a man walks past` is one long and ra
 fail silently , typing `said: after the earthquake` searched for the *word* "said" on signs, at four times the weight
 of the picture, and cheerfully returned something.
 
-The x on a result card does the same thing without typing: it drops that video and re-runs the search on the spot. On an
-MVK clip it drops the whole recording, because the other clips of the same dive look exactly like the one you just
-threw away. It
-appends its list to the box as `--exclude: 00083, 00140, 00004` so you can see what you have thrown away, and it sends
-that list as its own parameter, which is the one that counts.
+The ✕ on a result card (or Backspace) does the same thing without typing: it drops that video and
+re-runs the search on the spot. On an MVK clip it drops the whole recording, because the other clips of the same dive
+look exactly like the one you just threw away. It writes `-video:00083` into the search box, so you can see what you
+have thrown away, it stays thrown away when you amend the query, and deleting it from the box brings the video back.
 
 ##### Searching for things that happen in order
 
@@ -1424,7 +1454,7 @@ On the laptop's CPU the 4000 chains land 2.4-3.3 s after the first results, and 
 4000 chains get a ranking pass of their own, so they wait for nothing deeper. A second pass at the top depth feeds the
 rest, which makes 8000 the slow step (3-4 s) and everything after it quick. In the test sequences 4000 found 14 of 24
 videos, 8000 found 17, 10000 found 19, and 15000 found 20, all there were among the 600. After that it only adds chains,
-so 32000 is on the generous side. The rules:
+so 30000 is on the generous side. The rules:
 
 - **Nothing moves.** New chains go behind the last card and reach the grid through the usual scrolling. No chain jumps
   the queue, however good its score looks.
@@ -1439,7 +1469,7 @@ so 32000 is on the generous side. The rules:
 
 | Variable | Default | |
 |---|---|---|
-| `CLIMB_WIDEN_MAX_DEPTH` | 32000 | The last depth, so 30000 with the steps below. 0 switches the whole thing off |
+| `CLIMB_WIDEN_MAX_DEPTH` | 30000 | The last depth. 0 switches the whole thing off |
 | `CLIMB_WIDEN_FIRST_DEPTHS` | 4000,8000 | The depths before the steps start |
 | `CLIMB_WIDEN_DEPTH_STEP` | 5000 | The multiples of this come after them: 10000, 15000, ... |
 | `CLIMB_WIDEN_VIDEOS` | 600 | How many videos get ranked exactly |

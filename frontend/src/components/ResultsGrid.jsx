@@ -38,7 +38,7 @@ function ResultsGrid({
     results,
     selectedResult,
     onSelect,
-    onFindSimilar,
+    onOpenKeyframes,
     onExcludeVideo,
     hiddenScenes = EMPTY_SET,
     coveredVideos = EMPTY_SET,
@@ -86,6 +86,7 @@ function ResultsGrid({
                     <div
                         key={result.keyframe_id ?? `${result.video_id}_${result.scene_id}`}
                         ref={isSelected ? selectedRef : null}
+                        data-keyframe-id={result.keyframe_id}
                         className={`result-card ${isSelected ? "selected" : ""} ${isCovered ? "covered" : ""}`}
                         onClick={() => onSelect(result)}
                     >
@@ -100,30 +101,26 @@ function ResultsGrid({
               </span>
                             <span className="rank-badge">{index + 1}</span>
                             {isCovered && <span className="covered-badge" title="Video already has a correct hit">covered</span>}
-                            {onFindSimilar && (
-                                <button
-                                    className="similar-icon"
-                                    title="Find similar"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onFindSimilar(result);
-                                    }}
-                                >
-                                    ⟲
-                                </button>
-                            )}
-                            {onExcludeVideo && (
-                                <button
-                                    className="exclude-icon"
-                                    title="Exclude video from search"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onExcludeVideo(result);
-                                    }}
-                                >
-                                    ✕
-                                </button>
-                            )}
+                            <button
+                                className="keyframes-btn"
+                                title="Open all keyframes of this video in fullscreen"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onOpenKeyframes(result);
+                                }}
+                            >
+                                All keyframes
+                            </button>
+                            <button
+                                className="exclude-icon"
+                                title="Exclude video from search"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onExcludeVideo(result);
+                                }}
+                            >
+                                ✕
+                            </button>
                         </div>
                         {partners.length > 0 && (
                             <div className="temporal-strip">

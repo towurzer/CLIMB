@@ -1,5 +1,6 @@
-import {useState, useEffect} from "react";
+import {useState, useEffect, useRef} from "react";
 import {describeDresResult, describeDresError} from "../dresSubmission";
+import {MODIFIER_KEYS} from "../shortcuts";
 
 const SUBMIT_MODES = {
     media: {
@@ -27,6 +28,27 @@ function VqaAnswer({apiUrl, selectedResult, startTimeMs, endTimeMs, onSubmitted}
     const [confirmMode, setConfirmMode] = useState(null);
     const [vqaStatus, setVqaStatus] = useState(null);
     const [vqaMessage, setVqaMessage] = useState("");
+    const confirmButton = useRef(null);
+
+    // The submit button that opened this is gone, and the keyboard would be left with nothing.
+    useEffect(() => {
+        if (confirmMode) confirmButton.current?.focus();
+    }, [confirmMode]);
+
+    // Tab goes round the field and the buttons. While "Yes, submit" is up, only Enter and Tab keep it.
+    const handleKeyDown = (e) => {
+        if (e.key === "Tab") {
+            e.preventDefault();
+            const stops = [...e.currentTarget.querySelectorAll("input, button:not(:disabled)")];
+            const at = stops.indexOf(document.activeElement);
+            stops[(at + (e.shiftKey ? -1 : 1) + stops.length) % stops.length]?.focus();
+        } else if (confirmMode && e.key !== "Enter" && !MODIFIER_KEYS.has(e.key.toLowerCase())) {
+            setConfirmMode(null);
+            // Ends here: the focused button is about to go, App would no longer see this as ours
+            // and deselect, which clears the answer.
+            if (e.key === "Escape") e.stopPropagation();
+        }
+    };
 
     useEffect(() => {
         setAnswer("");
@@ -111,7 +133,7 @@ function VqaAnswer({apiUrl, selectedResult, startTimeMs, endTimeMs, onSubmitted}
     );
 
     return (
-        <div className="vqa-section">
+        <div className="vqa-section" onKeyDown={handleKeyDown}>
             <div className="vqa-label">VQA</div>
 
             {/* Shot reference - auto-filled */}
@@ -149,7 +171,7 @@ function VqaAnswer({apiUrl, selectedResult, startTimeMs, endTimeMs, onSubmitted}
             ) : (
                 <div className="confirm-row">
                     {orderConfirmRow(confirmMode, [
-                        <button key="confirm" className="vqa-submit-btn confirm"
+                        <button key="confirm" ref={confirmButton} className="vqa-submit-btn confirm"
                                 onClick={() => handleVqaSubmit(confirmMode)}>
                             {`Yes, submit "${submitText}" ${SUBMIT_MODES[confirmMode].confirmSuffix}`}
                         </button>,

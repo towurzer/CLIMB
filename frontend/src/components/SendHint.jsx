@@ -75,7 +75,13 @@ function SendHint({result, recordingId, onSend}) {
     }
 
     return (
-        <div className="send-hint" onKeyDown={(e) => e.key === "Escape" && close()}>
+        <div className="send-hint" onKeyDown={(e) => {
+            // Ends here: the focused button is about to go, App would no longer see this as ours and deselect.
+            if (e.key === "Escape") {
+                e.stopPropagation();
+                close();
+            }
+        }}>
             <div className="send-hint-target">{hintTarget(hint)}</div>
             <label className="send-hint-option">
                 <input type="checkbox" tabIndex={-1} checked={withKeyframe}

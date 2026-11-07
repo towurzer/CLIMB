@@ -66,9 +66,10 @@ VIDEO_ID = r'([A-Za-z0-9_-]+)'
 EXCLUDE_PREFIX = re.compile(rf'-video:{VIDEO_ID}')
 # After the exclusions are gone, or `-video:` would read as `video:`.
 ONLY_PREFIX = re.compile(rf'(?<![\w-])video:{VIDEO_ID}', re.I)
-# Legacy syntax the frontend still appends; kept so an old client does not silently search for it.
+# Legacy syntax the frontend used to append (it writes `-video:` now); kept so an old client does not
+# silently search for it.
 #
-# The list is comma separated *with spaces*, the frontend writes `--exclude: 00083, 00140, 00004`.
+# The list is comma separated *with spaces*: `--exclude: 00083, 00140, 00004`.
 LEGACY_EXCLUDE = re.compile(r'--exclude:\s*([A-Za-z0-9_]*(?:\s*,\s*[A-Za-z0-9_]+)*)')
 
 WORD = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)

@@ -1,5 +1,6 @@
-import {useState, useRef, useEffect} from "react";
+import {useState, useRef, useEffect, useLayoutEffect} from "react";
 import {COLLECTIONS, sourcesFor} from "../sources";
+import {cycleFilter} from "../shortcuts";
 
 // The query syntax has nowhere else to be discovered, so it hangs off the input as a tooltip.
 const SYNTAX_HELP = [
@@ -15,14 +16,28 @@ const SYNTAX_HELP = [
     "",
     "text:, said: and tag: combine: every one must hold",
     "somewhere in the same video.",
+    "",
+    "Tab adds a filter, Tab again swaps it for the next one.",
 ].join("\n");
 
-function SearchBar({onSearch, loading, history, sources, onToggleSource, collection,
-                       onChangeCollection}) {
-    const [input, setInput] = useState("");
+const FILTERS = ["text:", "said:", "tag:", "video:", "-video:"];
+// Only V3C has uploader tags.
+const filtersFor = (collection) =>
+    (collection && collection !== "V3C" ? FILTERS.filter((filter) => filter !== "tag:") : FILTERS);
+
+function SearchBar({input, onInputChange, focusRequested, onFocused, onSearch, loading, history,
+                       sources, onToggleSource, collection, onChangeCollection}) {
     const [showHistory, setShowHistory] = useState(false);
     const inputRef = useRef(null);
     const wrapperRef = useRef(null);
+    // Setting a controlled input's value puts the caret at the end, Tab can happen mid-text.
+    const caretAfterRender = useRef(null);
+
+    useLayoutEffect(() => {
+        if (caretAfterRender.current === null) return;
+        inputRef.current?.setSelectionRange(caretAfterRender.current, caretAfterRender.current);
+        caretAfterRender.current = null;
+    }, [input]);
 
     // Focus search bar with Ctrl+K shortcut
     useEffect(() => {
@@ -36,6 +51,14 @@ function SearchBar({onSearch, loading, history, sources, onToggleSource, collect
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, []);
+
+    // Space Space, which App listens for
+    useEffect(() => {
+        if (!focusRequested) return;
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        onFocused();
+    }, [focusRequested, onFocused]);
 
     // Close dropdown when clicking outside
     useEffect(() => {
@@ -53,11 +76,13 @@ function SearchBar({onSearch, loading, history, sources, onToggleSource, collect
         if (input.trim()) {
             onSearch(input.trim());
             setShowHistory(false);
+            // the keys go back to the results
+            inputRef.current?.blur();
         }
     };
 
     const handleHistoryClick = (entry) => {
-        setInput(entry);
+        onInputChange(entry);
         onSearch(entry);
         setShowHistory(false);
     };
@@ -69,11 +94,21 @@ function SearchBar({onSearch, loading, history, sources, onToggleSource, collect
                     ref={inputRef}
                     type="text"
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={(e) => onInputChange(e.target.value)}
                     onFocus={() => {
                         if (history.length > 0) setShowHistory(true);
                     }}
-                    placeholder="Describe what you're looking for, or A >> B for a sequence... (Ctrl+K)"
+                    onKeyDown={(e) => {
+                        if (e.key === "Escape") setShowHistory(false);
+                        if (e.key === "Tab" && !e.nativeEvent.isComposing && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                            e.preventDefault();
+                            const next = cycleFilter(input, e.currentTarget.selectionEnd,
+                                filtersFor(collection), e.shiftKey ? -1 : 1);
+                            caretAfterRender.current = next.caret;
+                            onInputChange(next.value);
+                        }
+                    }}
+                    placeholder="Describe what you're looking for, or A >> B for a sequence... (Tab, Space Space or Ctrl+K, then Tab for filters)"
                     title={SYNTAX_HELP}
                     disabled={loading}
                 />
@@ -93,14 +128,15 @@ function SearchBar({onSearch, loading, history, sources, onToggleSource, collect
                     value={collection}
                     disabled={loading}
                     onChange={(e) => onChangeCollection(e.target.value)}
-                    title="Search only this dataset"
+                    title="Search only this dataset (Ctrl+0 goes to the next one)"
                 >
                     {COLLECTIONS.map(({key, label}) => (
                         <option key={key || "all"} value={key}>{label}</option>
                     ))}
                 </select>
-                <span className="source-picker-label">Sources</span>
-                {sourcesFor(collection).map(({key, label, title}) => {
+                <span className="source-key">0</span>
+                <span className="source-picker-label" title="Ctrl+number flips a source">Sources</span>
+                {sourcesFor(collection).map(({key, label, title}, index) => {
                     const active = sources.includes(key);
                     // Searching nothing is not a search. The last one standing cannot be unticked.
                     const isLast = active && sources.length === 1;
@@ -117,6 +153,7 @@ function SearchBar({onSearch, loading, history, sources, onToggleSource, collect
                                 onChange={() => onToggleSource(key)}
                             />
                             {label}
+                            <span className="source-key">{index + 1}</span>
                         </label>
                     );
                 })}
